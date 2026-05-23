@@ -1,0 +1,82 @@
+package com.example.midun.data.mock
+
+import android.content.Context
+import android.provider.Settings
+import com.example.midun.data.model.DeviceInfo
+import com.example.midun.data.model.UsbDeviceStatus
+import dagger.hilt.android.qualifiers.ApplicationContext
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+@Singleton
+class MockUsbManager @Inject constructor(
+    @ApplicationContext private val context: Context
+) {
+    private val _deviceStatus = MutableStateFlow(DeviceInfo())
+    val deviceStatus: StateFlow<DeviceInfo> = _deviceStatus.asStateFlow()
+
+    private var storedPassword: String? = null
+
+    fun simulateInsert() {
+        storedPassword = "123456"
+        _deviceStatus.value = DeviceInfo(
+            isInitialized = true,
+            deviceId      = "MOCK_DEVICE_001",
+            status        = UsbDeviceStatus.CONNECTED
+        )
+    }
+
+    fun simulateRemove() {
+        storedPassword = null
+        _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
+    }
+
+    fun simulateFirstInsert() {
+        storedPassword = null
+        _deviceStatus.value = DeviceInfo(
+            isInitialized = false,
+            status        = UsbDeviceStatus.CONNECTED
+        )
+    }
+
+    suspend fun initDevice(password: String, bindDevice: Boolean): Result<Unit> {
+        delay(1500)
+        val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+        storedPassword = password
+        _deviceStatus.value = _deviceStatus.value.copy(
+            isInitialized = true,
+            status        = UsbDeviceStatus.AUTHENTICATED,
+            boundPhoneId  = if (bindDevice) deviceId else null
+        )
+        return Result.success(Unit)
+    }
+
+    suspend fun authenticate(password: String): Result<Unit> {
+        delay(800)
+        return if (password == storedPassword) {
+            _deviceStatus.value = _deviceStatus.value.copy(status = UsbDeviceStatus.AUTHENTICATED)
+            Result.success(Unit)
+        } else {
+            Result.failure(Exception("密码错误"))
+        }
+    }
+
+    fun logout() {
+        _deviceStatus.value = _deviceStatus.value.copy(status = UsbDeviceStatus.CONNECTED)
+    }
+
+    suspend fun wipeAll(): Result<Unit> {
+        delay(2000)
+        storedPassword = null
+        _deviceStatus.value = _deviceStatus.value.copy(
+            isInitialized = false,
+            boundPhoneId  = null,
+            status        = UsbDeviceStatus.CONNECTED
+        )
+        return Result.success(Unit)
+    }
+}
