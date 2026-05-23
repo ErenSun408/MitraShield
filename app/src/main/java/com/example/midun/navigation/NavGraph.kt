@@ -12,11 +12,7 @@ import com.example.midun.screen.*
 fun NavGraph(navController: NavHostController) {
     NavHost(navController = navController, startDestination = Screen.Splash.route) {
         composable(Screen.Splash.route) {
-            SplashScreen(onFinished = {
-                navController.navigate(Screen.Init.route) {
-                    popUpTo(Screen.Splash.route) { inclusive = true }
-                }
-            })
+            SplashScreen(navController = navController)
         }
 
         composable(Screen.Init.route) {

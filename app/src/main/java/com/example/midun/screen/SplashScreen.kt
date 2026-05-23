@@ -15,12 +15,23 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.NavController
+import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.navigation.Screen
 import com.example.midun.ui.theme.*
+import com.example.midun.viewmodel.DeviceViewModel
 import kotlinx.coroutines.delay
 
 @Composable
-fun SplashScreen(onFinished: () -> Unit) {
+fun SplashScreen(
+    navController: NavController,
+    deviceViewModel: DeviceViewModel = hiltViewModel()
+) {
     var startAnim by remember { mutableStateOf(false) }
+    var animationDone by remember { mutableStateOf(false) }
+    val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
+
     val alphaAnim by animateFloatAsState(
         targetValue = if (startAnim) 1f else 0f,
         animationSpec = tween(1200)
@@ -33,7 +44,22 @@ fun SplashScreen(onFinished: () -> Unit) {
     LaunchedEffect(Unit) {
         startAnim = true
         delay(2500)
-        onFinished()
+        animationDone = true
+    }
+
+    LaunchedEffect(animationDone, deviceStatus) {
+        if (!animationDone) return@LaunchedEffect
+        val target = when {
+            deviceStatus.status == UsbDeviceStatus.DISCONNECTED -> null
+            !deviceStatus.isInitialized -> Screen.Init.route
+            deviceStatus.status == UsbDeviceStatus.AUTHENTICATED -> Screen.Main.route
+            else -> Screen.Login.route
+        }
+        if (target != null) {
+            navController.navigate(target) {
+                popUpTo(Screen.Splash.route) { inclusive = true }
+            }
+        }
     }
 
     Box(
