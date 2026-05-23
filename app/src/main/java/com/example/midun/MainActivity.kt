@@ -1,46 +1,119 @@
 package com.example.midun
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.navigation.compose.rememberNavController
-import com.example.midun.data.UsbState
+import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.navigation.NavGraph
 import com.example.midun.screen.UsbDisconnectedOverlay
 import com.example.midun.screen.UsbToggleButton
 import com.example.midun.ui.theme.MiDunTheme
+import com.example.midun.viewmodel.DeviceViewModel
+import dagger.hilt.android.AndroidEntryPoint
 
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    private val deviceViewModel: DeviceViewModel by viewModels()
+
+    private val usbReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                    }
+                    deviceViewModel.onUsbAttached(device)
+                }
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                    deviceViewModel.onUsbDetached()
+                }
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // APP启动时重置USB状态为已插入
-        UsbState.connect()
+
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE
+        )
+
         enableEdgeToEdge()
+
+        val filter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            registerReceiver(usbReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(usbReceiver, filter)
+        }
+
+        val usbManager = getSystemService(USB_SERVICE) as UsbManager
+        if (usbManager.deviceList.isNotEmpty()) {
+            deviceViewModel.onUsbAttached(usbManager.deviceList.values.first())
+        } else {
+            // Mock-phase convenience: emulator has no real USB, so seed CONNECTED
+            // state so UsbDisconnectedOverlay doesn't fire at every launch.
+            // DELETE this else branch when the real FSShell SDK lands in M10.
+            deviceViewModel.onUsbAttached(null)
+        }
+
+        lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStop(owner: LifecycleOwner) { deviceViewModel.onAppBackground() }
+            override fun onStart(owner: LifecycleOwner) { deviceViewModel.onAppForeground() }
+        })
+
         setContent {
             MiDunTheme {
                 val navController = rememberNavController()
+                val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
+                val isConnected = deviceStatus.status != UsbDeviceStatus.DISCONNECTED
 
                 Box(modifier = Modifier.fillMaxSize()) {
                     NavGraph(navController = navController)
 
-                    // USB断开 - 全屏锁定动画，5秒后关闭APP
-                    if (!UsbState.isConnected) {
+                    if (!isConnected) {
                         UsbDisconnectedOverlay(onCountdownFinished = {
                             finishAndRemoveTask()
                         })
                     }
 
-                    // USB拔插演示开关 - 所有页面都显示，断开状态时盖在覆盖层之上
                     UsbToggleButton(
-                        isConnected = UsbState.isConnected,
-                        onToggle = { UsbState.toggle() }
+                        isConnected = isConnected,
+                        onToggle = { deviceViewModel.debugToggleUsb() }
                     )
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        unregisterReceiver(usbReceiver)
     }
 }
