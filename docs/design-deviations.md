@@ -13,6 +13,17 @@
 
 ---
 
+## 全局约定 — 导航分工（navController vs 回调）
+
+v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(...)`。本仓库采用**混用约定**：
+
+- **路由器屏幕持 navController**：`SplashScreen` 需按 `deviceStatus` 在 Init/Login/Main/停留 间做多向决策，决策逻辑属于它本身，故直接注入 `navController`（同 v4）。
+- **叶子屏幕用事件回调**：`InitScreen`(`onInitComplete`)、`LoginScreen`(`onLoginSuccess`/`onForgotPassword`)、`MainScreen`(`onFolderClick` 等) 只暴露"我完成了 X"事件、**不持有 navController**，由 `NavGraph` 集中决定去向。
+- **原因** 回调上抛是 Google 官方导航指南 / Now in Android 推荐：屏幕与导航库解耦、可 `@Preview`、可单测、可复用，且全流程集中在 `NavGraph` 一处便于审计。能力上两者等价（回调闭包里就握着 navController），故非能力差异而是组织差异。Splash 是唯一例外——其多向路由决策塞进多个回调反而更乱。
+- **影响范围** M3.2(Splash) / M3.3(Init) / M3.4 + M3.5(Login) / M4(Main)。
+
+---
+
 ## M1 — Mock 数据层
 
 ### M1.2 MockUsbManager — 增加密码持久化
@@ -28,6 +39,7 @@
 - **本仓库实现** 同时 `isInitialized=false`、`boundPhoneId=null`、`status=CONNECTED`，保证擦卡后 SplashScreen 能按 §3.1 路由回 InitScreen。
 - **原因** v4 文档 bug：擦卡后 status 仍是 AUTHENTICATED 会让 SplashScreen 错误地跳 Home。
 - **Commit** `e834807`
+- **更新（M3.5, `1278c60`）** wipeAll 进一步升级为"整卡擦除"，连带 `clear()` 文件与聊天，详见 M3.5 条目。
 
 ### M1.4 MockChatRepository — clearContact 拆分为 clearMessages + deleteContact
 
@@ -103,6 +115,23 @@
 - **本仓库实现** 抽出常量 `LOCKOUT_MESSAGE = "身份认证失败，请联系技术人员"`；`onFailure` 里当 `attemptsLeft <= 0` 即用该文案（守卫分支同用），使**第 5 次失败当场**就显示锁定文案，而非泛泛的"密码错误"。LoginScreen 显示逻辑不变（attemptsLeft==0 直接显示 message）。
 - **原因** ① 用户要求改文案；② 原 v4 时机下"尝试次数过多…"那句要等第 6 次点击才出现，而此时按钮已因 attemptsLeft==0 禁用，用户几乎看不到——把锁定文案提前到次数耗尽当次更符合预期。
 - **Commit** `e65cada`
+
+### M3.5 LoginScreen 忘记密码入口（patch §M3）— 适配回调风格 + 稳健擦卡
+
+- **patch §M3** 在验证按钮下加"忘记密码？"→ 红色危险确认框 → `deviceViewModel.wipeAndReset()` 后**立即** `navController.navigate(Init){popUpTo(0)}`；`wipeAndReset` 仅 `launch{ wipeAll() }`（fire-and-forget）。patch 代码用 v4 深色 token 与 navController 下传。
+- **本仓库实现**
+  - 导航走新增 `onForgotPassword` 回调（NavGraph 跳 Init），延续叶子屏幕回调约定（见"全局约定"），不把 navController 塞进 LoginScreen。
+  - 主题 token 深色→浅色映射：`AccentRed→Danger`、`AccentCyan→Accent`、`DarkSurface`→去掉用默认浅色弹框底。
+  - **稳健擦卡**：`wipeAndReset(onComplete)` 改为 **wipeAll 完成后**才回调导航；确认框在擦卡 ~2s 期间显示"正在清除数据" loading 并锁定（隐藏按钮、禁外部点关）。
+- **原因（稳健擦卡）** patch 的 fire-and-forget + 立即 `popUpTo(0)` 会销毁 Login 的 NavBackStackEntry → 其 `DeviceViewModel.viewModelScope` 取消 → `wipeAll` 卡在 `delay(2000)` 被取消、擦除不完整。改为"擦完再导航"规避。mock 下虽因直接跳 Init + initDevice 覆盖而暂不出错，但 M10 真擦卡时是 bug。
+- **Commit** `1278c60`
+
+### M3.5 MockUsbManager.wipeAll — 升级为整卡擦除（连带清文件/聊天）
+
+- **承接上文 M1.2 "wipeAll 真正重置状态"** 此前 wipeAll 只重置认证/绑定状态，**不动** `MockFileSystem`/`MockChatRepository`，与"删除所有文件、聊天记录"文案不符。
+- **本仓库实现** 给 `MockFileSystem`/`MockChatRepository` 各加 `clear()`；`MockUsbManager` 注入两者，`wipeAll()` 内一并 `clear()`。所有 wipeAll 调用方（忘记密码、后续 M7 恢复出厂、HomeScreen 一键清理）自动获得真实清数据。
+- **原因** 让"整卡擦除"名副其实，并把清除逻辑收口在 wipeAll 一处，避免各调用方各自拼。
+- **Commit** `1278c60`
 
 ---
 
