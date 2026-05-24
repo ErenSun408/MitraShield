@@ -37,6 +37,7 @@ fun FilesScreen(
 ) {
     val uiState by fileViewModel.uiState.collectAsState()
     var folderToDelete by remember { mutableStateOf<FileItem?>(null) }
+    var folderExportMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
         fileViewModel.loadFolders()
@@ -78,6 +79,9 @@ fun FilesScreen(
                         folder = folder,
                         onClick = { onFolderClick(folder.id) },
                         onRename = { newName -> fileViewModel.renameFolder(folder.id, newName) },
+                        onExportFolder = {
+                            folderExportMessage = "「${folder.name}」文件夹结构已按${folder.copyPolicy.exportLabel()}策略触发导出"
+                        },
                         onDelete = { folderToDelete = folder }
                     )
                 }
@@ -93,6 +97,20 @@ fun FilesScreen(
             onConfirm = {
                 fileViewModel.deleteFolder(folder.id)
                 folderToDelete = null
+            }
+        )
+    }
+
+    folderExportMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { folderExportMessage = null },
+            icon = { Icon(Icons.Default.FolderZip, null, tint = Primary) },
+            title = { Text("文件夹导出已触发") },
+            text = { Text(message, color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = { folderExportMessage = null }) {
+                    Text("确定", color = Primary)
+                }
             }
         )
     }
@@ -121,11 +139,13 @@ private fun FolderCard(
     folder: FileItem,
     onClick: () -> Unit,
     onRename: (String) -> Unit,
+    onExportFolder: () -> Unit,
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember(folder.id, folder.name) { mutableStateOf(folder.name) }
+    val canExport = folder.copyPolicy != CopyPolicy.NO_COPY
 
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -192,6 +212,26 @@ private fun FolderCard(
                         }
                     )
                     DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (canExport) "导出文件夹" else "不可导出",
+                                color = if (canExport) TextPrimary else TextSecondary
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.FolderZip,
+                                null,
+                                tint = if (canExport) Primary else TextSecondary
+                            )
+                        },
+                        enabled = canExport,
+                        onClick = {
+                            showMenu = false
+                            onExportFolder()
+                        }
+                    )
+                    DropdownMenuItem(
                         text = { Text("删除", color = Danger) },
                         leadingIcon = { Icon(Icons.Default.Delete, null, tint = Danger) },
                         onClick = {
@@ -225,6 +265,13 @@ private fun CopyPolicy.label(): String =
         CopyPolicy.COPY_ENCRYPTED -> "拷贝密文"
     }
 
+private fun CopyPolicy.exportLabel(): String =
+    when (this) {
+        CopyPolicy.NO_COPY -> "不可导出"
+        CopyPolicy.COPY_PLAIN -> "明文导出"
+        CopyPolicy.COPY_ENCRYPTED -> "密文导出"
+    }
+
 private fun formatFolderDate(timestamp: Long): String =
     SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(timestamp))
 
@@ -246,9 +293,15 @@ fun FileDetailScreen(
     val uiState by fileViewModel.uiState.collectAsState()
     val folder = uiState.folders.find { it.id == folderId }
     val files = if (uiState.currentFolderId == folderId) uiState.currentFiles else emptyList()
+    val effectiveCopyPolicy = folder?.copyPolicy ?: CopyPolicy.NO_COPY
     var showMenu by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var fileToDelete by remember { mutableStateOf<FileItem?>(null) }
+    var exportMessage by remember { mutableStateOf<String?>(null) }
+    val onExportAllFiles = {
+        exportMessage = "${files.size} 个文件已按${effectiveCopyPolicy.exportLabel()}策略触发导出"
+        showMenu = false
+    }
 
     LaunchedEffect(folderId) {
         fileViewModel.loadFolders()
@@ -279,8 +332,23 @@ fun FileDetailScreen(
                         Icon(Icons.Default.MoreVert, "更多")
                     }
                     DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
-                        DropdownMenuItem(text = { Text("导出文件") }, onClick = { showMenu = false },
-                            leadingIcon = { Icon(Icons.Default.FileDownload, null) })
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    if (effectiveCopyPolicy == CopyPolicy.NO_COPY) "不可导出" else "导出全部文件",
+                                    color = if (effectiveCopyPolicy == CopyPolicy.NO_COPY) TextSecondary else TextPrimary
+                                )
+                            },
+                            onClick = onExportAllFiles,
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.FileDownload,
+                                    null,
+                                    tint = if (effectiveCopyPolicy == CopyPolicy.NO_COPY) TextSecondary else Primary
+                                )
+                            },
+                            enabled = files.isNotEmpty() && effectiveCopyPolicy != CopyPolicy.NO_COPY
+                        )
                         DropdownMenuItem(text = { Text("全部删除") }, onClick = { showMenu = false },
                             leadingIcon = { Icon(Icons.Default.DeleteForever, null, tint = Danger) })
                     }
@@ -337,7 +405,11 @@ fun FileDetailScreen(
                 items(files, key = { it.id }) { file ->
                     FileItemCard(
                         file = file,
+                        copyPolicy = effectiveCopyPolicy,
                         onRename = { newName -> fileViewModel.renameFile(file.id, newName, folderId) },
+                        onExportFile = {
+                            exportMessage = "「${file.name}」已按${effectiveCopyPolicy.exportLabel()}策略触发导出"
+                        },
                         onDelete = { fileToDelete = file }
                     )
                 }
@@ -405,17 +477,34 @@ fun FileDetailScreen(
             }
         )
     }
+
+    exportMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { exportMessage = null },
+            icon = { Icon(Icons.Default.FileDownload, null, tint = Primary) },
+            title = { Text("导出已触发") },
+            text = { Text(message, color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = { exportMessage = null }) {
+                    Text("确定", color = Primary)
+                }
+            }
+        )
+    }
 }
 
 @Composable
 private fun FileItemCard(
     file: FileItem,
+    copyPolicy: CopyPolicy,
     onRename: (String) -> Unit,
+    onExportFile: () -> Unit,
     onDelete: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember(file.id, file.name) { mutableStateOf(file.name) }
+    val canExport = copyPolicy != CopyPolicy.NO_COPY
     val iconData = when (file.type) {
         FileType.FOLDER -> Pair(Icons.Default.Folder, Primary)
         FileType.DOCUMENT -> Pair(Icons.Default.Description, Primary)
@@ -456,6 +545,26 @@ private fun FileItemCard(
                             renameText = file.name
                             showRenameDialog = true
                             showMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                if (canExport) "导出" else "不可导出",
+                                color = if (canExport) TextPrimary else TextSecondary
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.FileDownload,
+                                null,
+                                tint = if (canExport) Primary else TextSecondary
+                            )
+                        },
+                        enabled = canExport,
+                        onClick = {
+                            showMenu = false
+                            onExportFile()
                         }
                     )
                     DropdownMenuItem(
