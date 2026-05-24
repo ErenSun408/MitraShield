@@ -36,6 +36,7 @@ fun FilesScreen(
     fileViewModel: FileViewModel = hiltViewModel()
 ) {
     val uiState by fileViewModel.uiState.collectAsState()
+    var folderToDelete by remember { mutableStateOf<FileItem?>(null) }
 
     LaunchedEffect(Unit) {
         fileViewModel.loadFolders()
@@ -73,10 +74,26 @@ fun FilesScreen(
                 }
             } else {
                 items(uiState.folders, key = { it.id }) { folder ->
-                    FolderCard(folder, onClick = { onFolderClick(folder.id) })
+                    FolderCard(
+                        folder = folder,
+                        onClick = { onFolderClick(folder.id) },
+                        onDelete = { folderToDelete = folder }
+                    )
                 }
             }
         }
+    }
+
+    folderToDelete?.let { folder ->
+        DeleteConfirmDialog(
+            title = "删除文件夹",
+            message = "确定删除「${folder.name}」？文件夹内所有文件也会被删除，且无法恢复。",
+            onDismiss = { folderToDelete = null },
+            onConfirm = {
+                fileViewModel.deleteFolder(folder.id)
+                folderToDelete = null
+            }
+        )
     }
 }
 
@@ -99,7 +116,9 @@ private fun EmptyFoldersState(onCreateFolder: () -> Unit) {
 }
 
 @Composable
-private fun FolderCard(folder: FileItem, onClick: () -> Unit) {
+private fun FolderCard(folder: FileItem, onClick: () -> Unit, onDelete: () -> Unit) {
+    var showMenu by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp)
@@ -150,7 +169,21 @@ private fun FolderCard(folder: FileItem, onClick: () -> Unit) {
                     }
                 }
             }
-            Icon(Icons.Default.ChevronRight, null, tint = TextSecondary)
+            Box {
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(Icons.Default.MoreVert, null, tint = TextSecondary)
+                }
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("删除", color = Danger) },
+                        leadingIcon = { Icon(Icons.Default.Delete, null, tint = Danger) },
+                        onClick = {
+                            showMenu = false
+                            onDelete()
+                        }
+                    )
+                }
+            }
         }
     }
 }
@@ -185,6 +218,7 @@ fun FileDetailScreen(
     val files = if (uiState.currentFolderId == folderId) uiState.currentFiles else emptyList()
     var showMenu by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
+    var fileToDelete by remember { mutableStateOf<FileItem?>(null) }
 
     LaunchedEffect(folderId) {
         fileViewModel.loadFolders()
@@ -271,7 +305,10 @@ fun FileDetailScreen(
                 }
 
                 items(files, key = { it.id }) { file ->
-                    FileItemCard(file)
+                    FileItemCard(
+                        file = file,
+                        onDelete = { fileToDelete = file }
+                    )
                 }
             }
         }
@@ -325,10 +362,23 @@ fun FileDetailScreen(
             }
         )
     }
+
+    fileToDelete?.let { file ->
+        DeleteConfirmDialog(
+            title = "删除文件",
+            message = "确定删除「${file.name}」？此操作不可恢复。",
+            onDismiss = { fileToDelete = null },
+            onConfirm = {
+                fileViewModel.deleteFile(file.id, folderId)
+                fileToDelete = null
+            }
+        )
+    }
 }
 
 @Composable
-private fun FileItemCard(file: FileItem) {
+private fun FileItemCard(file: FileItem, onDelete: () -> Unit) {
+    var showMenu by remember { mutableStateOf(false) }
     val iconData = when (file.type) {
         FileType.FOLDER -> Pair(Icons.Default.Folder, Primary)
         FileType.DOCUMENT -> Pair(Icons.Default.Description, Primary)
@@ -357,9 +407,51 @@ private fun FileItemCard(file: FileItem) {
                     Text(if (file.source == "chat") "来自聊天" else "手动导入", fontSize = 11.sp, color = Accent)
                 }
             }
-            Icon(Icons.Default.MoreVert, null, tint = TextSecondary, modifier = Modifier.size(20.dp))
+            Box {
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(Icons.Default.MoreVert, null, tint = TextSecondary)
+                }
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("删除", color = Danger) },
+                        leadingIcon = { Icon(Icons.Default.Delete, null, tint = Danger) },
+                        onClick = {
+                            showMenu = false
+                            onDelete()
+                        }
+                    )
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun DeleteConfirmDialog(
+    title: String,
+    message: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
+        title = { Text(title, color = Danger) },
+        text = { Text(message, color = TextSecondary) },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(containerColor = Danger)
+            ) {
+                Text("删除")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = TextSecondary)
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
