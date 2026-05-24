@@ -19,9 +19,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.example.midun.data.*
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
+import com.example.midun.data.model.FileType
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.FileViewModel
 import java.text.SimpleDateFormat
@@ -161,18 +161,45 @@ private fun CopyPolicy.label(): String =
 private fun formatFolderDate(timestamp: Long): String =
     SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(timestamp))
 
+private fun formatFileSize(bytes: Long): String =
+    when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "%.1f KB".format(Locale.CHINA, bytes / 1024.0)
+        bytes < 1024 * 1024 * 1024 -> "%.1f MB".format(Locale.CHINA, bytes / (1024.0 * 1024))
+        else -> "%.1f GB".format(Locale.CHINA, bytes / (1024.0 * 1024 * 1024))
+    }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FileDetailScreen(folderId: String, onBack: () -> Unit) {
-    val folder = MockData.folders.find { it.id == folderId }
-    val files = MockData.files[folderId] ?: emptyList()
+fun FileDetailScreen(
+    folderId: String,
+    onBack: () -> Unit,
+    fileViewModel: FileViewModel = hiltViewModel()
+) {
+    val uiState by fileViewModel.uiState.collectAsState()
+    val folder = uiState.folders.find { it.id == folderId }
+    val files = if (uiState.currentFolderId == folderId) uiState.currentFiles else emptyList()
     var showMenu by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(folderId) {
+        fileViewModel.loadFolders()
+        fileViewModel.loadFiles(folderId)
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(folder?.name ?: "文件夹") },
+                title = {
+                    Column {
+                        Text(folder?.name ?: "文件夹")
+                        Text(
+                            folder?.copyPolicy?.label() ?: "",
+                            fontSize = 11.sp,
+                            color = Color.White.copy(alpha = 0.75f)
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") }
                 },
@@ -201,6 +228,8 @@ fun FileDetailScreen(folderId: String, onBack: () -> Unit) {
                     Icon(Icons.Default.FolderOff, null, tint = TextSecondary, modifier = Modifier.size(64.dp))
                     Spacer(Modifier.height(12.dp))
                     Text("暂无文件", color = TextSecondary)
+                    Spacer(Modifier.height(6.dp))
+                    Text("导入后会显示在当前隐私文件夹中", color = TextSecondary, fontSize = 12.sp)
                 }
             }
         } else {
@@ -221,7 +250,11 @@ fun FileDetailScreen(folderId: String, onBack: () -> Unit) {
                                 Text("文件总数", fontSize = 11.sp, color = TextSecondary)
                             }
                             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
-                                Text(folder?.copyMode ?: "-", fontWeight = FontWeight.Bold, color = if (folder?.allowCopy == true) Accent else Danger)
+                                Text(
+                                    folder?.copyPolicy?.label() ?: "-",
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (folder?.copyPolicy == CopyPolicy.NO_COPY) Danger else Accent
+                                )
                                 Text("拷贝策略", fontSize = 11.sp, color = TextSecondary)
                             }
                             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
@@ -233,7 +266,7 @@ fun FileDetailScreen(folderId: String, onBack: () -> Unit) {
                     Spacer(Modifier.height(8.dp))
                 }
 
-                items(files) { file ->
+                items(files, key = { it.id }) { file ->
                     FileItemCard(file)
                 }
             }
@@ -277,8 +310,9 @@ fun FileDetailScreen(folderId: String, onBack: () -> Unit) {
 }
 
 @Composable
-private fun FileItemCard(file: SecureFile) {
+private fun FileItemCard(file: FileItem) {
     val iconData = when (file.type) {
+        FileType.FOLDER -> Pair(Icons.Default.Folder, Primary)
         FileType.DOCUMENT -> Pair(Icons.Default.Description, Primary)
         FileType.IMAGE -> Pair(Icons.Default.Image, Accent)
         FileType.VIDEO -> Pair(Icons.Default.VideoFile, Warning)
@@ -298,11 +332,11 @@ private fun FileItemCard(file: SecureFile) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(file.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
                 Row {
-                    Text(file.size, fontSize = 11.sp, color = TextSecondary)
+                    Text(formatFileSize(file.size), fontSize = 11.sp, color = TextSecondary)
                     Spacer(Modifier.width(8.dp))
-                    Text(file.createdTime, fontSize = 11.sp, color = TextSecondary)
+                    Text(formatFolderDate(file.createdAt), fontSize = 11.sp, color = TextSecondary)
                     Spacer(Modifier.width(8.dp))
-                    Text(file.source, fontSize = 11.sp, color = Accent)
+                    Text(if (file.source == "chat") "来自聊天" else "手动导入", fontSize = 11.sp, color = Accent)
                 }
             }
             Icon(Icons.Default.MoreVert, null, tint = TextSecondary, modifier = Modifier.size(20.dp))
