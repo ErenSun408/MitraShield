@@ -67,4 +67,26 @@
 - **原因** M0 入场动画是有意打磨过的品牌曝光，丢掉是 UX 倒退；DISCONNECTED 状态下 M2 决策保留的 `UsbDisconnectedOverlay`（全屏覆盖层）会盖在 SplashScreen 之上，再在 Splash 里画警告 UI 用户看不见；DEV 按钮挪到覆盖层里更合理（统一了拔卡场景的所有调试入口）。
 - **Commit** `c94679c`
 
+---
+
+## M4 — 主页与底部导航
+
+### M4 架构 — `Screen.Main` + `selectedTab` 取代 v4 `Screen.Home` + 嵌套 NavHost
+
+- **v4 §0.6 / §0.7 / §4** 顶层路由定义 `Screen.Home`（route `"home"`）；`HomeScreen` 是登录后的**纯壳子**，内部再开一个嵌套 `NavHost`（`innerNavController`），底部 **3 个 Tab**（`Files` / `ChatList` / `Settings`）作为嵌套图的子页，靠 `navigate + saveState/restoreState` 切换。
+- **本仓库实现**
+  - 顶层路由叫 `Screen.Main`（route `"main"`），**没有** `Screen.Home`。
+  - 主壳子叫 `MainScreen`，底部 **4 个 Tab**：**首页（dashboard）** / 文件夹 / 通信 / 设置。Tab 切换用 `var selectedTab by rememberSaveable` + `when(selectedTab)`，**不使用嵌套 NavHost**。
+  - 名称撞车提醒：本仓库的 `HomeScreen` ≠ v4 的 `HomeScreen`。本仓库 `HomeScreen` 只是"首页"那一个 Tab 的内容（设备状态卡 + 快捷功能 + 最近操作日志）；v4 的 `HomeScreen` 是整个主框架。v4 设计里**根本没有这个首页 dashboard**，属本仓库增量。
+  - `FileDetail` / `ChatDetail` / `QrCode` 与 v4 一致，仍注册在**顶层** NavGraph 上，由各 Tab 持有的顶层 `navController` 跳转。
+- **原因** 这几个 Tab 都是**叶子页**——所有详情页（FileDetail/ChatDetail/QrCode）都走顶层导航，Tab 内部没有多级返回栈需求。嵌套 NavHost 的核心优势（每 Tab 独立 back stack）在此**零收益**，徒增内外两个 navController 的复杂度；且嵌套 NavHost 会把每个 Tab 的 `hiltViewModel()` 切到不同 NavBackStackEntry 作用域，容易让 `DeviceViewModel` 分裂成多实例、USB 状态对不上（v4 §0.7/§4 自己也反复提醒这个坑）。`selectedTab + when` 天然共享 Activity 级作用域，更简单也更稳。
+- **Commit** `f663cf8`（M0 脚手架即采用此结构）
+
+### M4 补救 — `SaveableStateProvider` 保留切走 Tab 的状态
+
+- **背景** `selectedTab + when` 相比嵌套 NavHost 缺一个能力：切走的 Tab 会整个退出 composition，其瞬态 UI 状态（如列表滚动位置）默认丢失；嵌套 NavHost 靠 `saveState/restoreState` 自动保留。
+- **本仓库实现** `MainScreen` 用 `rememberSaveableStateHolder()` + `SaveableStateProvider(selectedTab) { when(...) }` 按 Tab 分桶保存。`rememberSaveable` 支撑的状态（含 `rememberScrollState` 的滚动位置）切走再切回会恢复。
+- **边界** 仅保留 `rememberSaveable` 状态；纯 `remember`（如 HomeScreen 的 `showCleanDialog`）不保留，符合预期。今后需跨切换保留的瞬态应改用 `rememberSaveable` 或提到 ViewModel。
+- **Commit** `fe95c47`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
