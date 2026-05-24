@@ -225,4 +225,38 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 
 ---
 
+## M6 — 即时通信
+
+### M6.1 ChatViewModel — `contacts` 改私有 + `loadContacts()` 重读单例
+
+- **v4 §6.1** `val contacts = MutableStateFlow(chatRepo.getContacts())` —— 公开可变、init 时一次性快照，之后仅 `sendMessage`/`clearContact` 内手动 `contacts.value = …` 刷新。
+- **本仓库实现** 改为私有 `_contacts` + 只读 `contacts`，新增 `fun loadContacts()` 重读 `MockChatRepository`；`init`、`sendMessage`/`clearAllMessages`/`deleteContact`/`addContact` 后均刷新。
+- **原因** M4 用 `selectedTab + when`（见 M4 偏离），故 `ChatListScreen`（Main 作用域）、`ChatDetailScreen`、`QrCodeScreen`（各自顶层路由）拿到的是**三个不同的 `ChatViewModel` 实例**（与 M5.3 同构，靠 `MockChatRepository` 单例兜底数据）。v4 的一次性快照会导致：QrCode 实例 `addContact`、或会话清空后，**列表实例的 `contacts` 不刷新** → 新建联系人/清空结果在列表里看不到。`loadContacts()` 让各屏进入时（`LaunchedEffect`）重读单例，对齐 M5 `FileViewModel.loadFolders()` 的"操作后重读"模式。
+- **连带约定（影响 M6.2+）** `ChatListScreen` 的 onClick **不照抄** v4 §6.2 的 `chatViewModel.loadMessages(...)`——那是跨实例调用、对 `ChatDetail` 实例无效（`ChatDetailScreen` 自身 `LaunchedEffect(contactId)` 会 load）。列表点击只上抛 `contactId`。
+- **Commit** `7f7c302`
+
+### M6.1 ChatViewModel.sendMessage — 修复 v4 失效的"乐观更新"竞态
+
+- **v4 §6.1** `sendMessage` 在 `viewModelScope.launch{ chatRepo.sendMessage(...).onSuccess{ 仅刷 contacts } }` **之外**同步执行 `_messages.value = chatRepo.getMessages(contactId)`，注释称"乐观更新"。
+- **本仓库实现** 删掉 launch 外的同步刷新；在 `onSuccess` 内**同时**重读 `_messages` 与 `_contacts`。
+- **原因** `chatRepo.sendMessage` 是 suspend 且内部 `delay(200)` 后才落库；launch 外那行同步 `getMessages` 此刻读到的是**旧列表**（新消息尚未入库），而 `onSuccess` 又只刷 `contacts` 不刷 `messages` → 发送后气泡要等下次进会话才出现。改为成功后以 repo 为准一并重读，行为正确（mock delay 内气泡延迟出现，可接受；如需即时反馈再做真乐观插入）。
+- **Commit** `7f7c302`
+
+### M6.1 ChatViewModel — `clearAllMessages` 接 `clearMessages`，丢弃 v4 的 `clearContact`
+
+- **v4 §6.1 / patch §M6 改动1** v4 有 `fun clearContact(id)` 调 `chatRepo.clearContact`；patch 的 `clearAllMessages(id)` 同样调 `chatRepo.clearContact`。两者都依赖一个**本仓库已不存在**的方法。
+- **本仓库实现** 只保留 `clearAllMessages(contactId)`，接 M1.4 拆分后的 `chatRepo.clearMessages`（保留联系人、清空消息），并 `_messages = emptyList()` + 重读 `_contacts`；**不**保留 v4 的 `clearContact`。
+- **原因** M1.4 偏离已把单一 `clearContact` 拆成 `clearMessages` + `deleteContact`（见 M1.4 条）。patch UI"清空聊天记录"语义=保留联系人，对应 `clearMessages`；两个清空方法（v4 `clearContact` 与 patch `clearAllMessages`）功能重叠，去其一避免双份死代码。
+- **Commit** `7f7c302`
+
+### M6.1 ChatViewModel — 预留 `deleteContact`、不实现 `simulateReceiveMessage`
+
+- **v4 §6.1** 含 `simulateReceiveMessage(content)`（模拟收消息的调试桩，仅往 `_messages` 内存追加、不落 repo）；无独立"删除联系人"方法（删除联系人能力在被拆分的 `clearContact` 里）。
+- **本仓库实现**
+  - 新增 `fun deleteContact(contactId)`，接 M1.4 的 `chatRepo.deleteContact`（连人带消息删）后重读 `_contacts`。**M6 patch UI 暂无入口**，先预留。
+  - **不实现** `simulateReceiveMessage`。
+- **原因** M6 各屏（patch 改动2–4）均无触发 `simulateReceiveMessage` 的 UI，且 v4 原版不落 repo（离开会话即丢）、行为不一致 → YAGNI，待真要演示"收消息"时再加并落库。`deleteContact` 则因 mock 层能力已具备、未来"删除联系人"动作大概率会用，成本极低，先暴露占位。
+- **遗留** `connectionState`（v4 §6.1）保留为 mock 期占位，M6 UI 未消费，待真实 SDK 接入后驱动连接指示。`addContact` 的二维码解析沿用 patch 的 `substringAfter("sn=").substringBefore(",")`，对非法二维码不防御、对同一 deviceId 不去重——留待 M6.7 真实扫码阶段稳健化。
+- **Commit** `7f7c302`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
