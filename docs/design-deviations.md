@@ -331,4 +331,11 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **遗留** 该入口仍是 mock 期脚手架；M10 接真实 FSShell SDK 时与 `MainActivity` 启动兜底分支、`DeviceViewModel.debug*` 方法一起删除。
 - **Commit** 待提交
 
+### M6.4 跟进 — 删除/撤回消息后重算联系人列表摘要
+
+- **问题** 联系人列表显示 `Contact.lastMessage` / `lastMessageTime`，但原 `MockChatRepository.deleteMessage()` 只删除会话消息，不回写联系人摘要；`ChatViewModel.deleteMessage()` 也只刷新当前会话消息。因此删除或撤回最后一条消息后，列表仍显示旧摘要，只有清空会话会变空。
+- **本仓库实现** `MockChatRepository` 新增 `updateContactPreview(contactId)`，按该会话剩余消息中 `timestamp` 最新的一条回写 `lastMessage` / `lastMessageTime`；若会话已空则写空串与 `0L`。`sendMessage`、`deleteMessage`、`clearMessages` 统一调用该函数。`ChatViewModel.deleteMessage()` 删除后同步重读 `_contacts`。
+- **原因** mock 期也应维护与真实数据源一致的会话摘要契约：联系人列表永远展示对应会话的最后一条消息，不区分己方/对方。
+- **Commit** 待提交
+
 <!-- 后续里程碑的偏离继续在下面追加 -->

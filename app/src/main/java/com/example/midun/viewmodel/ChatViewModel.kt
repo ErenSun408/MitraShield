@@ -100,6 +100,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             chatRepo.deleteMessage(messageId, contactId)
             _messages.value = chatRepo.getMessages(contactId)
+            _contacts.value = chatRepo.getContacts()
         }
     }
 

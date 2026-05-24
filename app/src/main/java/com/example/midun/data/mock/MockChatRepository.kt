@@ -52,34 +52,21 @@ class MockChatRepository @Inject constructor() {
             status = MessageStatus.SENT
         )
         mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
-        mockContacts.indexOfFirst { it.id == contactId }
-            .takeIf { it >= 0 }
-            ?.let { idx ->
-                mockContacts[idx] = mockContacts[idx].copy(
-                    lastMessage = content,
-                    lastMessageTime = msg.timestamp
-                )
-            }
+        updateContactPreview(contactId)
         return Result.success(msg)
     }
 
     suspend fun deleteMessage(messageId: String, contactId: String): Result<Unit> {
         delay(100)
         mockMessages[contactId]?.removeAll { it.id == messageId }
+        updateContactPreview(contactId)
         return Result.success(Unit)
     }
 
     suspend fun clearMessages(contactId: String): Result<Unit> {
         delay(300)
         mockMessages[contactId]?.clear()
-        mockContacts.indexOfFirst { it.id == contactId }
-            .takeIf { it >= 0 }
-            ?.let { idx ->
-                mockContacts[idx] = mockContacts[idx].copy(
-                    lastMessage = "",
-                    lastMessageTime = 0L
-                )
-            }
+        updateContactPreview(contactId)
         return Result.success(Unit)
     }
 
@@ -124,5 +111,18 @@ class MockChatRepository @Inject constructor() {
             "tpk" to "MOCK_PUBLIC_KEY_BASE64"
         )
         return mockData.entries.joinToString(",") { "${it.key}=${it.value}" }
+    }
+
+    private fun updateContactPreview(contactId: String) {
+        val index = mockContacts.indexOfFirst { it.id == contactId }
+        if (index == -1) return
+
+        val lastMessage = mockMessages[contactId]
+            ?.maxByOrNull { it.timestamp }
+
+        mockContacts[index] = mockContacts[index].copy(
+            lastMessage = lastMessage?.content.orEmpty(),
+            lastMessageTime = lastMessage?.timestamp ?: 0L
+        )
     }
 }
