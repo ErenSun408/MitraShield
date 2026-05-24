@@ -2,6 +2,7 @@ package com.example.midun.screen
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -17,9 +18,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.MessageType
@@ -42,7 +52,6 @@ fun ChatDetailScreen(
 
     var inputText by remember { mutableStateOf("") }
     var showBurnDialog by remember { mutableStateOf(false) }
-    var messageToDelete by remember { mutableStateOf<ChatMessage?>(null) }
     var showMenu by remember { mutableStateOf(false) }
     var showSearchBar by remember { mutableStateOf(false) }
     // 本地状态承载搜索词，避免经 ViewModel StateFlow 异步往返打断中文/IME 组合（见 M6.3 修复）。
@@ -203,7 +212,11 @@ fun ChatDetailScreen(
             }
 
             items(displayMessages, key = { it.id }) { msg ->
-                ChatBubble(msg = msg, onLongClick = { messageToDelete = msg })
+                ChatBubble(
+                    msg = msg,
+                    onDelete = { chatViewModel.deleteMessage(msg.id) },
+                    onRecall = { chatViewModel.deleteMessage(msg.id) }
+                )
             }
 
             if (searchQuery.isNotBlank() && displayMessages.isEmpty()) {
@@ -240,40 +253,6 @@ fun ChatDetailScreen(
         )
     }
 
-    messageToDelete?.let { msg ->
-        AlertDialog(
-            onDismissRequest = { messageToDelete = null },
-            title = { Text("消息操作") },
-            text = {
-                Column {
-                    TextButton(
-                        onClick = { chatViewModel.deleteMessage(msg.id); messageToDelete = null },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Delete, null, tint = Danger)
-                        Spacer(Modifier.width(8.dp))
-                        Text("删除（仅本端）", color = Danger)
-                        Spacer(Modifier.weight(1f))
-                    }
-                    if (msg.isMine) {
-                        TextButton(
-                            onClick = { chatViewModel.deleteMessage(msg.id); messageToDelete = null },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Default.Undo, null, tint = Warning)
-                            Spacer(Modifier.width(8.dp))
-                            Text("撤回（双向）", color = Warning)
-                            Spacer(Modifier.weight(1f))
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { messageToDelete = null }) { Text("取消", color = TextSecondary) }
-            }
-        )
-    }
-
     if (showClearConfirm) {
         AlertDialog(
             onDismissRequest = { showClearConfirm = false },
@@ -299,7 +278,8 @@ fun ChatDetailScreen(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ChatBubble(msg: ChatMessage, onLongClick: () -> Unit) {
+private fun ChatBubble(msg: ChatMessage, onDelete: () -> Unit, onRecall: () -> Unit) {
+    var showMenu by remember { mutableStateOf(false) }
     val isFile = msg.type == MessageType.FILE
     val isImage = msg.type == MessageType.IMAGE
     val isVideo = msg.type == MessageType.VIDEO
@@ -320,53 +300,64 @@ private fun ChatBubble(msg: ChatMessage, onLongClick: () -> Unit) {
         }
 
         Column(horizontalAlignment = if (msg.isMine) Alignment.End else Alignment.Start) {
-            Card(
-                shape = RoundedCornerShape(
-                    topStart = 16.dp, topEnd = 16.dp,
-                    bottomStart = if (msg.isMine) 16.dp else 4.dp,
-                    bottomEnd = if (msg.isMine) 4.dp else 16.dp
-                ),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (msg.isMine) ChatBubbleMine else ChatBubbleOther
-                ),
-                modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onLongClick)
-            ) {
-                val contentColor = if (msg.isMine) Color.White else TextPrimary
-                Column(modifier = Modifier.padding(12.dp)) {
-                    when {
-                        isFile || isVideo -> Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                if (isVideo) Icons.Default.VideoFile else Icons.Default.InsertDriveFile,
-                                null,
-                                tint = if (msg.isMine) Accent else Primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Column {
-                                Text(msg.fileName ?: msg.content, color = contentColor, fontSize = 14.sp)
-                                msg.fileSize?.let {
-                                    Text(
-                                        formatFileSize(it),
-                                        color = contentColor.copy(alpha = 0.7f),
-                                        fontSize = 11.sp
-                                    )
+            Box {
+                Card(
+                    shape = RoundedCornerShape(
+                        topStart = 16.dp, topEnd = 16.dp,
+                        bottomStart = if (msg.isMine) 16.dp else 4.dp,
+                        bottomEnd = if (msg.isMine) 4.dp else 16.dp
+                    ),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (msg.isMine) ChatBubbleMine else ChatBubbleOther
+                    ),
+                    modifier = Modifier.combinedClickable(onClick = {}, onLongClick = { showMenu = true })
+                ) {
+                    val contentColor = if (msg.isMine) Color.White else TextPrimary
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        when {
+                            isFile || isVideo -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    if (isVideo) Icons.Default.VideoFile else Icons.Default.InsertDriveFile,
+                                    null,
+                                    tint = if (msg.isMine) Accent else Primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Column {
+                                    Text(msg.fileName ?: msg.content, color = contentColor, fontSize = 14.sp)
+                                    msg.fileSize?.let {
+                                        Text(
+                                            formatFileSize(it),
+                                            color = contentColor.copy(alpha = 0.7f),
+                                            fontSize = 11.sp
+                                        )
+                                    }
                                 }
                             }
+                            isImage -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Image, null, tint = if (msg.isMine) Accent else Primary,
+                                    modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(msg.content, color = contentColor, fontSize = 14.sp)
+                            }
+                            isAudio -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.GraphicEq, null, tint = if (msg.isMine) Accent else Primary,
+                                    modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(msg.content.ifBlank { "语音消息" }, color = contentColor, fontSize = 14.sp)
+                            }
+                            else -> Text(msg.content, color = contentColor, fontSize = 14.sp)
                         }
-                        isImage -> Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Image, null, tint = if (msg.isMine) Accent else Primary,
-                                modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(msg.content, color = contentColor, fontSize = 14.sp)
-                        }
-                        isAudio -> Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.GraphicEq, null, tint = if (msg.isMine) Accent else Primary,
-                                modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text(msg.content.ifBlank { "语音消息" }, color = contentColor, fontSize = 14.sp)
-                        }
-                        else -> Text(msg.content, color = contentColor, fontSize = 14.sp)
                     }
+                }
+                // 微信式深色横排上下文菜单，锚定气泡下方，非全屏。
+                if (showMenu) {
+                    MessageActionMenu(
+                        isMine = msg.isMine,
+                        onDelete = onDelete,
+                        onRecall = onRecall,
+                        onDismiss = { showMenu = false }
+                    )
                 }
             }
             Spacer(Modifier.height(2.dp))
@@ -386,6 +377,65 @@ private fun ChatBubble(msg: ChatMessage, onLongClick: () -> Unit) {
                 Icon(Icons.Default.Person, null, tint = Color.White, modifier = Modifier.size(18.dp))
             }
         }
+    }
+}
+
+/** 微信式深色横排长按菜单：锚定气泡下方（BottomStart），点外部/返回键关闭。 */
+@Composable
+private fun MessageActionMenu(
+    isMine: Boolean,
+    onDelete: () -> Unit,
+    onRecall: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    // 把弹窗左上角放到气泡底边下方（+间隙），确保显示在消息下方而非覆盖其上。
+    val gapPx = with(LocalDensity.current) { 6.dp.roundToPx() }
+    val positionProvider = remember(gapPx) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize
+            ): IntOffset {
+                val x = anchorBounds.left.coerceAtMost(windowSize.width - popupContentSize.width)
+                val y = anchorBounds.bottom + gapPx
+                return IntOffset(x.coerceAtLeast(0), y)
+            }
+        }
+    }
+    Popup(
+        popupPositionProvider = positionProvider,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true)
+    ) {
+        Surface(
+            color = Color(0xFF4C4C4C),
+            shape = RoundedCornerShape(8.dp),
+            shadowElevation = 6.dp
+        ) {
+            Row(modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)) {
+                MessageActionItem("删除", Icons.Default.Delete) { onDismiss(); onDelete() }
+                if (isMine) {
+                    MessageActionItem("撤回", Icons.Default.Undo) { onDismiss(); onRecall() }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageActionItem(label: String, icon: ImageVector, onClick: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(icon, label, tint = Color.White, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(label, color = Color.White, fontSize = 11.sp)
     }
 }
 
