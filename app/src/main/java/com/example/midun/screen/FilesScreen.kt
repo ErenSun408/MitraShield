@@ -77,6 +77,7 @@ fun FilesScreen(
                     FolderCard(
                         folder = folder,
                         onClick = { onFolderClick(folder.id) },
+                        onRename = { newName -> fileViewModel.renameFolder(folder.id, newName) },
                         onDelete = { folderToDelete = folder }
                     )
                 }
@@ -116,8 +117,15 @@ private fun EmptyFoldersState(onCreateFolder: () -> Unit) {
 }
 
 @Composable
-private fun FolderCard(folder: FileItem, onClick: () -> Unit, onDelete: () -> Unit) {
+private fun FolderCard(
+    folder: FileItem,
+    onClick: () -> Unit,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit
+) {
     var showMenu by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renameText by remember(folder.id, folder.name) { mutableStateOf(folder.name) }
 
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -175,6 +183,15 @@ private fun FolderCard(folder: FileItem, onClick: () -> Unit, onDelete: () -> Un
                 }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                     DropdownMenuItem(
+                        text = { Text("重命名") },
+                        leadingIcon = { Icon(Icons.Default.Edit, null, tint = Primary) },
+                        onClick = {
+                            renameText = folder.name
+                            showRenameDialog = true
+                            showMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
                         text = { Text("删除", color = Danger) },
                         leadingIcon = { Icon(Icons.Default.Delete, null, tint = Danger) },
                         onClick = {
@@ -185,6 +202,19 @@ private fun FolderCard(folder: FileItem, onClick: () -> Unit, onDelete: () -> Un
                 }
             }
         }
+    }
+
+    if (showRenameDialog) {
+        RenameDialog(
+            title = "重命名文件夹",
+            value = renameText,
+            onValueChange = { renameText = it },
+            onDismiss = { showRenameDialog = false },
+            onConfirm = {
+                onRename(renameText)
+                showRenameDialog = false
+            }
+        )
     }
 }
 
@@ -307,6 +337,7 @@ fun FileDetailScreen(
                 items(files, key = { it.id }) { file ->
                     FileItemCard(
                         file = file,
+                        onRename = { newName -> fileViewModel.renameFile(file.id, newName, folderId) },
                         onDelete = { fileToDelete = file }
                     )
                 }
@@ -377,8 +408,14 @@ fun FileDetailScreen(
 }
 
 @Composable
-private fun FileItemCard(file: FileItem, onDelete: () -> Unit) {
+private fun FileItemCard(
+    file: FileItem,
+    onRename: (String) -> Unit,
+    onDelete: () -> Unit
+) {
     var showMenu by remember { mutableStateOf(false) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renameText by remember(file.id, file.name) { mutableStateOf(file.name) }
     val iconData = when (file.type) {
         FileType.FOLDER -> Pair(Icons.Default.Folder, Primary)
         FileType.DOCUMENT -> Pair(Icons.Default.Description, Primary)
@@ -413,6 +450,15 @@ private fun FileItemCard(file: FileItem, onDelete: () -> Unit) {
                 }
                 DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
                     DropdownMenuItem(
+                        text = { Text("重命名") },
+                        leadingIcon = { Icon(Icons.Default.Edit, null, tint = Primary) },
+                        onClick = {
+                            renameText = file.name
+                            showRenameDialog = true
+                            showMenu = false
+                        }
+                    )
+                    DropdownMenuItem(
                         text = { Text("删除", color = Danger) },
                         leadingIcon = { Icon(Icons.Default.Delete, null, tint = Danger) },
                         onClick = {
@@ -424,6 +470,57 @@ private fun FileItemCard(file: FileItem, onDelete: () -> Unit) {
             }
         }
     }
+
+    if (showRenameDialog) {
+        RenameDialog(
+            title = "重命名文件",
+            value = renameText,
+            onValueChange = { renameText = it },
+            onDismiss = { showRenameDialog = false },
+            onConfirm = {
+                onRename(renameText)
+                showRenameDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun RenameDialog(
+    title: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Edit, null, tint = Primary) },
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = value,
+                onValueChange = onValueChange,
+                label = { Text("名称") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                enabled = value.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = Primary)
+            ) {
+                Text("确认")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = TextSecondary)
+            }
+        }
+    )
 }
 
 @Composable

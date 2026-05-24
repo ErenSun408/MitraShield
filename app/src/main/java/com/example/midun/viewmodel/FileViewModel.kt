@@ -117,6 +117,44 @@ class FileViewModel @Inject constructor(
         }
     }
 
+    fun renameFolder(folderId: String, newName: String) {
+        viewModelScope.launch {
+            val trimmedName = newName.trim()
+            if (trimmedName.isBlank()) {
+                _operationResult.emit(OperationResult.Error("文件夹名称不能为空"))
+                return@launch
+            }
+
+            fileSystem.renameFolder(folderId, trimmedName)
+                .onSuccess {
+                    loadFolders()
+                    _operationResult.emit(OperationResult.Success("文件夹已重命名"))
+                }
+                .onFailure {
+                    _operationResult.emit(OperationResult.Error(it.message ?: "重命名失败"))
+                }
+        }
+    }
+
+    fun renameFile(fileId: String, newName: String, folderId: String) {
+        viewModelScope.launch {
+            val trimmedName = newName.trim()
+            if (trimmedName.isBlank()) {
+                _operationResult.emit(OperationResult.Error("文件名称不能为空"))
+                return@launch
+            }
+
+            fileSystem.renameFile(fileId, trimmedName)
+                .onSuccess {
+                    loadFiles(folderId)
+                    _operationResult.emit(OperationResult.Success("文件已重命名"))
+                }
+                .onFailure {
+                    _operationResult.emit(OperationResult.Error(it.message ?: "重命名失败"))
+                }
+        }
+    }
+
     private fun setLoading(isLoading: Boolean) {
         _uiState.update { it.copy(isLoading = isLoading) }
     }

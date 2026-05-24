@@ -67,6 +67,26 @@ class MockFileSystem @Inject constructor() {
         return Result.success(Unit)
     }
 
+    suspend fun renameFolder(folderId: String, newName: String): Result<Unit> {
+        delay(200)
+        val index = mockFolders.indexOfFirst { it.id == folderId }
+        if (index == -1) {
+            return Result.failure(Exception("文件夹不存在"))
+        }
+        mockFolders[index] = mockFolders[index].copy(name = newName)
+        return Result.success(Unit)
+    }
+
+    suspend fun renameFile(fileId: String, newName: String): Result<Unit> {
+        delay(200)
+        val index = mockFiles.indexOfFirst { it.id == fileId }
+        if (index == -1) {
+            return Result.failure(Exception("文件不存在"))
+        }
+        mockFiles[index] = mockFiles[index].copy(name = newName)
+        return Result.success(Unit)
+    }
+
     /** 整卡擦除时调用：清空所有文件夹与文件。由 MockUsbManager.wipeAll() 统一触发。 */
     fun clear() {
         mockFolders.clear()
