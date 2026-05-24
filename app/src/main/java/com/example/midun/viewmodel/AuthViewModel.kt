@@ -56,7 +56,7 @@ class AuthViewModel @Inject constructor(
 
     fun login(password: String) {
         if (loginAttempts >= MAX_ATTEMPTS) {
-            _loginState.value = LoginState.Error("尝试次数过多，请通过串口重置", 0)
+            _loginState.value = LoginState.Error(LOCKOUT_MESSAGE, 0)
             return
         }
         viewModelScope.launch {
@@ -68,15 +68,18 @@ class AuthViewModel @Inject constructor(
                 }
                 .onFailure {
                     loginAttempts++
-                    _loginState.value = LoginState.Error(
-                        it.message ?: "密码错误",
-                        MAX_ATTEMPTS - loginAttempts
-                    )
+                    val attemptsLeft = MAX_ATTEMPTS - loginAttempts
+                    _loginState.value = if (attemptsLeft <= 0) {
+                        LoginState.Error(LOCKOUT_MESSAGE, 0)
+                    } else {
+                        LoginState.Error(it.message ?: "密码错误", attemptsLeft)
+                    }
                 }
         }
     }
 
     private companion object {
         const val MAX_ATTEMPTS = 5
+        const val LOCKOUT_MESSAGE = "身份认证失败，请联系技术人员"
     }
 }
