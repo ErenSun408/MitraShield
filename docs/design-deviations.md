@@ -312,4 +312,15 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **遗留** `togglePin` 是单纯切换、无"置顶上限/排序时间戳"；"删除"语义上仅清消息不删联系人（如日后要真删联系人，VM 的 `deleteContact` 已就绪可换接）。
 - **Commit** `77e34e9`
 
+### M6.4 跟进 — 长按消息菜单：全屏弹框 → 微信式深色横排气泡（锚定气泡下方）
+
+- **承接上文 M6.4** 原实现把长按消息的"删除/撤回"放在一个**全屏居中** `AlertDialog`（`messageToDelete` 状态驱动）。用户 2026-05-24 要求改成微信式、显示在消息下方的上下文菜单。
+- **本仓库实现**（`ChatScreen` 无关，仅 `ChatDetailScreen.kt`）
+  - 删除 `messageToDelete` 全屏弹框；改为 `ChatBubble` 内本地 `showMenu`，长按气泡 `combinedClickable(onLongClick)` 触发。
+  - 自定义 `MessageActionMenu`：**深灰圆角 `Popup`**（`#4C4C4C`）+ 横排 `MessageActionItem`（图标在上、文字在下，删除/撤回），`PopupProperties(focusable=true)` 点外部/返回关闭。
+  - **定位**：先用 `Popup(alignment = BottomStart)` 会把弹窗压在气泡之上（覆盖消息）；改用自定义 `PopupPositionProvider`，弹窗左上角 = 气泡左下角 + 6dp 间隙，强制显示在消息**下方**；x 方向 clamp 不超出屏幕。
+  - 菜单标签精简为"删除/撤回"（原全屏版为"删除（仅本端）/撤回（双向）"），贴合微信小菜单；mock 下两者仍都调 `deleteMessage`。
+  - **遗留** `Popup` 不像 `DropdownMenu` 自动按空间上/下翻转——靠屏幕最底部的消息其菜单仍固定显示在下方，必要时后续再加按位置翻转的逻辑。
+- **Commit** `eebba8b`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
