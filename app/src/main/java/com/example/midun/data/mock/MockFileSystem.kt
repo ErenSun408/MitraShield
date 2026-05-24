@@ -67,6 +67,12 @@ class MockFileSystem @Inject constructor() {
         return Result.success(Unit)
     }
 
+    /** 整卡擦除时调用：清空所有文件夹与文件。由 MockUsbManager.wipeAll() 统一触发。 */
+    fun clear() {
+        mockFolders.clear()
+        mockFiles.clear()
+    }
+
     private fun guessFileType(fileName: String): FileType =
         when (fileName.substringAfterLast('.').lowercase()) {
             "jpg", "jpeg", "png", "gif", "webp" -> FileType.IMAGE

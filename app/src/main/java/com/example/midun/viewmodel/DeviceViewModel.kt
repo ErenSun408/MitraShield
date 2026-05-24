@@ -43,6 +43,18 @@ class DeviceViewModel @Inject constructor(
         mockUsbManager.logout()
     }
 
+    /**
+     * 忘记密码 → 擦卡重置。wipeAll 完成后才调 onComplete（通常用于导航）。
+     * 关键：必须等 wipeAll 跑完再导航——若先导航 popUpTo(0) 销毁本 VM，viewModelScope
+     * 会被取消，wipeAll 卡在 delay 处擦除不完整。
+     */
+    fun wipeAndReset(onComplete: () -> Unit) {
+        viewModelScope.launch {
+            mockUsbManager.wipeAll()
+            onComplete()
+        }
+    }
+
     // M10 hook: replace with SFCloseDisk() once the real FSShell SDK lands.
     private fun clearSensitiveMemory() {
     }

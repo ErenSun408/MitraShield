@@ -24,11 +24,18 @@ fun NavGraph(navController: NavHostController) {
         }
 
         composable(Screen.Login.route) {
-            LoginScreen(onLoginSuccess = {
-                navController.navigate(Screen.Main.route) {
-                    popUpTo(Screen.Login.route) { inclusive = true }
+            LoginScreen(
+                onLoginSuccess = {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.Login.route) { inclusive = true }
+                    }
+                },
+                onForgotPassword = {
+                    navController.navigate(Screen.Init.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
                 }
-            })
+            )
         }
 
         composable(Screen.Main.route) {

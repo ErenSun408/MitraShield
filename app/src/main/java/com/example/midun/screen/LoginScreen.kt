@@ -22,14 +22,19 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.AuthViewModel
+import com.example.midun.viewmodel.DeviceViewModel
 
 @Composable
 fun LoginScreen(
     onLoginSuccess: () -> Unit,
-    authViewModel: AuthViewModel = hiltViewModel()
+    onForgotPassword: () -> Unit,
+    authViewModel: AuthViewModel = hiltViewModel(),
+    deviceViewModel: DeviceViewModel = hiltViewModel()
 ) {
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
+    var showForgotDialog by remember { mutableStateOf(false) }
+    var wiping by remember { mutableStateOf(false) }
 
     val loginState by authViewModel.loginState.collectAsState()
     val isLoading = loginState is AuthViewModel.LoginState.Loading
@@ -151,6 +156,14 @@ fun LoginScreen(
                     }
                 }
 
+                TextButton(onClick = { showForgotDialog = true }) {
+                    Text(
+                        "忘记密码？",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
                 Spacer(Modifier.height(16.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -162,5 +175,51 @@ fun LoginScreen(
                 }
             }
         }
+    }
+
+    if (showForgotDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!wiping) showForgotDialog = false },
+            icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
+            title = { Text(if (wiping) "正在清除数据" else "危险操作", color = Danger) },
+            text = {
+                if (wiping) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            color = Danger,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text("正在清除安全卡内所有数据...", color = TextSecondary)
+                    }
+                } else {
+                    Text(
+                        "忘记密码只能通过恢复出厂设置解决。\n\n" +
+                            "此操作将永久删除安全卡内所有文件、聊天记录和密码，且无法恢复。\n\n" +
+                            "确认后需要重新初始化安全卡。",
+                        color = TextSecondary
+                    )
+                }
+            },
+            confirmButton = {
+                if (!wiping) {
+                    Button(
+                        onClick = {
+                            wiping = true
+                            deviceViewModel.wipeAndReset(onComplete = onForgotPassword)
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Danger)
+                    ) { Text("我已了解，清除所有数据") }
+                }
+            },
+            dismissButton = {
+                if (!wiping) {
+                    TextButton(onClick = { showForgotDialog = false }) {
+                        Text("取消", color = TextSecondary)
+                    }
+                }
+            }
+        )
     }
 }

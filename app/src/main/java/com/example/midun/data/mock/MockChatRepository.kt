@@ -88,6 +88,12 @@ class MockChatRepository @Inject constructor() {
         return Result.success(Unit)
     }
 
+    /** 整卡擦除时调用：清空所有联系人与消息。由 MockUsbManager.wipeAll() 统一触发。 */
+    fun clear() {
+        mockContacts.clear()
+        mockMessages.clear()
+    }
+
     fun generateQrContent(): String {
         val mockData = mapOf(
             "ver" to 1,
