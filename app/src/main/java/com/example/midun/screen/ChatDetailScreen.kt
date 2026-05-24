@@ -43,7 +43,18 @@ fun ChatDetailScreen(
     var inputText by remember { mutableStateOf("") }
     var showBurnDialog by remember { mutableStateOf(false) }
     var messageToDelete by remember { mutableStateOf<ChatMessage?>(null) }
+    var showMenu by remember { mutableStateOf(false) }
+    var showSearchBar by remember { mutableStateOf(false) }
+    // 本地状态承载搜索词，避免经 ViewModel StateFlow 异步往返打断中文/IME 组合（见 M6.3 修复）。
+    var searchQuery by remember { mutableStateOf("") }
+    var showClearConfirm by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
+
+    // 搜索词非空时按内容/文件名过滤；空时用原始消息流。messages 变化时重算。
+    val displayMessages = remember(messages, searchQuery) {
+        if (searchQuery.isBlank()) messages
+        else chatViewModel.searchMessages(contactId, searchQuery)
+    }
 
     // 进会话：加载消息 + 清除未读（见 M6.1/M6.4 约定）。
     LaunchedEffect(contactId) {
@@ -60,23 +71,62 @@ fun ChatDetailScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
-                        Text(contact?.remark ?: "聊天", fontSize = 16.sp)
-                        Text(
-                            "ECDH加密 · 设备ID: ${contact?.deviceId ?: ""}",
-                            fontSize = 10.sp,
-                            color = Color.White.copy(0.7f)
+                    if (showSearchBar) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("搜索消息...", color = Color.White.copy(0.6f), fontSize = 14.sp) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                cursorColor = Color.White,
+                                focusedBorderColor = Color.White,
+                                unfocusedBorderColor = Color.White.copy(0.5f)
+                            )
                         )
+                    } else {
+                        Column {
+                            Text(contact?.remark ?: "聊天", fontSize = 16.sp)
+                            Text(
+                                "ECDH加密 · 设备ID: ${contact?.deviceId ?: ""}",
+                                fontSize = 10.sp,
+                                color = Color.White.copy(0.7f)
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") }
                 },
                 actions = {
-                    IconButton(onClick = { showBurnDialog = true }) {
-                        Icon(Icons.Default.LocalFireDepartment, "阅后即焚", tint = Warning)
+                    if (showSearchBar) {
+                        IconButton(onClick = { showSearchBar = false; searchQuery = "" }) {
+                            Icon(Icons.Default.Close, "关闭搜索")
+                        }
+                    } else {
+                        IconButton(onClick = { showBurnDialog = true }) {
+                            Icon(Icons.Default.LocalFireDepartment, "阅后即焚", tint = Warning)
+                        }
+                        Box {
+                            IconButton(onClick = { showMenu = true }) {
+                                Icon(Icons.Default.MoreVert, "更多")
+                            }
+                            DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("搜索消息") },
+                                    leadingIcon = { Icon(Icons.Default.Search, null, tint = Primary) },
+                                    onClick = { showSearchBar = true; showMenu = false }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("清空聊天记录", color = Danger) },
+                                    leadingIcon = { Icon(Icons.Default.DeleteSweep, null, tint = Danger) },
+                                    onClick = { showClearConfirm = true; showMenu = false }
+                                )
+                            }
+                        }
                     }
-                    IconButton(onClick = {}) { Icon(Icons.Default.MoreVert, "更多") }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = Primary, titleContentColor = Color.White,
@@ -152,8 +202,16 @@ fun ChatDetailScreen(
                 }
             }
 
-            items(messages, key = { it.id }) { msg ->
+            items(displayMessages, key = { it.id }) { msg ->
                 ChatBubble(msg = msg, onLongClick = { messageToDelete = msg })
+            }
+
+            if (searchQuery.isNotBlank() && displayMessages.isEmpty()) {
+                item {
+                    Box(modifier = Modifier.fillMaxWidth().padding(top = 32.dp), contentAlignment = Alignment.Center) {
+                        Text("未找到匹配「$searchQuery」的消息", color = TextSecondary, fontSize = 13.sp)
+                    }
+                }
             }
         }
     }
@@ -212,6 +270,28 @@ fun ChatDetailScreen(
             },
             confirmButton = {
                 TextButton(onClick = { messageToDelete = null }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
+
+    if (showClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
+            title = { Text("清空聊天记录") },
+            text = { Text("将删除与该联系人的所有聊天记录，且无法恢复。", color = TextSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearConfirm = false
+                        // 清完才返回：onBack 在 onComplete 里触发，避免提前销毁 scope 中断清除。
+                        chatViewModel.clearAllMessages(contactId, onComplete = onBack)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Danger)
+                ) { Text("确认清空") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirm = false }) { Text("取消", color = TextSecondary) }
             }
         )
     }

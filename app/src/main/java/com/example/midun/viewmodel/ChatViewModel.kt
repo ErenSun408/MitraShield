@@ -114,11 +114,14 @@ class ChatViewModel @Inject constructor(
      * 清空与该联系人的聊天记录（保留联系人）。
      * 接 M1.4 拆分后的 clearMessages（v4/patch 原本调已不存在的 clearContact）。
      */
-    fun clearAllMessages(contactId: String) {
+    fun clearAllMessages(contactId: String, onComplete: () -> Unit = {}) {
         viewModelScope.launch {
             chatRepo.clearMessages(contactId)
             _messages.value = emptyList()
             _contacts.value = chatRepo.getContacts()
+            // 清完才回调导航：否则调用方立即 onBack/popBackStack 会销毁本 VM 的 scope，
+            // 打断 clearMessages 的 delay → 清除半途中断（同 M3.5 忘记密码坑）。
+            onComplete()
         }
     }
 
