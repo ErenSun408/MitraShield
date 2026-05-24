@@ -88,6 +88,11 @@ class MockChatRepository @Inject constructor() {
         return Result.success(Unit)
     }
 
+    /** 扫码建联：新增一个联系人。由 ChatViewModel.addContact 调用。 */
+    fun addContact(contact: Contact) {
+        mockContacts.add(contact)
+    }
+
     /** 整卡擦除时调用：清空所有联系人与消息。由 MockUsbManager.wipeAll() 统一触发。 */
     fun clear() {
         mockContacts.clear()
