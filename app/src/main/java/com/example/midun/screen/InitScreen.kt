@@ -18,23 +18,42 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.ui.theme.*
+import com.example.midun.viewmodel.AuthViewModel
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun InitScreen(onInitComplete: () -> Unit) {
+fun InitScreen(
+    onInitComplete: () -> Unit,
+    authViewModel: AuthViewModel = hiltViewModel()
+) {
     var step by remember { mutableIntStateOf(0) }
-    // 0=检测设备 1=设置密码 2=确认密码 3=绑定设备 4=完成
+    // 0=检测设备 1=设置密码 2=绑定设备 3=初始化中 4=完成
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var bindDevice by remember { mutableStateOf(true) }
-    var isProcessing by remember { mutableStateOf(false) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    val initState by authViewModel.initState.collectAsState()
 
     LaunchedEffect(Unit) {
         delay(1500)
         step = 1
+    }
+
+    // M3.3: step 3 的推进改由真实 initDevice 结果驱动（原先是写死的 2s delay）。
+    LaunchedEffect(initState) {
+        when (val s = initState) {
+            is AuthViewModel.InitState.Success -> step = 4
+            is AuthViewModel.InitState.Error -> {
+                errorMsg = s.message
+                step = 1
+            }
+            else -> {}
+        }
     }
 
     Scaffold(
@@ -149,6 +168,11 @@ fun InitScreen(onInitComplete: () -> Unit) {
                         Spacer(Modifier.height(8.dp))
                         Text("两次密码不一致", color = Danger, fontSize = 12.sp)
                     }
+
+                    errorMsg?.let {
+                        Spacer(Modifier.height(8.dp))
+                        Text(it, color = Danger, fontSize = 12.sp)
+                    }
                 }
                 2 -> {
                     Icon(Icons.Default.PhoneAndroid, null, tint = Primary, modifier = Modifier.size(64.dp))
@@ -207,10 +231,7 @@ fun InitScreen(onInitComplete: () -> Unit) {
                     Spacer(Modifier.height(32.dp))
 
                     Button(
-                        onClick = {
-                            isProcessing = true
-                            step = 3
-                        },
+                        onClick = { step = 3 },
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Primary)
@@ -219,9 +240,9 @@ fun InitScreen(onInitComplete: () -> Unit) {
                     }
                 }
                 3 -> {
+                    // M3.3: 触发一次真实初始化；结果由顶部的 LaunchedEffect(initState) 推进到 step 4 或回退。
                     LaunchedEffect(Unit) {
-                        delay(2000)
-                        step = 4
+                        authViewModel.initDevice(password, confirmPassword, bindDevice)
                     }
                     Spacer(Modifier.height(40.dp))
                     CircularProgressIndicator(color = Accent, modifier = Modifier.size(64.dp))

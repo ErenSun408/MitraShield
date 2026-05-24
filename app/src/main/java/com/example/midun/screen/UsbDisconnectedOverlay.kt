@@ -15,6 +15,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -163,40 +164,61 @@ private fun ClearItem(text: String) {
 }
 
 /**
- * USB拔插演示开关 - 顶部居中悬浮按钮
+ * DEV 专用悬浮面板（顶部居中）：USB 拔插开关 + 两个跳转入口。
+ * "未初始化插入"/"已初始化插入" 先改 mock 安全卡状态，再由调用方重走 Splash 路由，
+ * 从而落到 Init / Login。
+ * ⚠️ M10 接真实 FSShell SDK 时整组删除。
  */
 @Composable
-fun BoxScope.UsbToggleButton(isConnected: Boolean, onToggle: () -> Unit) {
-    Card(
+fun BoxScope.DevControlPanel(
+    isConnected: Boolean,
+    onToggle: () -> Unit,
+    onSimUninitInsert: () -> Unit,
+    onSimInitInsert: () -> Unit
+) {
+    Column(
         modifier = Modifier
             .align(Alignment.TopCenter)
-            .padding(top = 40.dp)
-            .clip(RoundedCornerShape(24.dp)),
+            .padding(top = 40.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        DevChip(
+            text = if (isConnected) "模拟拔出USB" else "模拟插入USB",
+            icon = if (isConnected) Icons.Default.Usb else Icons.Default.UsbOff,
+            bg = if (isConnected) Success else Danger,
+            onClick = onToggle
+        )
+        DevChip(
+            text = "模拟未初始化插入 → 初始化",
+            icon = Icons.Default.Lock,
+            bg = Accent,
+            onClick = onSimUninitInsert
+        )
+        DevChip(
+            text = "模拟已初始化插入 → 登录",
+            icon = Icons.Default.LockOpen,
+            bg = Primary,
+            onClick = onSimInitInsert
+        )
+    }
+}
+
+@Composable
+private fun DevChip(text: String, icon: ImageVector, bg: Color, onClick: () -> Unit) {
+    Card(
         shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = if (isConnected) Success else Danger
-        ),
+        colors = CardDefaults.cardColors(containerColor = bg),
         elevation = CardDefaults.cardElevation(8.dp),
-        onClick = onToggle
+        onClick = onClick
     ) {
         Row(
-            modifier = Modifier
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                if (isConnected) Icons.Default.Usb else Icons.Default.UsbOff,
-                null,
-                tint = Color.White,
-                modifier = Modifier.size(18.dp)
-            )
+            Icon(icon, null, tint = Color.White, modifier = Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
-            Text(
-                if (isConnected) "模拟拔出USB" else "模拟插入USB",
-                color = Color.White,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Text(text, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
     }
 }

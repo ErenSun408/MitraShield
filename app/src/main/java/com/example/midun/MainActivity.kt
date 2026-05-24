@@ -23,8 +23,9 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.navigation.compose.rememberNavController
 import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.navigation.NavGraph
+import com.example.midun.navigation.Screen
+import com.example.midun.screen.DevControlPanel
 import com.example.midun.screen.UsbDisconnectedOverlay
-import com.example.midun.screen.UsbToggleButton
 import com.example.midun.ui.theme.MiDunTheme
 import com.example.midun.viewmodel.DeviceViewModel
 import dagger.hilt.android.AndroidEntryPoint
@@ -103,9 +104,23 @@ class MainActivity : ComponentActivity() {
                         })
                     }
 
-                    UsbToggleButton(
+                    // DEV-only: jump into Init/Login by faking card state then
+                    // re-routing through Splash (real routing path). Remove with SDK in M10.
+                    DevControlPanel(
                         isConnected = isConnected,
-                        onToggle = { deviceViewModel.debugToggleUsb() }
+                        onToggle = { deviceViewModel.debugToggleUsb() },
+                        onSimUninitInsert = {
+                            deviceViewModel.debugSimulateFirstInsert()
+                            navController.navigate(Screen.Splash.route) {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        },
+                        onSimInitInsert = {
+                            deviceViewModel.debugSimulateInitializedInsert()
+                            navController.navigate(Screen.Splash.route) {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        }
                     )
                 }
             }

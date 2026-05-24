@@ -56,6 +56,10 @@ class DeviceViewModel @Inject constructor(
         mockUsbManager.simulateFirstInsert()
     }
 
+    fun debugSimulateInitializedInsert() {
+        mockUsbManager.simulateInsert()
+    }
+
     private var inactivityJob: Job? = null
 
     private fun resetInactivityTimer() {
