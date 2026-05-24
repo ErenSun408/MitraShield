@@ -18,15 +18,25 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.data.*
+import com.example.midun.data.model.CopyPolicy
+import com.example.midun.data.model.FileItem
 import com.example.midun.ui.theme.*
+import com.example.midun.viewmodel.FileViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FilesScreen(
     onFolderClick: (String) -> Unit,
-    onCreateFolder: () -> Unit
+    onCreateFolder: () -> Unit,
+    fileViewModel: FileViewModel = hiltViewModel()
 ) {
+    val uiState by fileViewModel.uiState.collectAsState()
+
     Scaffold(
         floatingActionButton = {
             FloatingActionButton(
@@ -53,15 +63,39 @@ fun FilesScreen(
                 Spacer(Modifier.height(16.dp))
             }
 
-            items(MockData.folders) { folder ->
-                FolderCard(folder, onClick = { onFolderClick(folder.id) })
+            if (uiState.folders.isEmpty()) {
+                item {
+                    EmptyFoldersState(onCreateFolder = onCreateFolder)
+                }
+            } else {
+                items(uiState.folders, key = { it.id }) { folder ->
+                    FolderCard(folder, onClick = { onFolderClick(folder.id) })
+                }
             }
         }
     }
 }
 
 @Composable
-private fun FolderCard(folder: SecureFolder, onClick: () -> Unit) {
+private fun EmptyFoldersState(onCreateFolder: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 56.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(Icons.Default.FolderOff, null, tint = TextSecondary.copy(alpha = 0.55f), modifier = Modifier.size(56.dp))
+        Spacer(Modifier.height(12.dp))
+        Text("暂无隐私文件夹", color = TextSecondary, fontSize = 15.sp)
+        Spacer(Modifier.height(4.dp))
+        Text("创建文件夹后，文件会加密存储在安全卡中", color = TextSecondary, fontSize = 12.sp)
+        Spacer(Modifier.height(12.dp))
+        TextButton(onClick = onCreateFolder) {
+            Text("创建第一个文件夹", color = Primary)
+        }
+    }
+}
+
+@Composable
+private fun FolderCard(folder: FileItem, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp)
@@ -81,9 +115,9 @@ private fun FolderCard(folder: SecureFolder, onClick: () -> Unit) {
                 Text(folder.name, fontSize = 16.sp, fontWeight = FontWeight.Medium)
                 Spacer(Modifier.height(2.dp))
                 Row {
-                    Text("${folder.fileCount}个文件", fontSize = 12.sp, color = TextSecondary)
+                    Text("创建于 ${formatFolderDate(folder.createdAt)}", fontSize = 12.sp, color = TextSecondary)
                     Spacer(Modifier.width(8.dp))
-                    Text(folder.createdTime, fontSize = 12.sp, color = TextSecondary)
+                    Text("安全卡存储", fontSize = 12.sp, color = TextSecondary)
                 }
                 Spacer(Modifier.height(4.dp))
                 Row {
@@ -91,14 +125,14 @@ private fun FolderCard(folder: SecureFolder, onClick: () -> Unit) {
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
                             .background(
-                                if (folder.allowCopy) Accent.copy(0.15f) else Danger.copy(0.15f)
+                                if (folder.copyPolicy == CopyPolicy.NO_COPY) Danger.copy(0.15f) else Accent.copy(0.15f)
                             )
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            folder.copyMode,
+                            folder.copyPolicy.label(),
                             fontSize = 10.sp,
-                            color = if (folder.allowCopy) Accent else Danger
+                            color = if (folder.copyPolicy == CopyPolicy.NO_COPY) Danger else Accent
                         )
                     }
                     Spacer(Modifier.width(6.dp))
@@ -116,6 +150,16 @@ private fun FolderCard(folder: SecureFolder, onClick: () -> Unit) {
         }
     }
 }
+
+private fun CopyPolicy.label(): String =
+    when (this) {
+        CopyPolicy.NO_COPY -> "不可拷贝"
+        CopyPolicy.COPY_PLAIN -> "拷贝明文"
+        CopyPolicy.COPY_ENCRYPTED -> "拷贝密文"
+    }
+
+private fun formatFolderDate(timestamp: Long): String =
+    SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(timestamp))
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
