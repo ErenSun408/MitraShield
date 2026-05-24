@@ -291,4 +291,25 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **遗留** 阅后即焚（火焰图标 + 时长弹框）保留为 M0 占位、仍不生效（模型有 `burnAfterRead` 字段未接逻辑）；`MoreVert` 暂空，M6.5 接搜索/清空菜单。撤回与删除在 mock 下行为相同（都仅删本端），真实双向撤回待 SDK。
 - **Commit** `410cf42`
 
+### M6.5 ChatDetailScreen 会话内搜索 + 清空会话（patch §M6 改动3）— 搜索模式 + 清完才返回
+
+- **patch §M6 改动3** topBar actions 切 `showSearchBar`：true 时在 actions 内放一个 200dp 内联搜索框；false 时 `MoreVert` 菜单（搜索消息 / 清空聊天记录）。清空确认后 `clearAllMessages(contactId)` 然后**立即** `navController.popBackStack()`。`clearAllMessages` 调 `chatRepo.clearContact`。
+- **本仓库实现**
+  - **搜索模式（标题变输入框）**：选"搜索消息"后，顶栏**标题区**整体变白色 `OutlinedTextField`（适配 Primary 色顶栏），actions 变关闭按钮，火焰图标隐藏；关闭即清空退出。非 patch 的"actions 内嵌 200dp 框"——避免与标题+火焰图标在彩色顶栏上拥挤。
+  - 搜索框用**本地 `remember` 状态**（patch 本就如此），非 ViewModel StateFlow，故无中文/IME 输入问题（见 M6.3 修复）。
+  - `displayMessages = remember(messages, searchQuery){ 空→messages / 非空→searchMessages }`；无匹配显示"未找到匹配「…」的消息"（patch 未处理空结果）。
+  - **清空接 `clearMessages`**（非 patch 的 `clearContact`，M1.4 已拆分，保留联系人）。
+  - **清完才返回（修作用域取消 bug）**：`clearAllMessages` 加 `onComplete` 回调，确认后 `clearAllMessages(contactId, onComplete = onBack)`——**清除完成后才** `onBack()`。patch 的 fire-and-forget + 立即 popBackStack 会销毁本 ChatDetail VM 的 `viewModelScope` → 打断 `clearMessages` 的 `delay(300)` → 清除半途中断（与 M3.5 忘记密码同款坑）。
+- **Commit** `02a36de`
+
+### M6.6 联系人列表滑动操作（置顶 + 删除）— v4/patch 之外的增量
+
+- **v4 / patch** 均**无**联系人列表的滑动操作；contact 也无置顶概念。
+- **本仓库实现**（用户 2026-05-24 要求，`77e34e9`，`ChatScreen.kt` + 模型/repo/VM）
+  - **左滑显示右侧操作块**：`SwipeableContactItem` 用 `Animatable` 偏移前景卡片 + `detectHorizontalDragGestures` 拖动，松手按半程阈值吸附开/合（Compose 无现成"滑出常驻按钮"组件，`SwipeToDismissBox` 是滑动消除，故自实现）。最外层 `clip(RoundedCornerShape(12.dp))`，否则卡片圆角缺口处会露出背景方形操作块的方角。
+  - **置顶**：`Contact` 新增 `isPinned: Boolean = false`；`MockChatRepository.getContacts()` 排序由"按 lastMessageTime 倒序"改为 `compareByDescending{isPinned}.thenByDescending{lastMessageTime}`（置顶优先）；新增 `MockChatRepository.togglePin` + `ChatViewModel.togglePin`（切后重读 `_contacts` 重排）。列表项置顶态：浅灰底（`Surface`）+ 名字旁图钉图标；滑块文案按状态"置顶/取消置顶"。
+  - **删除**：滑块"删除"→ 屏幕级二次确认框（与 M6.5"清空聊天记录"同款文案）→ `clearAllMessages(contactId)`。**注意**：按用户指定，此"删除"实际走的是**清空聊天记录**逻辑（保留联系人、清空消息），而非 `deleteContact`（删除联系人本身，VM 已预留但此处未用）。
+- **遗留** `togglePin` 是单纯切换、无"置顶上限/排序时间戳"；"删除"语义上仅清消息不删联系人（如日后要真删联系人，VM 的 `deleteContact` 已就绪可换接）。
+- **Commit** `77e34e9`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
