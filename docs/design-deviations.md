@@ -63,9 +63,28 @@
 ### M3.2 SplashScreen — 保留 2.5s 入场动画 + DISCONNECTED 分支不画 UI
 
 - **v4 §3.1** 即时路由，无入场动画；DISCONNECTED 时停留在 Splash 并显示红色"操作异常：请插入安全卡"提示 + 两个 DEV 按钮（"模拟插卡（已初始化）"、"模拟首次插卡（未初始化）"）。
-- **本仓库实现** 保留 M0 时期 2.5s fade+scale 入场动画（品牌曝光）；动画结束后用 `LaunchedEffect(animationDone, deviceStatus)` 按 v4 §3.1 状态分支路由。DISCONNECTED 时**不画任何额外 UI**（停留在动画完成态的 Splash 上）。两个 DEV 按钮挪到 `UsbDisconnectedOverlay` 里（见 M3.3）。
+- **本仓库实现** 保留 M0 时期 2.5s fade+scale 入场动画（品牌曝光）；动画结束后用 `LaunchedEffect(animationDone, deviceStatus)` 按 v4 §3.1 状态分支路由。DISCONNECTED 时**不画任何额外 UI**（停留在动画完成态的 Splash 上）。两个 DEV 入口的最终去向见 M3.3（结论：未进覆盖层，改为独立常驻的 `DevControlPanel`）。
 - **原因** M0 入场动画是有意打磨过的品牌曝光，丢掉是 UX 倒退；DISCONNECTED 状态下 M2 决策保留的 `UsbDisconnectedOverlay`（全屏覆盖层）会盖在 SplashScreen 之上，再在 Splash 里画警告 UI 用户看不见；DEV 按钮挪到覆盖层里更合理（统一了拔卡场景的所有调试入口）。
 - **Commit** `c94679c`
+
+### M3.3 InitScreen — 保留 M0 五步向导，仅把"初始化"那步接通真实 initDevice
+
+- **v4 §3.3** InitScreen 是**单屏表单**：密码框 + 确认框 + 绑定开关 + "完成初始化"按钮；点按钮即调 `authViewModel.initDevice(...)`，`InitState.Success` 后跳 Login。
+- **本仓库实现** 保留 M0 时期的 **5 步向导**（0 检测设备 → 1 设置密码 → 2 绑定设备 → 3 初始化中 → 4 完成，带步骤指示器、设备信息卡、ECDH 文案）。接线方式：
+  - `InitScreen` 仍用 `onInitComplete` 回调（导航权威留在 NavGraph），仅新增 `authViewModel: AuthViewModel = hiltViewModel()` 默认参数做业务。
+  - step 3「正在初始化」由写死的 `delay(2000)` 改为 `authViewModel.initDevice(password, confirmPassword, bindDevice)`；顶层 `LaunchedEffect(initState)` 按 `Success`→step 4 / `Error`→回 step 1 推进。
+  - step 4「前往登录」触发 `onInitComplete()`，NavGraph 跳 Login。
+- **原因** 与 M3.2 同一立场——M0 向导是打磨过的 UX，砍成单屏是倒退；v4 单屏只是接线骨架，没有理由因接线而丢交互。接线选回调+默认注入是为了 NavGraph 零改动、影响面最小。
+- **遗留** initState 的 `Error` 分支在 mock 下不可达（`MockUsbManager.initDevice` 恒成功，且 UI 已门控密码长度/一致），仅作防御。`initDevice` 后状态即 `AUTHENTICATED`，仍按 v4 流程跳 Login 让用户用刚设密码登一次（靠 M1.2 `storedPassword` 契约跑通）。
+- **Commit** `dfb8436`
+
+### M3.3 测试设施 — DevControlPanel 三按钮，经 Splash 重走真实路由进 Init/Login
+
+- **v4** SDK 缺位期没有规定调试入口；v4 §3.1 仅在 Splash 的 DISCONNECTED 态放了两个 DEV 按钮。
+- **本仓库实现** 把 M0 单个 `UsbToggleButton` 升级为常驻顶部的 `DevControlPanel`（一列三按钮）：拔插开关 / 模拟未初始化插入→初始化 / 模拟已初始化插入→登录。后两个按钮**先改 mock 卡状态**（`debugSimulateFirstInsert()` / 新增 `debugSimulateInitializedInsert()`），**再 `navigate(Splash){ popUpTo(0) }` 重走真实路由**，从而由 SplashScreen 这一唯一路由权威决定落到 Init 还是 Login。
+- **原因** ① M2.2 兜底分支让启动恒为"已初始化已连接"，Init 流程原本**不可达**、无法验证，必须补 DEV 入口；② 选"改状态 + 重走 Splash"而非直接 `navigate(Init/Login)`，是为了验证真实路由路径（用户明确选此方案），而非绕过它；③ M3.2 曾设想把 DEV 按钮放进 `UsbDisconnectedOverlay`，但该覆盖层 5s 倒计时即 `finishAndRemoveTask()` 自毁，托管需要 CONNECTED 态的入口不现实，故改为独立常驻面板。
+- **遗留** 整组 `DevControlPanel` 及 `DeviceViewModel` 的 `debug*` 方法是 mock 期脚手架，**M10 接真实 FSShell SDK 时连同 MainActivity 的启动兜底 `else` 分支一起删除**。
+- **Commit** `dfb8436`
 
 ---
 
