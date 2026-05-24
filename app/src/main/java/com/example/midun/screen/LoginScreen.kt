@@ -1,9 +1,10 @@
 package com.example.midun.screen
 
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -13,20 +14,30 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.ui.theme.*
-import kotlinx.coroutines.delay
+import com.example.midun.viewmodel.AuthViewModel
 
 @Composable
-fun LoginScreen(onLoginSuccess: () -> Unit) {
+fun LoginScreen(
+    onLoginSuccess: () -> Unit,
+    authViewModel: AuthViewModel = hiltViewModel()
+) {
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
-    var isLoading by remember { mutableStateOf(false) }
-    var showError by remember { mutableStateOf(false) }
-    val usbConnected = true
+
+    val loginState by authViewModel.loginState.collectAsState()
+    val isLoading = loginState is AuthViewModel.LoginState.Loading
+    val error = loginState as? AuthViewModel.LoginState.Error
+
+    LaunchedEffect(loginState) {
+        if (loginState is AuthViewModel.LoginState.Success) onLoginSuccess()
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         // 顶部渐变背景
@@ -54,16 +65,17 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                 Text("密盾", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 能停在此屏即 USB 必连（断开由全局 UsbDisconnectedOverlay 兜底），故静态显示。
                     Icon(
-                        if (usbConnected) Icons.Default.Usb else Icons.Default.UsbOff,
+                        Icons.Default.Usb,
                         null,
-                        tint = if (usbConnected) Success else Danger,
+                        tint = Success,
                         modifier = Modifier.size(14.dp)
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        if (usbConnected) "USB安全卡已连接" else "USB安全卡未连接",
-                        color = if (usbConnected) Success else Danger,
+                        "USB安全卡已连接",
+                        color = Success,
                         fontSize = 12.sp
                     )
                 }
@@ -90,10 +102,7 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
 
                 OutlinedTextField(
                     value = password,
-                    onValueChange = {
-                        password = it
-                        showError = false
-                    },
+                    onValueChange = { password = it },
                     label = { Text("安全密码") },
                     leadingIcon = { Icon(Icons.Default.Lock, null) },
                     trailingIcon = {
@@ -105,8 +114,18 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                         }
                     },
                     visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                    isError = showError,
-                    supportingText = if (showError) {{ Text("密码错误，请重试") }} else null,
+                    isError = error != null,
+                    supportingText = if (error != null) {
+                        {
+                            Text(
+                                if (error.attemptsLeft > 0) "${error.message}（剩余${error.attemptsLeft}次）"
+                                else error.message,
+                                color = Danger
+                            )
+                        }
+                    } else null,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { authViewModel.login(password) }),
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     singleLine = true
@@ -114,29 +133,9 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
 
                 Spacer(Modifier.height(20.dp))
 
-                if (!usbConnected) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = CardDefaults.cardColors(containerColor = Danger.copy(0.1f))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(Icons.Default.Warning, null, tint = Danger, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("操作异常：请先插入USB安全卡", color = Danger, fontSize = 12.sp)
-                        }
-                    }
-                }
-
                 Button(
-                    onClick = {
-                        isLoading = true
-                        showError = false
-                    },
-                    enabled = usbConnected && password.isNotEmpty() && !isLoading,
+                    onClick = { authViewModel.login(password) },
+                    enabled = password.isNotEmpty() && !isLoading && error?.attemptsLeft != 0,
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Primary)
@@ -149,14 +148,6 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
                         )
                     } else {
                         Text("登 录", fontSize = 16.sp)
-                    }
-                }
-
-                LaunchedEffect(isLoading) {
-                    if (isLoading) {
-                        delay(1500)
-                        isLoading = false
-                        onLoginSuccess()
                     }
                 }
 
