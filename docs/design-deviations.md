@@ -274,4 +274,21 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **已知缺口** 进入会话清除 `unreadCount` 未在本阶段做——按用户 2026-05-24 要求放到 M6.4（"进入会话"即 ChatDetail 的职责）。
 - **Commit** `099e9d8`（接线）、`834ba11`（搜索）
 
+### M6.4 ChatDetailScreen — 接线 + 进会话清未读 + 保留 M0 装饰
+
+- **v4 §6.3** `ChatDetailScreen(navController, contactId, …)` 持 navController；标题用裸 `contactId`；极简 `MessageBubble`（无头像、无气泡时间、无加密横幅）；底栏发文字 + AttachFile 发 mock FILE 消息；长按 → 删除（仅本端）/撤回（双向）。无"进会话清未读"。
+- **本仓库实现**
+  - **接线**：数据源 `MockData.chatMessages`（旧模型）→ `chatViewModel.messages`；`LaunchedEffect(contactId)` 调 `loadMessages`；回调返回 `onBack`（不持 navController，延续全局约定）。标题用 `contacts.find{ it.id==contactId }?.remark`（v4 是裸 `contactId`，不可读）。
+  - **进会话清未读（用户 2026-05-24 要求，v4/patch 均无）**：新增 `MockChatRepository.markContactRead(contactId)`（`copy(unreadCount=0)`）+ `ChatViewModel.markRead`（清后重读 `_contacts`），在 `LaunchedEffect(contactId)` 随 `loadMessages` 一起调。
+  - **底部导航真实未读角标**：M0 在 `MainScreen` 通信 Tab 写死 `Badge{Text("3")}`（注释标注"待 M6 替换"）。改为 `MainScreen` 注入同实例 `ChatViewModel`（与内部 `ChatListScreen` 同属 Main NavBackStackEntry），`totalUnread = contacts.sumOf{ it.unreadCount }`，`>0` 才显示且为真实数；`LaunchedEffect(Unit){ loadContacts() }` 使进/返本屏重读单例 → ChatDetail 清未读后角标同步递减/消失。
+  - **保留 M0 装饰**（v4 极简版没有）：ECDH 副标题、"已建立端到端加密连接"横幅、双侧 Person 头像、气泡下方 Lock+时间。
+  - **发送/发文件**：文字发送非空可点 + trim；AttachFile 接 mock `sendMessage("[文件] 示例文件.pdf", FILE)`（真实文件选取器按 patch 待实现第3条留 M10）。
+  - **长按删除/撤回**：`combinedClickable` 长按 → `messageToDelete` 弹框，删除/撤回（仅 isMine）mock 下都调 `deleteMessage`。
+  - **自动滚底**：`rememberLazyListState` + `LaunchedEffect(messages.size){ animateScrollToItem(messages.size) }`；因列表 index 0 是加密横幅，末条索引为 `messages.size`（非 `size-1`）。
+  - **模型适配**：`msg.time:String`→本地 `formatMessageTime(timestamp:Long)`(HH:mm)；FILE 气泡优先 `fileName`+`fileSize`（新增本地 `formatFileSize`，因 FilesScreen 的同名函数是 file-private 不可跨文件复用），缺省回退 `content`；补 `AUDIO` 分支（v4 有，mock 下不可达，为完整保留）。
+  - **键盘遮挡修复**：`MainActivity` 启用 `enableEdgeToEdge()`（`decorFitsSystemWindows=false`），manifest 虽为 `adjustResize` 但系统不再自动顶起布局；给底栏 Row 补 `.navigationBarsPadding().imePadding()`（对齐 v4 §6.3，脚手架曾丢失），使输入栏随键盘上升、Scaffold 相应缩短消息区。
+  - 输入框沿用本地 `inputText`（不走 ViewModel StateFlow 往返，无中文/IME 输入问题，见 M6.3 修复条）。
+- **遗留** 阅后即焚（火焰图标 + 时长弹框）保留为 M0 占位、仍不生效（模型有 `burnAfterRead` 字段未接逻辑）；`MoreVert` 暂空，M6.5 接搜索/清空菜单。撤回与删除在 mock 下行为相同（都仅删本端），真实双向撤回待 SDK。
+- **Commit** `410cf42`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
