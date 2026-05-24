@@ -259,4 +259,19 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **遗留** `connectionState`（v4 §6.1）保留为 mock 期占位，M6 UI 未消费，待真实 SDK 接入后驱动连接指示。`addContact` 的二维码解析沿用 patch 的 `substringAfter("sn=").substringBefore(",")`，对非法二维码不防御、对同一 deviceId 不去重——留待 M6.7 真实扫码阶段稳健化。
 - **Commit** `7f7c302`
 
+### M6.2 + M6.3 ChatListScreen — 迁移到 ChatViewModel，保留 M0 头部，绿点替验证徽标，搜索分三态
+
+- **v4 §6.2 / patch §M6 改动2** v4 用 `TopAppBar`（标题 + QrCode action）、`navController` 下传、`ContactItem` 取 `contact.remark`/`isOnline` 绿点；列表来自 init 快照的 `contacts`。patch 改动2 把 `topBar` 改 Column 加搜索框、数据源换 `filteredContacts`。
+- **本仓库实现**（M6.2 接线 `099e9d8` + M6.3 搜索 `834ba11`，同一文件 `ChatScreen.kt`）
+  - 数据源 `MockData.contacts`（旧模型）→ `chatViewModel.contacts`（新 `data/model/Contact`）。字段映射：`name`→`remark`、`lastTime: String`→`formatTime(lastMessageTime: Long)`。
+  - **保留 M0 自定义头部**（"即时通信" + "扫码建链" `FilledTonalButton` + "端到端加密…"副标题），未改用 v4 的 `TopAppBar`；导航维持 M0 回调（`onContactClick`/`onQrCodeClick`，经 MainScreen→NavGraph），未回退到 v4 的 `navController` 下传。
+  - **绿色在线点替换验证徽标**：M0 脚手架在名字旁画 `VerifiedUser`（已验证身份）青色图标；改为 v4 §6.2 的 `isOnline` 绿点（`Success` token）。**原因** 用户 2026-05-24 选 v4 原方案；新模型已带 `isOnline` 字段。
+  - **进屏刷新** 加 `LaunchedEffect(Unit){ loadContacts() }`（M6.1 约定，解决跨 VM 实例列表陈旧）。
+  - **新增 `formatTime(Long)`**（仓库原有 `formatFileSize`/`formatFolderDate` 是 FilesScreen 私有，无时间格式化）：今日→HH:mm、昨日→昨天、本周→周X、跨周→MM-dd、跨年→yyyy-MM-dd；`<=0L`→空串（清空会话后 `lastMessageTime` 被置 0，避免显示 1970）。
+  - **头像首字母** `remark.firstOrNull()` 兜底（脚手架 `name.first()` 对空串会崩）。
+  - **搜索分三态**（patch 只是把数据源换 `filteredContacts`、沿用同一空态）：真无联系人→`EmptyContactsState`（"暂无联系人"+发起连接）；搜索无匹配→新增 `NoSearchResultState`（"未找到匹配「query」…"）；否则列表。搜索框仅在有联系人时显示。
+  - 搜索基础设施（`searchQuery`/`filteredContacts`/`updateSearchQuery`）在 M6.1 已建（见上）；本阶段仅接 UI。
+- **已知缺口** 进入会话清除 `unreadCount` 未在本阶段做——按用户 2026-05-24 要求放到 M6.4（"进入会话"即 ChatDetail 的职责）。
+- **Commit** `099e9d8`（接线）、`834ba11`（搜索）
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
