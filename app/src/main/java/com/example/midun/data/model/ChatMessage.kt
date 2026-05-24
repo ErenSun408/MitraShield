@@ -24,5 +24,6 @@ data class Contact(
     val lastMessage: String = "",
     val lastMessageTime: Long = 0L,
     val isOnline: Boolean = false,
-    val unreadCount: Int = 0
+    val unreadCount: Int = 0,
+    val isPinned: Boolean = false
 )

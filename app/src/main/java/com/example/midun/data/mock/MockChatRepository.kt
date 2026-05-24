@@ -30,7 +30,9 @@ class MockChatRepository @Inject constructor() {
         )
     )
 
-    fun getContacts(): List<Contact> = mockContacts.sortedByDescending { it.lastMessageTime }
+    fun getContacts(): List<Contact> = mockContacts.sortedWith(
+        compareByDescending<Contact> { it.isPinned }.thenByDescending { it.lastMessageTime }
+    )
 
     fun getMessages(contactId: String): List<ChatMessage> =
         mockMessages[contactId]?.toList() ?: emptyList()
@@ -91,6 +93,13 @@ class MockChatRepository @Inject constructor() {
     /** 扫码建联：新增一个联系人。由 ChatViewModel.addContact 调用。 */
     fun addContact(contact: Contact) {
         mockContacts.add(contact)
+    }
+
+    /** 切换联系人置顶状态。由 ChatViewModel.togglePin 调用；置顶项在 getContacts 中排在最前。 */
+    fun togglePin(contactId: String) {
+        mockContacts.indexOfFirst { it.id == contactId }
+            .takeIf { it >= 0 }
+            ?.let { idx -> mockContacts[idx] = mockContacts[idx].copy(isPinned = !mockContacts[idx].isPinned) }
     }
 
     /** 进入会话时清除该联系人的未读计数。由 ChatViewModel.markRead 调用。 */

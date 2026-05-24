@@ -76,6 +76,12 @@ class ChatViewModel @Inject constructor(
         _contacts.value = chatRepo.getContacts()
     }
 
+    /** 切换置顶；重读 _contacts 使列表按"置顶优先"重排。 */
+    fun togglePin(contactId: String) {
+        chatRepo.togglePin(contactId)
+        _contacts.value = chatRepo.getContacts()
+    }
+
     fun sendMessage(content: String, type: MessageType = MessageType.TEXT) {
         val contactId = _currentContactId.value ?: return
         viewModelScope.launch {
