@@ -323,4 +323,12 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - **遗留** `Popup` 不像 `DropdownMenu` 自动按空间上/下翻转——靠屏幕最底部的消息其菜单仍固定显示在下方，必要时后续再加按位置翻转的逻辑。
 - **Commit** `eebba8b`
 
+### M3.3 跟进 — DevControlPanel 三个常驻按钮 → 左上角三点菜单
+
+- **承接上文 M3.3 测试设施** 原实现把"模拟拔出/插入 USB"、"模拟未初始化插入 → 初始化"、"模拟已初始化插入 → 登录"三项 DEV 操作以三个常驻胶囊按钮显示在顶部居中。
+- **本仓库实现** 保留三项 DEV 能力与调用链不变，仅把 UI 收束为左上角一个圆形 `MoreVert` 悬浮按钮；点击后通过 `DropdownMenu` 展开三项操作。按钮使用 `statusBarsPadding()` 避开状态栏，仍覆盖在 `NavGraph` / `UsbDisconnectedOverlay` 之上，便于调试拔卡场景。
+- **原因** 三个常驻按钮遮挡真实页面，影响验收与截图观察；收束为单入口后默认只占 44dp 左上角区域，DEV 操作仍随时可达。
+- **遗留** 该入口仍是 mock 期脚手架；M10 接真实 FSShell SDK 时与 `MainActivity` 启动兜底分支、`DeviceViewModel.debug*` 方法一起删除。
+- **Commit** 待提交
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
