@@ -9,7 +9,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.ui.theme.*
+import com.example.midun.viewmodel.ChatViewModel
 
 data class BottomNavItem(
     val label: String,
@@ -35,8 +37,15 @@ fun MainScreen(
     onFolderClick: (String) -> Unit,
     onCreateFolder: () -> Unit,
     onContactClick: (String) -> Unit,
-    onQrCodeClick: () -> Unit
+    onQrCodeClick: () -> Unit,
+    chatViewModel: ChatViewModel = hiltViewModel()
 ) {
+    // 底部"通信"Tab 的真实未读角标。chatViewModel 与内部 ChatListScreen 同属 Main
+    // NavBackStackEntry → 同一实例；进/返本屏重读单例，使 ChatDetail 清未读后角标同步更新。
+    val contacts by chatViewModel.contacts.collectAsState()
+    val totalUnread = contacts.sumOf { it.unreadCount }
+    LaunchedEffect(Unit) { chatViewModel.loadContacts() }
+
     val navItems = listOf(
         BottomNavItem("首页", Icons.Default.Home, "home"),
         BottomNavItem("文件夹", Icons.Default.Folder, "files"),
@@ -54,9 +63,9 @@ fun MainScreen(
                         selected = selectedTab == index,
                         onClick = { selectedTab = index },
                         icon = {
-                            // 占位：通信 Tab 写死未读角标，待 M6 接 ChatViewModel 后换成真实未读数
-                            if (index == 2 && true) { // 模拟有未读消息
-                                BadgedBox(badge = { Badge { Text("3") } }) {
+                            // 通信 Tab 显示真实总未读数（M6 接 ChatViewModel 后替换 M0 写死的角标）。
+                            if (index == 2 && totalUnread > 0) {
+                                BadgedBox(badge = { Badge { Text("$totalUnread") } }) {
                                     Icon(item.icon, item.label)
                                 }
                             } else {

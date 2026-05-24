@@ -93,6 +93,13 @@ class MockChatRepository @Inject constructor() {
         mockContacts.add(contact)
     }
 
+    /** 进入会话时清除该联系人的未读计数。由 ChatViewModel.markRead 调用。 */
+    fun markContactRead(contactId: String) {
+        mockContacts.indexOfFirst { it.id == contactId }
+            .takeIf { it >= 0 }
+            ?.let { idx -> mockContacts[idx] = mockContacts[idx].copy(unreadCount = 0) }
+    }
+
     /** 整卡擦除时调用：清空所有联系人与消息。由 MockUsbManager.wipeAll() 统一触发。 */
     fun clear() {
         mockContacts.clear()

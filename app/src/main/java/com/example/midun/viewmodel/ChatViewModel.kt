@@ -70,6 +70,12 @@ class ChatViewModel @Inject constructor(
         _messages.value = chatRepo.getMessages(contactId)
     }
 
+    /** 进入会话时清除该联系人的未读计数（用户 2026-05-24 要求）。清后重读 _contacts 反映角标消失。 */
+    fun markRead(contactId: String) {
+        chatRepo.markContactRead(contactId)
+        _contacts.value = chatRepo.getContacts()
+    }
+
     fun sendMessage(content: String, type: MessageType = MessageType.TEXT) {
         val contactId = _currentContactId.value ?: return
         viewModelScope.launch {

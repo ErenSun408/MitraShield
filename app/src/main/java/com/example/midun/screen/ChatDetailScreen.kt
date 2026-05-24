@@ -1,9 +1,12 @@
 package com.example.midun.screen
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -17,23 +20,48 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.midun.data.*
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.midun.data.model.ChatMessage
+import com.example.midun.data.model.MessageType
 import com.example.midun.ui.theme.*
+import com.example.midun.viewmodel.ChatViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatDetailScreen(contactId: String, onBack: () -> Unit) {
-    val contact = MockData.contacts.find { it.id == contactId }
-    val messages = MockData.chatMessages[contactId] ?: emptyList()
+fun ChatDetailScreen(
+    contactId: String,
+    onBack: () -> Unit,
+    chatViewModel: ChatViewModel = hiltViewModel()
+) {
+    val contacts by chatViewModel.contacts.collectAsState()
+    val messages by chatViewModel.messages.collectAsState()
+    val contact = contacts.find { it.id == contactId }
+
     var inputText by remember { mutableStateOf("") }
     var showBurnDialog by remember { mutableStateOf(false) }
+    var messageToDelete by remember { mutableStateOf<ChatMessage?>(null) }
+    val listState = rememberLazyListState()
+
+    // 进会话：加载消息 + 清除未读（见 M6.1/M6.4 约定）。
+    LaunchedEffect(contactId) {
+        chatViewModel.loadMessages(contactId)
+        chatViewModel.markRead(contactId)
+    }
+
+    // 自动滚到底：列表含 index 0 的加密横幅，故末条索引 = messages.size。
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size)
+    }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = {
                     Column {
-                        Text(contact?.name ?: "聊天", fontSize = 16.sp)
+                        Text(contact?.remark ?: "聊天", fontSize = 16.sp)
                         Text(
                             "ECDH加密 · 设备ID: ${contact?.deviceId ?: ""}",
                             fontSize = 10.sp,
@@ -59,10 +87,19 @@ fun ChatDetailScreen(contactId: String, onBack: () -> Unit) {
         bottomBar = {
             Surface(shadowElevation = 8.dp) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(8.dp),
+                    // edge-to-edge 下系统不再自动顶起布局，靠 imePadding 让输入栏随键盘上升、
+                    // navigationBarsPadding 让其平时贴在系统导航栏之上（对齐 v4 §6.3）。
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = {}) {
+                    IconButton(onClick = {
+                        // Mock 发文件：真实文件选取器（隐私区/U盘/手机）按 patch 待实现第3条留到 M10。
+                        chatViewModel.sendMessage("[文件] 示例文件.pdf", MessageType.FILE)
+                    }) {
                         Icon(Icons.Default.AttachFile, "文件", tint = Primary)
                     }
                     OutlinedTextField(
@@ -75,7 +112,13 @@ fun ChatDetailScreen(contactId: String, onBack: () -> Unit) {
                     )
                     Spacer(Modifier.width(8.dp))
                     FilledIconButton(
-                        onClick = { inputText = "" },
+                        onClick = {
+                            if (inputText.isNotBlank()) {
+                                chatViewModel.sendMessage(inputText.trim())
+                                inputText = ""
+                            }
+                        },
+                        enabled = inputText.isNotBlank(),
                         colors = IconButtonDefaults.filledIconButtonColors(containerColor = Primary)
                     ) {
                         Icon(Icons.Default.Send, "发送")
@@ -85,6 +128,7 @@ fun ChatDetailScreen(contactId: String, onBack: () -> Unit) {
         }
     ) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
@@ -108,8 +152,8 @@ fun ChatDetailScreen(contactId: String, onBack: () -> Unit) {
                 }
             }
 
-            items(messages) { msg ->
-                ChatBubble(msg)
+            items(messages, key = { it.id }) { msg ->
+                ChatBubble(msg = msg, onLongClick = { messageToDelete = msg })
             }
         }
     }
@@ -137,13 +181,49 @@ fun ChatDetailScreen(contactId: String, onBack: () -> Unit) {
             }
         )
     }
+
+    messageToDelete?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { messageToDelete = null },
+            title = { Text("消息操作") },
+            text = {
+                Column {
+                    TextButton(
+                        onClick = { chatViewModel.deleteMessage(msg.id); messageToDelete = null },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.Delete, null, tint = Danger)
+                        Spacer(Modifier.width(8.dp))
+                        Text("删除（仅本端）", color = Danger)
+                        Spacer(Modifier.weight(1f))
+                    }
+                    if (msg.isMine) {
+                        TextButton(
+                            onClick = { chatViewModel.deleteMessage(msg.id); messageToDelete = null },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Default.Undo, null, tint = Warning)
+                            Spacer(Modifier.width(8.dp))
+                            Text("撤回（双向）", color = Warning)
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { messageToDelete = null }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ChatBubble(msg: ChatMessage) {
+private fun ChatBubble(msg: ChatMessage, onLongClick: () -> Unit) {
     val isFile = msg.type == MessageType.FILE
     val isImage = msg.type == MessageType.IMAGE
     val isVideo = msg.type == MessageType.VIDEO
+    val isAudio = msg.type == MessageType.AUDIO
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -168,11 +248,13 @@ private fun ChatBubble(msg: ChatMessage) {
                 ),
                 colors = CardDefaults.cardColors(
                     containerColor = if (msg.isMine) ChatBubbleMine else ChatBubbleOther
-                )
+                ),
+                modifier = Modifier.combinedClickable(onClick = {}, onLongClick = onLongClick)
             ) {
+                val contentColor = if (msg.isMine) Color.White else TextPrimary
                 Column(modifier = Modifier.padding(12.dp)) {
-                    if (isFile || isVideo) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                    when {
+                        isFile || isVideo -> Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 if (isVideo) Icons.Default.VideoFile else Icons.Default.InsertDriveFile,
                                 null,
@@ -180,25 +262,30 @@ private fun ChatBubble(msg: ChatMessage) {
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(
-                                msg.content,
-                                color = if (msg.isMine) Color.White else TextPrimary,
-                                fontSize = 14.sp
-                            )
+                            Column {
+                                Text(msg.fileName ?: msg.content, color = contentColor, fontSize = 14.sp)
+                                msg.fileSize?.let {
+                                    Text(
+                                        formatFileSize(it),
+                                        color = contentColor.copy(alpha = 0.7f),
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
                         }
-                    } else if (isImage) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        isImage -> Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Image, null, tint = if (msg.isMine) Accent else Primary,
                                 modifier = Modifier.size(20.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text(msg.content, color = if (msg.isMine) Color.White else TextPrimary, fontSize = 14.sp)
+                            Text(msg.content, color = contentColor, fontSize = 14.sp)
                         }
-                    } else {
-                        Text(
-                            msg.content,
-                            color = if (msg.isMine) Color.White else TextPrimary,
-                            fontSize = 14.sp
-                        )
+                        isAudio -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.GraphicEq, null, tint = if (msg.isMine) Accent else Primary,
+                                modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(msg.content.ifBlank { "语音消息" }, color = contentColor, fontSize = 14.sp)
+                        }
+                        else -> Text(msg.content, color = contentColor, fontSize = 14.sp)
                     }
                 }
             }
@@ -206,7 +293,7 @@ private fun ChatBubble(msg: ChatMessage) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.Lock, null, tint = TextSecondary.copy(0.5f), modifier = Modifier.size(10.dp))
                 Spacer(Modifier.width(2.dp))
-                Text(msg.time, fontSize = 10.sp, color = TextSecondary.copy(0.6f))
+                Text(formatMessageTime(msg.timestamp), fontSize = 10.sp, color = TextSecondary.copy(0.6f))
             }
         }
 
@@ -220,4 +307,13 @@ private fun ChatBubble(msg: ChatMessage) {
             }
         }
     }
+}
+
+private fun formatMessageTime(timestamp: Long): String =
+    if (timestamp <= 0L) "" else SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(timestamp))
+
+private fun formatFileSize(bytes: Long): String = when {
+    bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
+    bytes >= 1024 -> "%.1f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
 }
