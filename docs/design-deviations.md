@@ -86,6 +86,17 @@
 - **遗留** 整组 `DevControlPanel` 及 `DeviceViewModel` 的 `debug*` 方法是 mock 期脚手架，**M10 接真实 FSShell SDK 时连同 MainActivity 的启动兜底 `else` 分支一起删除**。
 - **Commit** `dfb8436`
 
+### M3.4 LoginScreen — 保留 M0 视觉，接通 login，删除不可达的 usbConnected 逻辑
+
+- **v4 §3.4** 单屏：密码框 + 错误文案"${message}（剩余${attemptsLeft}次）" + 验证按钮；按钮/onDone 调 `authViewModel.login(password)`，`LoginState.Success` 跳 Home。
+- **本仓库实现** 保留 M0 视觉（渐变头 + 登录卡片 + 设备 ID/SN 信息行），仅换里子：
+  - 仍用 `onLoginSuccess` 回调（导航留 NavGraph）+ 注入 `authViewModel = hiltViewModel()`，与 M3.3 同构。
+  - 删掉 M0 桩里写死的 `isLoading`/`showError`/`delay(1500)` 假登录；改由 `loginState` 驱动：`Loading`→转圈，`Error`→密码框红框 + supportingText 显示 `"${message}（剩余${attemptsLeft}次）"`（锁定态 attemptsLeft=0 时只显示 message），`Success`→`onLoginSuccess()`。
+  - 补 doc 的键盘 `ImeAction.Done` → `login`；锁定（`attemptsLeft == 0`）时禁用登录按钮（doc 未明确，本仓库加强）。
+- **删除（判断点 A）** M0 桩里 `val usbConnected = true` 及其 `if (!usbConnected){警告卡}` + 按钮门控是**不可达死代码**——按 M2 决策，DISCONNECTED 由全局 `UsbDisconnectedOverlay` 全屏兜底，人能停在 Login 时 USB 必连。故删除该分支，表头"已连接"指示保留为**静态恒真**（不引入 DeviceViewModel，保持本屏聚焦认证）。
+- **遗留** `loginAttempts` 5 次锁定计数器存于 `AuthViewModel`（沿用 doc §3.2），而 Login 的 AuthViewModel 按 NavBackStackEntry 作用域——**离开再回 Login 或进程重建即清零、锁定失效**。真实安全卡须把失败次数记在硬件，**M10 收口**。另：`initDevice`(M3.3)→`authenticate`(本阶段) 接通后，"设密码→用该密码登录成功"端到端链路至此首次闭环。
+- **Commit** `e21906c`
+
 ---
 
 ## M4 — 主页与底部导航
