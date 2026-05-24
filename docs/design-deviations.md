@@ -180,4 +180,49 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **原因** M5.2 后文件夹 ID 已变为 `MockFileSystem` 的 `folder_1` / `folder_2` / `folder_3`，而旧 `MockData.files` 使用 `"1"` / `"2"` / `"3"`，如果详情页不迁移会导致点击文件夹后找不到文件。详情页是顶层路由，和 Tab 内 `FilesScreen` 可能不是同一个 `FileViewModel` 实例；但 `MockFileSystem` 是 Hilt 单例，所以重新加载仍能拿到同一份数据，且更符合后续真实 SDK 重新查询目录的行为。
 - **Commit** `cf85ea5`
 
+### M5.4 创建/导入接线 — 创建走独立屏、导入保留来源选择弹窗
+
+- **v4 §5.2 / §5.3** 新建文件夹用 `FilesScreen` 内联 `CreateFolderDialog`；导入文件用 `FileDetailScreen` 顶栏单个 `Add` 按钮**直接** `importFile(folderId, "文件_…pdf", 1024000L)`，无来源选择、文件名写死。
+- **本仓库实现**
+  - 创建延续 M5.2 决策走独立 `CreateFolderScreen` 路由（非内联弹窗），此阶段接通 `fileViewModel.createFolder`：3 档单选 `copyMode` 经新增 `Int.toCopyPolicy()` 映射到 `CopyPolicy`；按钮按 `uiState.isLoading` 显示转圈并禁用；`collect operationResult`，`Success`→成功态、`Error`→红字提示。
+  - 导入保留 M0 的**来源选择弹窗**（"手机导入" / "U盘导入" 两个 `OutlinedButton`），各自用不同占位文件名+大小调 `importFile`，而非 v4 的单一直接导入。
+- **原因** 创建走独立屏延续 M5.2，避免把流程改造混进本提交；导入留来源选择更贴近产品形态（发送/导入来源分 隐私区 / U盘 / 手机，见 patch "待实现说明 第3条"），mock 期先用占位文件名区分来源，待 M10 SDK + 系统文件选取器落地后替换为真实选取。
+- **Commit** `9e76749`
+
+### M5.5 删除确认 — 抽出共享 `DeleteConfirmDialog`，并给文件夹删除补确认
+
+- **v4 §5.2 / §5.3** `FolderCard` 的删除菜单项**直接** `onDelete()`，**无确认弹窗**；文件删除则有一个内联 `AlertDialog` 确认。
+- **本仓库实现** 抽出一个共享的 `DeleteConfirmDialog`（标题/文案参数化），文件夹与文件删除**共用**。文件夹删除**新增确认弹窗**（v4 缺），文案明确提示"文件夹内所有文件也会被删除，且无法恢复"。
+- **原因** 文件夹删除是破坏性操作且在 `MockFileSystem.deleteFolder` 里级联删除内部文件，v4 无确认是疏漏；统一弹窗去掉文件/文件夹两处重复的对话框代码。
+- **Commit** `3d8f584`
+
+### M5.6 重命名（patch §M5 改动1–4）— 抽共享弹窗 + 浅色 token + 空名守卫
+
+- **patch §M5** `MockFileSystem`/`FileViewModel` 加 `renameFolder`/`renameFile`；`FolderCard` 与 `FileItemCard` **各内联一个**重命名 `AlertDialog`（深色 token、`DriveFileRenameOutline` 图标）；`FileViewModel` 仅在失败时 `emit(Error)`。
+- **本仓库实现**
+  - 后端 `MockFileSystem.renameFolder/renameFile`（`indexOfFirst` + `copy(name=…)`，找不到返回 `failure`）照 patch。
+  - UI 抽出**共享 `RenameDialog`** 替代两处内联弹窗；主题 token 深色→浅色映射（`AccentCyan→Primary`），图标改 `Icons.Default.Edit`；确认按钮 `enabled = value.isNotBlank()`。
+  - `FileViewModel.renameFolder/renameFile` 增加**空名守卫**（`trim()` 后 blank 即 `emit(Error)` 并 `return`），且**成功也 `emit(Success)` 文案**（"文件夹已重命名"/"文件已重命名"），patch 两者皆无。
+- **原因** 共享弹窗去重、浅色映射延续全局主题；空名守卫 + 成功提示是健壮性/反馈增强——patch 只处理失败分支，用户改空名或改成功都无反馈。
+- **Commit** `a07e2a9`
+
+### M5.7 导出策略（patch §M5 改动5）— 以文件夹策略为权威，并补文件夹/批量导出
+
+- **patch §M5 改动5** 仅给 `FileItemCard` 的导出菜单项按**单个文件的** `file.copyPolicy` 置灰/可点：`NO_COPY` → "不可导出" 且 `enabled=false`。
+- **本仓库实现**
+  - **导出策略以所在文件夹为准，而非单文件**：`FileDetailScreen` 取 `effectiveCopyPolicy = folder.copyPolicy`，下传给该文件夹内**所有** `FileItemCard`，而非 patch 的 `file.copyPolicy`。**原因**：本仓库数据模型里 `copyPolicy` 实际是**文件夹级**属性——`MockFileSystem` 种子中只有文件夹带策略（folder_1=COPY_PLAIN / folder_2=NO_COPY / folder_3=COPY_ENCRYPTED），而 `file_1…file_5` 全部落在 `FileItem` 默认 `NO_COPY` 上。若照 patch 用 `file.copyPolicy`，所有种子文件都会"不可导出"，与顶栏展示的文件夹策略自相矛盾。产品语义是"文件夹的拷贝策略决定其内文件能否导出"，故以文件夹策略为权威。
+  - **增量 1** `FolderCard` 菜单新增"导出文件夹"项（`NO_COPY` 置灰），patch 无此项。
+  - **增量 2** 接通 `FileDetailScreen` 顶栏溢出菜单的"导出全部文件"（M0 占位项），按 `effectiveCopyPolicy` 置灰、`files` 为空时禁用。
+  - **导出仍是 mock 占位**：触发后只弹"导出已触发"/"文件夹导出已触发"提示框（含按策略给出的"明文/密文导出"文案），**不做真实文件操作**。真实导出到 U盘/手机需 FSShell SDK + 系统文件 API，见 patch "待实现说明 第3、9条"，**M10 收口**。
+- **Commit** `74280c2`
+
+### M5.8 删除全部文件 — v4/patch 未规定，完成 M0 占位项并与删文件夹区分
+
+- **v4 / patch** 均**未规定**此功能。M0 脚手架的 `FileDetailScreen` 溢出菜单里有"全部删除"占位项，但无任何后端逻辑。
+- **本仓库实现** `MockFileSystem` 新增 `deleteAllFilesInFolder(folderId)`（按 `parentId` 删文件、**保留文件夹本身**）；`FileViewModel` 加同名方法；`FileDetailScreen` 溢出项改"删除全部文件"接确认弹窗（复用 M5.5 的 `DeleteConfirmDialog`，文案强调"文件夹会保留，但文件无法恢复"），`files` 为空时禁用。另给空文件列表态补"导入第一个文件"入口。
+- **原因** 落实 M0 占位项；与 `deleteFolder`（删文件夹**连同**文件）刻意区分——"删除全部文件"只清空内容、保留文件夹，是常见的两个独立动作。
+- **Commit** `c9f410a`
+
+---
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
