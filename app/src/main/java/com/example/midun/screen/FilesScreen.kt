@@ -37,6 +37,10 @@ fun FilesScreen(
 ) {
     val uiState by fileViewModel.uiState.collectAsState()
 
+    LaunchedEffect(Unit) {
+        fileViewModel.loadFolders()
+    }
+
     Scaffold(
         floatingActionButton = {
             FloatingActionButton(
@@ -283,7 +287,14 @@ fun FileDetailScreen(
                     Text("选择导入来源：", fontSize = 14.sp)
                     Spacer(Modifier.height(12.dp))
                     OutlinedButton(
-                        onClick = { showImportDialog = false },
+                        onClick = {
+                            fileViewModel.importFile(
+                                folderId = folderId,
+                                fileName = "手机导入_${System.currentTimeMillis()}.pdf",
+                                fileSize = 2_048_000L
+                            )
+                            showImportDialog = false
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Default.PhoneAndroid, null)
@@ -292,7 +303,14 @@ fun FileDetailScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
-                        onClick = { showImportDialog = false },
+                        onClick = {
+                            fileViewModel.importFile(
+                                folderId = folderId,
+                                fileName = "U盘导入_${System.currentTimeMillis()}.docx",
+                                fileSize = 512_000L
+                            )
+                            showImportDialog = false
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Default.Usb, null)
@@ -346,10 +364,24 @@ private fun FileItemCard(file: FileItem) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CreateFolderScreen(onBack: () -> Unit) {
+fun CreateFolderScreen(
+    onBack: () -> Unit,
+    fileViewModel: FileViewModel = hiltViewModel()
+) {
     var folderName by remember { mutableStateOf("") }
     var copyMode by remember { mutableIntStateOf(0) } // 0=不可拷贝 1=拷贝明文 2=拷贝密文
     var showSuccess by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val uiState by fileViewModel.uiState.collectAsState()
+
+    LaunchedEffect(Unit) {
+        fileViewModel.operationResult.collect { result ->
+            when (result) {
+                is FileViewModel.OperationResult.Success -> showSuccess = true
+                is FileViewModel.OperationResult.Error -> errorMessage = result.message
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -415,15 +447,31 @@ fun CreateFolderScreen(onBack: () -> Unit) {
             Spacer(Modifier.weight(1f))
 
             Button(
-                onClick = { showSuccess = true },
-                enabled = folderName.isNotBlank(),
+                onClick = {
+                    errorMessage = null
+                    fileViewModel.createFolder(folderName.trim(), copyMode.toCopyPolicy())
+                },
+                enabled = folderName.isNotBlank() && !uiState.isLoading,
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Primary)
             ) {
-                Icon(Icons.Default.CreateNewFolder, null)
-                Spacer(Modifier.width(8.dp))
-                Text("创建文件夹")
+                if (uiState.isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = Color.White
+                    )
+                } else {
+                    Icon(Icons.Default.CreateNewFolder, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("创建文件夹")
+                }
+            }
+
+            errorMessage?.let { message ->
+                Spacer(Modifier.height(8.dp))
+                Text(message, color = Danger, fontSize = 12.sp)
             }
         }
     }
@@ -440,3 +488,10 @@ fun CreateFolderScreen(onBack: () -> Unit) {
         )
     }
 }
+
+private fun Int.toCopyPolicy(): CopyPolicy =
+    when (this) {
+        1 -> CopyPolicy.COPY_PLAIN
+        2 -> CopyPolicy.COPY_ENCRYPTED
+        else -> CopyPolicy.NO_COPY
+    }
