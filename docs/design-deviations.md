@@ -155,4 +155,29 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **边界** 仅保留 `rememberSaveable` 状态；纯 `remember`（如 HomeScreen 的 `showCleanDialog`）不保留，符合预期。今后需跨切换保留的瞬态应改用 `rememberSaveable` 或提到 ViewModel。
 - **Commit** `fe95c47`
 
+---
+
+## M5 — 隐私文件夹数据流
+
+### M5.1 FileViewModel — 用单一 `FileUiState` 取代 v4 的多条 StateFlow
+
+- **v4 §5.1** `FileViewModel` 分别暴露 `folders`、`currentFiles`、`isLoading` 三条 `StateFlow`，再用 `operationResult` 发送一次性操作结果。
+- **本仓库实现** 保留 `operationResult`，但把持久 UI 状态合并为一个 `FileUiState`：`folders` / `currentFolderId` / `currentFiles` / `isLoading`。`FileViewModel` 仍通过 Hilt 注入 `MockFileSystem`，并提供 `loadFolders()`、`loadFiles(folderId)`、`createFolder(...)`、`importFile(...)`、`deleteFile(...)`、`deleteFolder(...)`。
+- **原因** 文件模块后续会从 `MockFileSystem` 替换到真实 FSShell SDK。统一 UI state 可以把“当前文件夹 + 当前文件列表 + loading”作为一个页面快照交给 UI，避免多个 Flow 在组合时出现短暂不同步，也更接近后续 SDK/Repository 层会返回的聚合状态。一次性提示仍用 `SharedFlow`，避免把 toast/snackbar/dialog 事件塞进持久状态。
+- **Commit** `b1d121f`
+
+### M5.2 FilesScreen — 文件夹列表改接 `FileViewModel + MockFileSystem`，继续保留回调导航
+
+- **v4 §5.2** `FilesScreen(navController, fileViewModel = hiltViewModel())` 直接持有 `NavController`，文件夹点击时在屏幕内部 `navController.navigate(Screen.FileDetail.createRoute(folder.id))`；新建文件夹通过 `FilesScreen` 内部弹窗完成。
+- **本仓库实现** `FilesScreen` 继续遵守全局导航约定：只接收 `onFolderClick(folderId)` / `onCreateFolder()` 回调，不持有 `NavController`。数据源从旧 `MockData.folders` 切换为 `fileViewModel.uiState.folders`，`FolderCard` 的模型从旧 `SecureFolder` 改为 `FileItem`，并按 `CopyPolicy` 显示拷贝策略；空列表显示 `EmptyFoldersState`。新建动作仍走现有顶层 `CreateFolder` 路由，未改成 v4 的内联弹窗。
+- **原因** 导航职责已经在全局约定中收口到 `NavGraph`，文件夹列表只是叶子 Tab 内容，不应重新把 `NavController` 下传。保留独立 `CreateFolderScreen` 是为了延续当前路由结构和已有 UI，避免把 M5.2 的读数据迁移与创建流程改造混在一个提交里。
+- **Commit** `c41fe81`
+
+### M5.3 FileDetailScreen — 详情页改接同一套文件数据源，修正旧 ID 不兼容问题
+
+- **v4 §5.3** `FileDetailScreen(navController, folderId, fileViewModel = hiltViewModel())` 在详情页内持有 `NavController`，用 `FileViewModel.currentFiles` 显示文件列表。
+- **本仓库实现** `FileDetailScreen(folderId, onBack, fileViewModel = hiltViewModel())` 继续使用回调返回，不持有 `NavController`；进入页面时调用 `loadFolders()` + `loadFiles(folderId)`，从 `FileUiState` 中查找当前文件夹和文件。`FileItemCard` 从旧 `SecureFile` 改为 `FileItem`，并补充 `formatFileSize()` 对 `Long` 文件大小做展示格式化。
+- **原因** M5.2 后文件夹 ID 已变为 `MockFileSystem` 的 `folder_1` / `folder_2` / `folder_3`，而旧 `MockData.files` 使用 `"1"` / `"2"` / `"3"`，如果详情页不迁移会导致点击文件夹后找不到文件。详情页是顶层路由，和 Tab 内 `FilesScreen` 可能不是同一个 `FileViewModel` 实例；但 `MockFileSystem` 是 Hilt 单例，所以重新加载仍能拿到同一份数据，且更符合后续真实 SDK 重新查询目录的行为。
+- **Commit** `cf85ea5`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
