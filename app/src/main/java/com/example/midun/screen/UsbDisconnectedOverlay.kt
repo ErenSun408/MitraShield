@@ -15,7 +15,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -164,7 +163,7 @@ private fun ClearItem(text: String) {
 }
 
 /**
- * DEV 专用悬浮面板（顶部居中）：USB 拔插开关 + 两个跳转入口。
+ * DEV 专用悬浮菜单（左上角）：USB 拔插开关 + 两个跳转入口。
  * "未初始化插入"/"已初始化插入" 先改 mock 安全卡状态，再由调用方重走 Splash 路由，
  * 从而落到 Init / Login。
  * ⚠️ M10 接真实 FSShell SDK 时整组删除。
@@ -176,49 +175,69 @@ fun BoxScope.DevControlPanel(
     onSimUninitInsert: () -> Unit,
     onSimInitInsert: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .align(Alignment.TopCenter)
-            .padding(top = 40.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        DevChip(
-            text = if (isConnected) "模拟拔出USB" else "模拟插入USB",
-            icon = if (isConnected) Icons.Default.Usb else Icons.Default.UsbOff,
-            bg = if (isConnected) Success else Danger,
-            onClick = onToggle
-        )
-        DevChip(
-            text = "模拟未初始化插入 → 初始化",
-            icon = Icons.Default.Lock,
-            bg = Accent,
-            onClick = onSimUninitInsert
-        )
-        DevChip(
-            text = "模拟已初始化插入 → 登录",
-            icon = Icons.Default.LockOpen,
-            bg = Primary,
-            onClick = onSimInitInsert
-        )
-    }
-}
+    var expanded by remember { mutableStateOf(false) }
 
-@Composable
-private fun DevChip(text: String, icon: ImageVector, bg: Color, onClick: () -> Unit) {
-    Card(
-        shape = RoundedCornerShape(24.dp),
-        colors = CardDefaults.cardColors(containerColor = bg),
-        elevation = CardDefaults.cardElevation(8.dp),
-        onClick = onClick
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopStart)
+            .statusBarsPadding()
+            .padding(start = 12.dp, top = 8.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Surface(
+            shape = CircleShape,
+            color = Color.Black.copy(alpha = 0.48f),
+            shadowElevation = 8.dp
         ) {
-            Icon(icon, null, tint = Color.White, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(6.dp))
-            Text(text, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            IconButton(
+                onClick = { expanded = true },
+                modifier = Modifier.size(44.dp)
+            ) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "DEV 菜单",
+                    tint = Color.White
+                )
+            }
+        }
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text(if (isConnected) "模拟拔出USB" else "模拟插入USB") },
+                leadingIcon = {
+                    Icon(
+                        if (isConnected) Icons.Default.Usb else Icons.Default.UsbOff,
+                        contentDescription = null,
+                        tint = if (isConnected) Success else Danger
+                    )
+                },
+                onClick = {
+                    expanded = false
+                    onToggle()
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("模拟未初始化插入") },
+                leadingIcon = {
+                    Icon(Icons.Default.Lock, contentDescription = null, tint = Accent)
+                },
+                onClick = {
+                    expanded = false
+                    onSimUninitInsert()
+                }
+            )
+            DropdownMenuItem(
+                text = { Text("模拟已初始化插入") },
+                leadingIcon = {
+                    Icon(Icons.Default.LockOpen, contentDescription = null, tint = Primary)
+                },
+                onClick = {
+                    expanded = false
+                    onSimInitInsert()
+                }
+            )
         }
     }
 }
