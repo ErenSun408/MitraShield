@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,7 +37,9 @@ fun ChatListScreen(
 ) {
     val contacts by chatViewModel.contacts.collectAsState()
     val filteredContacts by chatViewModel.filteredContacts.collectAsState()
-    val searchQuery by chatViewModel.searchQuery.collectAsState()
+    // 本地同步状态承载输入框显示值，避免 value 经 ViewModel StateFlow 异步往返而打断
+    // 中文/IME 的组合（composition）会话；变化转发给 ViewModel 仅用于驱动 filteredContacts 过滤。
+    var searchText by rememberSaveable { mutableStateOf("") }
 
     // 进屏重读单例：扫码建联 / 清空会话后回到列表能反映改动（见 M6.1 偏离）。
     LaunchedEffect(Unit) {
@@ -65,13 +68,13 @@ fun ChatListScreen(
 
         if (contacts.isNotEmpty()) {
             OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { chatViewModel.updateSearchQuery(it) },
+                value = searchText,
+                onValueChange = { searchText = it; chatViewModel.updateSearchQuery(it) },
                 placeholder = { Text("搜索联系人...", color = TextSecondary.copy(alpha = 0.6f)) },
                 leadingIcon = { Icon(Icons.Default.Search, null, tint = TextSecondary) },
                 trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { chatViewModel.updateSearchQuery("") }) {
+                    if (searchText.isNotEmpty()) {
+                        IconButton(onClick = { searchText = ""; chatViewModel.updateSearchQuery("") }) {
                             Icon(Icons.Default.Clear, null, tint = TextSecondary)
                         }
                     }
@@ -89,7 +92,7 @@ fun ChatListScreen(
 
         when {
             contacts.isEmpty() -> EmptyContactsState(onQrCodeClick = onQrCodeClick)
-            filteredContacts.isEmpty() -> NoSearchResultState(query = searchQuery)
+            filteredContacts.isEmpty() -> NoSearchResultState(query = searchText)
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 items(filteredContacts, key = { it.id }) { contact ->
                     ContactItem(contact = contact, onClick = { onContactClick(contact.id) })
