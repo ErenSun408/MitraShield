@@ -297,10 +297,15 @@ fun FileDetailScreen(
     var showMenu by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
     var fileToDelete by remember { mutableStateOf<FileItem?>(null) }
+    var showDeleteAllFilesDialog by remember { mutableStateOf(false) }
     var exportMessage by remember { mutableStateOf<String?>(null) }
     val onExportAllFiles = {
         exportMessage = "${files.size} 个文件已按${effectiveCopyPolicy.exportLabel()}策略触发导出"
         showMenu = false
+    }
+    val onDeleteAllFiles = {
+        showMenu = false
+        showDeleteAllFilesDialog = true
     }
 
     LaunchedEffect(folderId) {
@@ -349,8 +354,12 @@ fun FileDetailScreen(
                             },
                             enabled = files.isNotEmpty() && effectiveCopyPolicy != CopyPolicy.NO_COPY
                         )
-                        DropdownMenuItem(text = { Text("全部删除") }, onClick = { showMenu = false },
-                            leadingIcon = { Icon(Icons.Default.DeleteForever, null, tint = Danger) })
+                        DropdownMenuItem(
+                            text = { Text("删除全部文件", color = Danger) },
+                            onClick = onDeleteAllFiles,
+                            leadingIcon = { Icon(Icons.Default.DeleteForever, null, tint = Danger) },
+                            enabled = files.isNotEmpty()
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Primary, titleContentColor = Color.White,
@@ -366,6 +375,12 @@ fun FileDetailScreen(
                     Text("暂无文件", color = TextSecondary)
                     Spacer(Modifier.height(6.dp))
                     Text("导入后会显示在当前隐私文件夹中", color = TextSecondary, fontSize = 12.sp)
+                    Spacer(Modifier.height(12.dp))
+                    TextButton(onClick = { showImportDialog = true }) {
+                        Icon(Icons.Default.FileUpload, null, tint = Primary)
+                        Spacer(Modifier.width(6.dp))
+                        Text("导入第一个文件", color = Primary)
+                    }
                 }
             }
         } else {
@@ -474,6 +489,18 @@ fun FileDetailScreen(
             onConfirm = {
                 fileViewModel.deleteFile(file.id, folderId)
                 fileToDelete = null
+            }
+        )
+    }
+
+    if (showDeleteAllFilesDialog) {
+        DeleteConfirmDialog(
+            title = "删除全部文件",
+            message = "确定删除「${folder?.name ?: "当前文件夹"}」内的全部文件？文件夹会保留，但文件无法恢复。",
+            onDismiss = { showDeleteAllFilesDialog = false },
+            onConfirm = {
+                fileViewModel.deleteAllFilesInFolder(folderId)
+                showDeleteAllFilesDialog = false
             }
         )
     }

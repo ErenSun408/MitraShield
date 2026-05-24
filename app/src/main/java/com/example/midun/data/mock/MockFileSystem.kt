@@ -60,6 +60,12 @@ class MockFileSystem @Inject constructor() {
         return Result.success(Unit)
     }
 
+    suspend fun deleteAllFilesInFolder(folderId: String): Result<Unit> {
+        delay(300)
+        mockFiles.removeAll { it.parentId == folderId }
+        return Result.success(Unit)
+    }
+
     suspend fun deleteFolder(folderId: String): Result<Unit> {
         delay(300)
         mockFolders.removeAll { it.id == folderId }

@@ -101,6 +101,19 @@ class FileViewModel @Inject constructor(
         }
     }
 
+    fun deleteAllFilesInFolder(folderId: String) {
+        viewModelScope.launch {
+            fileSystem.deleteAllFilesInFolder(folderId)
+                .onSuccess {
+                    loadFiles(folderId)
+                    _operationResult.emit(OperationResult.Success("文件夹内文件已全部删除"))
+                }
+                .onFailure {
+                    _operationResult.emit(OperationResult.Error(it.message ?: "删除失败"))
+                }
+        }
+    }
+
     fun deleteFolder(folderId: String) {
         viewModelScope.launch {
             fileSystem.deleteFolder(folderId)
