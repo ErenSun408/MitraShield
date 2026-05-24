@@ -14,9 +14,22 @@ import com.example.midun.ui.theme.*
 data class BottomNavItem(
     val label: String,
     val icon: ImageVector,
+    // route 暂为占位：当前 Tab 切换用 forEachIndexed 的 index（见 MainScreen 的 when），
+    // 未读取此字段；保留以备将来若改回嵌套 NavHost 的路由式切换时复用。
     val route: String
 )
 
+/**
+ * 登录后的主框架（v4 §4「主页与底部导航」），经 `Screen.Main` 进入。承载底部 4 个 Tab：
+ * 首页 / 文件夹 / 通信 / 设置。
+ *
+ * 与 v4 差异（详见 docs/design-deviations.md「M4」）：用 `selectedTab + when` 切换 Tab，
+ * 而非 v4 的嵌套 NavHost；故每个 Tab 是叶子内容，详情页（FileDetail/ChatDetail/QrCode）
+ * 仍走顶层 NavGraph。切走的 Tab 其 `rememberSaveable` 状态由 `rememberSaveableStateHolder` 保留。
+ *
+ * M4 验收核实（2026-05）：① 登录后可在 4 Tab 间切换 ✓；② 拔卡锁定由全局
+ * UsbDisconnectedOverlay 兜底（见 M2 偏离）✓；③ 底部高亮 `selected = selectedTab == index` ✓。
+ */
 @Composable
 fun MainScreen(
     onFolderClick: (String) -> Unit,
@@ -41,6 +54,7 @@ fun MainScreen(
                         selected = selectedTab == index,
                         onClick = { selectedTab = index },
                         icon = {
+                            // 占位：通信 Tab 写死未读角标，待 M6 接 ChatViewModel 后换成真实未读数
                             if (index == 2 && true) { // 模拟有未读消息
                                 BadgedBox(badge = { Badge { Text("3") } }) {
                                     Icon(item.icon, item.label)
