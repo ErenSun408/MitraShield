@@ -35,6 +35,8 @@ fun ChatListScreen(
     chatViewModel: ChatViewModel = hiltViewModel()
 ) {
     val contacts by chatViewModel.contacts.collectAsState()
+    val filteredContacts by chatViewModel.filteredContacts.collectAsState()
+    val searchQuery by chatViewModel.searchQuery.collectAsState()
 
     // 进屏重读单例：扫码建联 / 清空会话后回到列表能反映改动（见 M6.1 偏离）。
     LaunchedEffect(Unit) {
@@ -59,16 +61,56 @@ fun ChatListScreen(
 
         Spacer(Modifier.height(4.dp))
         Text("端到端加密 · 无服务器中转 · 匿名通信", fontSize = 12.sp, color = TextSecondary)
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(12.dp))
 
-        if (contacts.isEmpty()) {
-            EmptyContactsState(onQrCodeClick = onQrCodeClick)
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                items(contacts, key = { it.id }) { contact ->
+        if (contacts.isNotEmpty()) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { chatViewModel.updateSearchQuery(it) },
+                placeholder = { Text("搜索联系人...", color = TextSecondary.copy(alpha = 0.6f)) },
+                leadingIcon = { Icon(Icons.Default.Search, null, tint = TextSecondary) },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { chatViewModel.updateSearchQuery("") }) {
+                            Icon(Icons.Default.Clear, null, tint = TextSecondary)
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                shape = RoundedCornerShape(24.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Accent,
+                    unfocusedBorderColor = TextSecondary.copy(alpha = 0.3f)
+                )
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+
+        when {
+            contacts.isEmpty() -> EmptyContactsState(onQrCodeClick = onQrCodeClick)
+            filteredContacts.isEmpty() -> NoSearchResultState(query = searchQuery)
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(filteredContacts, key = { it.id }) { contact ->
                     ContactItem(contact = contact, onClick = { onContactClick(contact.id) })
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun NoSearchResultState(query: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Default.SearchOff,
+                null,
+                tint = TextSecondary.copy(alpha = 0.4f),
+                modifier = Modifier.size(56.dp)
+            )
+            Spacer(Modifier.height(12.dp))
+            Text("未找到匹配「$query」的联系人", color = TextSecondary, fontSize = 13.sp)
         }
     }
 }
