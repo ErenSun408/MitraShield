@@ -375,4 +375,15 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - 阅后即焚、连接验证（v4 patch 卡片提到的"验证来源、IPv6 地址及签名"）仍是 mock 期文案，未实接 SDK，留待 M10+。
 - **Commit** `2244876`
 
+### M6.7 跟进 — "重新生成" 改为原地刷新（不退回 pre-gen 卡片）
+
+- **承接上文 M6.7** 原实现的"重新生成"按钮把 `qrGenerated=false / qrBitmap=null / qrContent=null / countdown=120` 全部清空，UI 退回 pre-gen 的连接信息卡片，用户需再点一次"生成临时ECDH密钥对并创建二维码"才能拿到新二维码——多一次点击。
+- **本仓库实现**（用户 2026-05-28 要求，`QrCodeScreen.kt`）
+  - 把渲染 `LaunchedEffect(isGenerating)` 从 pre-gen 分支提到屏幕作用域顶层，让 pre-gen 与 post-gen 共享同一渲染路径。
+  - "重新生成"按钮只 `isGenerating=true`（不再清空状态），顶层 effect 渲染成功后**原地替换** `qrBitmap`/`qrContent`、`countdown=120`，UI 始终停在 post-gen 视图。
+  - 刷新期间按钮 `enabled=!isGenerating`、显示 `CircularProgressIndicator(16dp)+"刷新中…"`；用户不会看到 QR 闪空，旧码维持显示直到新码就绪。
+  - 渲染失败时旧码维持不变，按钮下方追加 `qrError` 文案，可直接再点重试。
+- **原因** v4 §6.4 是 generate-only 单屏、无 TTL 概念，自然没有"刷新"语义；我们保留 120s 倒计时后，过期 + 用户主动刷新都应保持在"已生成"视觉上，避免来回切换 pre/post 两套布局；切换会丢失上下文，且 pre-gen 卡片对已生成过一次的用户已无信息价值。
+- **Commit** `2b6debf`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
