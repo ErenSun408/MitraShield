@@ -79,6 +79,33 @@ fun QrCodeScreen(
         }
     }
 
+    // 渲染 LaunchedEffect 提到顶层（脱离 pre-gen 分支），让 post-gen 的"重新生成"
+    // 也能复用同一渲染路径——原地刷新 bitmap/content + 重置倒计时，不退回 pre-gen 卡片。
+    LaunchedEffect(isGenerating) {
+        if (isGenerating) {
+            val content = chatViewModel.generateQrContent()
+            val bitmap = runCatching {
+                withContext(Dispatchers.Default) {
+                    val pngBytes = QRCode.ofSquares()
+                        .withSize(10)
+                        .build(content)
+                        .render()
+                        .getBytes()
+                    BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.size)
+                }
+            }.getOrNull()
+            if (bitmap != null) {
+                qrBitmap = bitmap
+                qrContent = content
+                countdown = 120
+                qrGenerated = true
+            } else {
+                qrError = "二维码生成失败，请重试"
+            }
+            isGenerating = false
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -166,31 +193,6 @@ fun QrCodeScreen(
                         Spacer(Modifier.height(12.dp))
                         Text(it, color = Danger, fontSize = 13.sp, textAlign = TextAlign.Center)
                     }
-
-                    LaunchedEffect(isGenerating) {
-                        if (isGenerating) {
-                            val content = chatViewModel.generateQrContent()
-                            // 渲染走 Default 调度器，避免阻塞主线程。
-                            val bitmap = runCatching {
-                                withContext(Dispatchers.Default) {
-                                    val pngBytes = QRCode.ofSquares()
-                                        .withSize(10)
-                                        .build(content)
-                                        .render()
-                                        .getBytes()
-                                    BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.size)
-                                }
-                            }.getOrNull()
-                            if (bitmap != null) {
-                                qrBitmap = bitmap
-                                qrContent = content
-                                qrGenerated = true
-                            } else {
-                                qrError = "二维码生成失败，请重试"
-                            }
-                            isGenerating = false
-                        }
-                    }
                 } else {
                     // 显示二维码
                     Box(
@@ -246,13 +248,29 @@ fun QrCodeScreen(
 
                     Spacer(Modifier.height(8.dp))
 
-                    TextButton(onClick = {
-                        qrGenerated = false
-                        countdown = 120
-                        qrBitmap = null
-                        qrContent = null
-                    }) {
-                        Text("重新生成")
+                    // 原地刷新：触发顶层渲染 LaunchedEffect 重渲一张并重置倒计时，不退回 pre-gen 卡片。
+                    TextButton(
+                        onClick = {
+                            qrError = null
+                            isGenerating = true
+                        },
+                        enabled = !isGenerating
+                    ) {
+                        if (isGenerating) {
+                            CircularProgressIndicator(
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("刷新中…")
+                        } else {
+                            Text("重新生成")
+                        }
+                    }
+
+                    qrError?.let {
+                        Spacer(Modifier.height(8.dp))
+                        Text(it, color = Danger, fontSize = 13.sp, textAlign = TextAlign.Center)
                     }
                 }
             } else {
