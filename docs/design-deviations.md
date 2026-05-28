@@ -437,4 +437,22 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - 一键清理无 Snackbar/Toast 成功反馈，仅靠弹框关闭。Settings 内层无 SnackbarHost（Tab 内容、无 Scaffold），加全局 Snackbar 需上提到 MainScreen 改架构，**本里程碑不做**。
 - **Commit** `4796306`
 
+### M7.3 绑定管理 — 单行动态化、复用 SettingsActionItem，未实接绑定校验
+
+- **patch §M7 改动2** 单独建一个 `SettingsSectionHeader("手机绑定管理")` 区块：里面是一行 `SettingsInfoItem("绑定状态", ...)` + 一行 `SettingsActionItem`（按 isBound 切"绑定本机/解绑本机"），下方一个密码确认 `AlertDialog`。
+- **本仓库实现**（`MockUsbManager.kt` + `DeviceViewModel.kt` + `SettingsScreen.kt`）
+  - **`MockUsbManager.updateBinding(bind)`**（新增）：非 suspend，按 patch 取 `Settings.Secure.ANDROID_ID` 写 `boundPhoneId`；bind=false 清空。仅改状态、不延迟。
+  - **`DeviceViewModel.updateBinding(password, bind, onSuccess, onError)`**（新增）：与 `wipeUserData / factoryReset` 同结构——`authenticate` 通过 → `updateBinding` → onSuccess；失败 → "密码错误"。
+  - **不另建"手机绑定管理"分区**：M7.1 的设备信息卡顶部已显示"绑定状态"（真 boundPhoneId 驱动），独立分区会与之重复。沿用 M7.1 的"安全操作"卡片，把其中的"设备绑定管理"占位行替换为 **按 isBound 动态渲染** 的 `SettingsActionItem`：
+    - 已绑定：`title="解绑本机"`, `subtitle="解绑后安全卡可在其他手机使用"`, `icon=PhonelinkErase`, `iconTint=Warning`
+    - 未绑定：`title="绑定本机"`, `subtitle="绑定后安全卡只能在此手机使用"`, `icon=PhonelinkSetup`, `iconTint=Accent`
+    点击即弹密码确认框；成功后 deviceStatus 经由 StateFlow 推到设备信息卡 + 同一行 ActionItem，整页同步翻转。
+  - **`bindAction` 捕获时机**：弹框打开时按当前 `isBound` 捕获 `bindAction = !isBound`，避免成功后 deviceStatus 变化导致弹框文案/按钮颜色在 dismiss 动画期间抖动。
+  - **弹框样式**：与 M7.2 一致的密码 OutlinedTextField + 内联错误 + loading spinner + 处理中禁用 dismiss。confirm 按钮颜色随 bindAction 切（绑定=Accent，解绑=Warning），与上方 ActionItem 图标颜色一致。
+  - **认证未联动 boundPhoneId**：mock 期 `MockUsbManager.authenticate` 仍只校验 storedPassword，**不**校验 boundPhoneId——即用户在 A 手机绑定后插入 B 手机，仍能用同一密码登录。这是 M2/M3 的既有现状，M7.3 不扩张范围；真 SDK 接入时（M10）需在 authenticate 处补 `boundPhoneId == currentPhoneId || boundPhoneId == null` 校验。
+- **遗留**
+  - 解绑/绑定的安全卡 boundPhoneId 字段是 `Settings.Secure.ANDROID_ID`——Android 8.0+ 该值按 app 签名 + 用户隔离，重装会变；mock 期可接受，真产品需配合 SDK 出货时的唯一手机标识方案。
+  - 无"绑定到不同设备时强制清空数据"流程，patch/v4 均未要求；如需可后续与 wipeUserData 串联。
+- **Commit** `a0c4ad1`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
