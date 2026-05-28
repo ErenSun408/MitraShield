@@ -52,7 +52,16 @@ fun SettingsScreen(
     var resetError by remember { mutableStateOf("") }
     var resetLoading by remember { mutableStateOf(false) }
 
+    // 绑定管理（M7.3 patch §M7 改动2）：bindAction 在打开弹框时按当前绑定态捕获，避免成功后状态翻转导致弹框文案抖动。
+    var showBindDialog by remember { mutableStateOf(false) }
+    var bindAction by remember { mutableStateOf(false) } // true = bind, false = unbind
+    var bindPassword by remember { mutableStateOf("") }
+    var bindError by remember { mutableStateOf("") }
+    var bindLoading by remember { mutableStateOf(false) }
+
     var showAboutDialog by remember { mutableStateOf(false) }
+
+    val isBound = deviceStatus.boundPhoneId != null
 
     Column(
         modifier = Modifier
@@ -96,11 +105,14 @@ fun SettingsScreen(
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 SettingsActionItem(
-                    icon = Icons.Default.PhoneAndroid,
-                    title = "设备绑定管理",
-                    subtitle = "绑定/解绑本机",
-                    iconTint = Accent,
-                    onClick = { /* M7.3 */ }
+                    icon = if (isBound) Icons.Default.PhonelinkErase else Icons.Default.PhonelinkSetup,
+                    title = if (isBound) "解绑本机" else "绑定本机",
+                    subtitle = if (isBound) "解绑后安全卡可在其他手机使用" else "绑定后安全卡只能在此手机使用",
+                    iconTint = if (isBound) Warning else Accent,
+                    onClick = {
+                        bindAction = !isBound
+                        showBindDialog = true
+                    }
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 SettingsActionItem(
@@ -313,6 +325,88 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = dismiss, enabled = !resetLoading) {
+                    Text("取消", color = TextSecondary)
+                }
+            }
+        )
+    }
+
+    if (showBindDialog) {
+        val dismiss = {
+            showBindDialog = false
+            bindPassword = ""
+            bindError = ""
+            bindLoading = false
+        }
+        AlertDialog(
+            onDismissRequest = { if (!bindLoading) dismiss() },
+            icon = {
+                Icon(
+                    if (bindAction) Icons.Default.PhonelinkSetup else Icons.Default.PhonelinkErase,
+                    null,
+                    tint = if (bindAction) Accent else Warning
+                )
+            },
+            title = { Text(if (bindAction) "绑定本机" else "解绑本机") },
+            text = {
+                Column {
+                    Text(
+                        if (bindAction) "绑定后安全卡只能在此手机上使用，请输入密码确认："
+                        else "解绑后安全卡可在任意手机使用，请输入密码确认：",
+                        color = TextSecondary
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = bindPassword,
+                        onValueChange = { bindPassword = it; bindError = "" },
+                        label = { Text("当前密码") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        isError = bindError.isNotEmpty(),
+                        supportingText = {
+                            if (bindError.isNotEmpty()) Text(bindError, color = Danger)
+                        },
+                        enabled = !bindLoading,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        bindLoading = true
+                        bindError = ""
+                        deviceViewModel.updateBinding(
+                            password = bindPassword,
+                            bind = bindAction,
+                            onSuccess = { dismiss() },
+                            onError = { msg ->
+                                bindError = msg
+                                bindLoading = false
+                            }
+                        )
+                    },
+                    enabled = bindPassword.isNotBlank() && !bindLoading,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (bindAction) Accent else Warning
+                    )
+                ) {
+                    if (bindLoading) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("处理中…")
+                    } else {
+                        Text("确认")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = dismiss, enabled = !bindLoading) {
                     Text("取消", color = TextSecondary)
                 }
             }

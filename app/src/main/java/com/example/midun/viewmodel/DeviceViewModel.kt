@@ -87,6 +87,21 @@ class DeviceViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 切换设备绑定状态（M7.3 patch §M7 改动2）：校验密码 → 翻转 boundPhoneId → onSuccess。
+     * mock 期不影响登录流程（authenticate 仍仅校验密码）；真 SDK 后将耦合 boundPhoneId 校验。
+     */
+    fun updateBinding(password: String, bind: Boolean, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            mockUsbManager.authenticate(password)
+                .onSuccess {
+                    mockUsbManager.updateBinding(bind)
+                    onSuccess()
+                }
+                .onFailure { onError("密码错误") }
+        }
+    }
+
     // M10 hook: replace with SFCloseDisk() once the real FSShell SDK lands.
     private fun clearSensitiveMemory() {
     }

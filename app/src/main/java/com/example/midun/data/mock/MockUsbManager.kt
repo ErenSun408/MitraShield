@@ -96,4 +96,16 @@ class MockUsbManager @Inject constructor(
         chatRepository.clear()
         return Result.success(Unit)
     }
+
+    /**
+     * 切换绑定状态（M7.3 patch §M7 改动2）：bind=true 写入本机 ANDROID_ID，bind=false 清空。
+     * mock 期仅写状态、不真校验：authenticate 仍只用密码，不会因 boundPhoneId 不匹配而拒登。
+     * 真 SDK 接入后需在 authenticate 处补 boundPhoneId 校验。
+     */
+    fun updateBinding(bind: Boolean) {
+        val deviceId = if (bind) {
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+        } else null
+        _deviceStatus.value = _deviceStatus.value.copy(boundPhoneId = deviceId)
+    }
 }
