@@ -355,4 +355,24 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - `qrcode-kotlin` 解码出的 PNG 直接 `BitmapFactory` 解码后未做尺寸裁剪/缓存，重复生成会重新分配 Bitmap；mock 期可接受。
 - **Commit** `99ef281`
 
+### M6.8 QrCodeScreen 扫码模式 — 取消按钮 + 主动相机释放 + 独立 onScanConnected 回调
+
+- **v4 §6.4 / patch §M6 改动4** v4 扫描分支用 `mode=="scan"` 启 CameraX + MLKit `BarcodeScanning`（FORMAT_QR_CODE）；扫到 `rawValue` 设 `scanned=true` 后直接 `popBackStack()`。patch 把成功回调改为弹"备注对话框"，`onDismissRequest = { /* 不允许点外部关闭 */ }`，只暴露"确认建链"按钮（`remark.isNotBlank()` enabled）→ `chatViewModel.addContact` + `popBackStack()`。**无取消按钮、无返回键逃生口、无运行时权限处理、无相机生命周期收尾**。
+- **本仓库实现**（`QrCodeScreen.kt` + `NavGraph.kt`）
+  - **保留 M0 Tab 壳**（生成/识别双 Tab），仅替换"识别" Tab 内容；与 M6.7 决策一致。CameraX 提取到私有 `ScanTab` / `CameraPreview` Composable，便于权限态切换与 dispose。
+  - **运行时 CAMERA 权限**：用 `rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission())`（非 accompanist——已废弃且会增加依赖）。首次进识别 Tab 自动 `launch`；被拒后改显"需要相机权限以扫描二维码"+「授权相机」按钮，重新点击重试。v4/patch 均未处理权限。
+  - **取消按钮（**偏离 patch**）**：备注 `AlertDialog` 加 `dismissButton = "取消"`，点击 → 关弹框 + `scanned=false` + `scannedContent=""`，回到扫码态可重扫。`onDismissRequest = {}` 仍然 no-op，故**点外部 / 返回键不关闭**，保持 patch 的"强制选择"半意图；只是给用户**显式逃生口**。**原因** 用户 2026-05-28 决策：误扫无任何取消方式 UX 太硬，且后续无法验证 QR 真伪时也需能退出。
+  - **CameraX 主动释放**（v4 无）：私有 `CameraPreview` Composable 内 `DisposableEffect(Unit){ onDispose{ ProcessCameraProvider.getInstance(...).unbindAll(); barcodeScanner.close() } }`。`bindToLifecycle` 虽绑 Activity 生命周期、能跟随屏幕销毁释放，但**Tab 切换（识别 → 生成）只是 AndroidView 离场、Activity 仍 RESUMED**，不主动 unbind 则相机传感器、analyzer 与 MLKit scanner 全部继续工作。
+  - **scanned 闭包穿透**：`ImageAnalysis.setAnalyzer` 的 lambda 只在 `factory` 内注册一次；用 `rememberUpdatedState(scanned)` / `rememberUpdatedState(onQrDetected)` 让 analyzer 每帧读 MutableState 最新值，避免捕获初始 `false`/初始回调；扫到后再设 `scanned=true` 才能真正阻止后续帧重复触发。
+  - **独立 `onScanConnected` 回调**：新增 `onScanConnected: () -> Unit = onBack`，与顶栏 `onBack` 解耦（即便今天两者都 `popBackStack`，扫码成功 vs 用户主动返回是不同语义；未来如改去新建联系人的 Chat 详情，只改 NavGraph 一处）。沿用全局回调约定，QrCodeScreen 不持 `navController`。
+  - **`scannedContent` 显示截断**：dialog 内展示 `scannedContent.take(40) + "..."`（patch 是 `take(20) + "..."`），但 mock `generateQrContent()` 返回 `ver=1,sn=MOCK_SN_001,...` 约 70+ 字符，patch 截 20 字看不到 sn → 调到 40 字够暴露 deviceId 又不撑爆 dialog。截断仅在长度真正超过 40 才追加省略号。
+  - **`addContact` 入参 `remark.trim()`**：patch 原文 `chatViewModel.addContact(scannedContent, remark)` 直接传，含首尾空格。trim 防"   "之类瞎填能 `enabled` 但实际为空名。仍保留 `enabled = remark.isNotBlank()` 防止全空白。
+  - **导航不调 `loadContacts()`**：扫码成功 → `popBackStack` 回到 ChatList，依赖 M6.1 偏离 `ChatListScreen` 的 `LaunchedEffect(Unit){ loadContacts() }` 重读单例 → 新联系人自然出现，无需在 QR 屏额外触发。
+- **遗留**
+  - "从手机相册选择二维码图片"按钮维持 M0 no-op 占位（patch 未规定）；如后续要做需引入 `ActivityResultContracts.PickVisualMedia` + `BarcodeScanner.process(InputImage.fromBitmap(...))`。
+  - `addContact` 解析 `substringAfter("sn=").substringBefore(",")` 对非法 QR 不防御（M6.1 已记），M6.8 维持。若扫到非密盾 QR，会用整串后段当 deviceId 创建联系人，靠"取消"按钮逃生。
+  - 被永久拒绝相机权限（"不再询问"）的兜底（跳系统设置）未做；当前表现为"授权相机"按钮无效，可后续加 `Settings.ACTION_APPLICATION_DETAILS_SETTINGS` intent。
+  - 阅后即焚、连接验证（v4 patch 卡片提到的"验证来源、IPv6 地址及签名"）仍是 mock 期文案，未实接 SDK，留待 M10+。
+- **Commit** `2244876`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
