@@ -1,5 +1,6 @@
 package com.example.midun.screen
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -367,7 +368,7 @@ private fun SettingsInfoItem(label: String, value: String) {
     }
 }
 
-/** 可点行：图标 + 标题/副标题 + 右尾 ChevronRight。 */
+/** 可点行：整行响应点击；ChevronRight 仅做视觉指示，非独立按钮。 */
 @Composable
 private fun SettingsActionItem(
     icon: ImageVector,
@@ -379,6 +380,7 @@ private fun SettingsActionItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onClick)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -388,8 +390,6 @@ private fun SettingsActionItem(
             Text(title, fontWeight = FontWeight.Medium)
             Text(subtitle, fontSize = 12.sp, color = TextSecondary)
         }
-        IconButton(onClick = onClick) {
-            Icon(Icons.Default.ChevronRight, null, tint = TextSecondary)
-        }
+        Icon(Icons.Default.ChevronRight, null, tint = TextSecondary)
     }
 }
