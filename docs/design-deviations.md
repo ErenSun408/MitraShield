@@ -472,4 +472,33 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - patch 文案"新密钥不暴露给上层、无法查看或复制"在成功态被压缩到一句话；如需展开三要点也可，目前简化以减少视觉重复（输入态已列）。
 - **Commit** `a4b0b82`
 
+### M7.5 自动锁定可调 — StateFlow 化、SettingsActionItem 加 trailing 槽、Compose 原生滚轮 picker
+
+- **patch §M7 / v4** v4 把超时硬编码、UI 仅展示文字"5 分钟"；patch §M7 未涉及。属用户决策范围（2026-05-28）：要做成可调，UI 用滚轮 picker。
+- **本仓库实现**（`DeviceViewModel.kt` + `SettingsScreen.kt`）
+  - **`DeviceViewModel`**：删 `companion object INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000L`，改为：
+    - `private val _inactivityTimeoutMinutes = MutableStateFlow(DEFAULT_TIMEOUT_MIN=5)`
+    - `val inactivityTimeoutMinutes: StateFlow<Int>` 对外只读
+    - `fun setInactivityTimeoutMinutes(minutes: Int)` 写入
+    - `resetInactivityTimer()` 改读 `_inactivityTimeoutMinutes.value * 60_000L`
+  - **`SettingsActionItem` 增加 `trailing` 槽**：默认 `@Composable () -> Unit = { Icon(ChevronRight,...) }`，调用方可覆盖。自动锁定行用此槽显示当前值文字而非箭头：
+    ```
+    [⏲ 自动锁定]   [后台无操作 5 分钟后自动退出]   [5 分钟]
+    ```
+  - **`WheelTimePicker`（私有 Composable）**：Compose 原生滚轮，无新增依赖：
+    - `LazyColumn + rememberLazyListState() + rememberSnapFlingBehavior()` → 滚停吸附
+    - `contentPadding = vertical itemHeight (48dp)` → 中间一行为选中、上下各一行半透明背景留白
+    - 中间高亮 `Box` 绘 `Primary.copy(0.08f)` + 8dp 圆角作为选中条
+    - `centerIndex = derivedStateOf{ listState.firstVisibleItemIndex }`：snap 后该值即中心项
+    - `LaunchedEffect(centerIndex){ onSelectionChanged(...) }` 实时回调上抛
+    - `LaunchedEffect(Unit){ scrollToItem(indexOf(initialValue)) }` 初始定位
+  - **可选项 `TIMEOUT_OPTIONS_MIN = [1, 3, 5, 10, 15, 30, 60]`**：覆盖常见 1 / 5 / 10 / 30 + 中间挡位，7 项让滚轮有可滚动手感（少于 5 项会显得呆板）。
+  - **暂选/提交分离**：`pickedTimeout` 在 dialog 打开期间存活、随滚动更新；只有点"确定"才 `deviceViewModel.setInactivityTimeoutMinutes(pickedTimeout)`。取消/点外 → 丢弃，VM 不变。打开 dialog 时 `pickedTimeout = timeoutMin` 重置为当前 VM 值。
+- **遗留**
+  - **无持久化**：mock 期重启回 5 分钟。M10 接 SharedPreferences/DataStore：只需把 `MutableStateFlow(DEFAULT_TIMEOUT_MIN)` 换成从存储读初值 + `setInactivityTimeoutMinutes` 写存储，公开接口与 UI 不动。
+  - **不在登录态外生效**：超时计时仅在 `isAuthenticated.value == true` 时由 `onAppBackground()` 触发；未登录态调超时无意义。
+  - **滚轮 UX 边界**：极少项（≤3）时上下"空白行"会显得突兀；7 项是经验值。如未来扩展到含"永不"选项，需特殊处理（"永不"通常映射到 0 或 `Int.MAX_VALUE`，得在 `resetInactivityTimer` 加分支不启 job）。
+  - **WheelTimePicker 形参 `options` IDE 警告"始终是 TIMEOUT_OPTIONS_MIN"**：保留形参便于后续在改密码超时/QR 有效期等场景复用；轻微 IDE noise 接受。
+- **Commit** `ba5566f`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
