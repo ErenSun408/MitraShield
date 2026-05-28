@@ -455,4 +455,21 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - 无"绑定到不同设备时强制清空数据"流程，patch/v4 均未要求；如需可后续与 wipeUserData 串联。
 - **Commit** `a0c4ad1`
 
+### M7.4 密钥更新 — 两态弹框（输入 / 成功），mock 期纯流程
+
+- **patch §M7 改动3** 单弹框含输入态（密码 + 三条要点说明 + "确认更新"）与成功态（CheckCircle 图标 + "密钥已更新" + 提示文案 + "完成"），靠 `keyUpdateSuccess: Boolean` 切换；onConfirm 在输入态调 `deviceViewModel.updateKey`，成功态 onConfirm 是关闭弹框；输入态保留 "取消" 按钮，成功态隐藏。
+- **本仓库实现**（`MockUsbManager.kt` + `DeviceViewModel.kt` + `SettingsScreen.kt`）
+  - **`MockUsbManager.updateKey()`**（新增 suspend）：仅 `delay(1000)` 占位。mock 期没有可轮换的实体密钥状态——文件加密 / 消息加密均未实接；此方法存在的意义是保持"Mock 提供 IO + ViewModel 编排"的分层，真 SDK 接入后只需在这里调安全卡密钥更新接口，VM 与 UI 不动。
+  - **`DeviceViewModel.updateKey(password, onSuccess, onError)`**（新增）：与 M7.2/M7.3 同结构——`authenticate` 通过 → `updateKey()` → onSuccess；失败 → "密码错误"。
+  - **统一弹框两态**：保留单个 `AlertDialog`，icon / title / text / confirm / dismiss 五处全按 `keySuccess` 分支：
+    - 输入态：Key 图标 / Accent 色 / "密钥更新" 标题 / 三要点说明文 + `OutlinedTextField(Password)` / "确认更新" + "取消"；处理中 confirm 变 `CircularProgressIndicator + "更新中…"` 并禁用 dismiss。
+    - 成功态：CheckCircle 图标 / Success 色 / "密钥已更新" 标题 / 纯文案（无输入框）/ "完成" (Success 色) / 无 dismiss 按钮（避免与"完成"语义重复）。
+  - **状态切换**：`onSuccess` 内 `keyLoading=false + keyPassword="" + keySuccess=true`；不立刻 dismiss——用户需要主动点"完成"关闭，确认看到反馈。再开弹框前 `dismiss` lambda 把 `keySuccess` 也重置为 false，保证下次开框从输入态开始。
+  - **`onDismissRequest`**：与其他危险/重要操作一致——处理中 no-op；非处理中 dismiss（含成功态点外）。成功态点外属"等同点完成"，可接受。
+- **遗留**
+  - mock 期无密钥实体，"更新"后无任何下游可观察的变化（既看不到旧密钥也看不到新密钥，文件解密链路不受影响）。真 SDK 接入后会有钥匙轮换的副作用（如挂载阶段重新解密 KEK），届时这里的成功态文案应补充实际效果说明。
+  - 没有"撤销 / 恢复旧密钥"通道——产品本意密钥更新即不可逆；mock 期保持一致。
+  - patch 文案"新密钥不暴露给上层、无法查看或复制"在成功态被压缩到一句话；如需展开三要点也可，目前简化以减少视觉重复（输入态已列）。
+- **Commit** `a4b0b82`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
