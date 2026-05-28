@@ -386,4 +386,28 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **原因** v4 §6.4 是 generate-only 单屏、无 TTL 概念，自然没有"刷新"语义；我们保留 120s 倒计时后，过期 + 用户主动刷新都应保持在"已生成"视觉上，避免来回切换 pre/post 两套布局；切换会丢失上下文，且 pre-gen 卡片对已生成过一次的用户已无信息价值。
 - **Commit** `2b6debf`
 
+---
+
+## M7 — 设置页重写
+
+### M7.1 SettingsScreen 骨架 — 回调式导航 + 删 M0 防录屏 Switch + 退出登录走 Splash
+
+- **v4 §7.1 / patch §M7** v4 `SettingsScreen(navController, deviceViewModel)` 持 navController 自行 `popBackStack/navigate`；分三区（设备信息 / 安全操作 / 账户），无"危险操作"分区（一键清理在"安全操作"里），无关于；helper 命名 `SettingsSectionHeader / SettingsInfoItem / SettingsActionItem`。M0 仓库的 `SettingsScreen()` 无参、无 ViewModel、hardcoded 假数据，含**防录屏 Switch（只读，无 FLAG_SECURE 后端）**、自动锁定 5min（只读）、关于密盾、一键清理 + 恢复出厂双按钮（弹框 confirm 不动作）。
+- **本仓库实现**（`SettingsScreen.kt` + `MainScreen.kt` + `NavGraph.kt`）
+  - **签名走回调**：`SettingsScreen(onLogoutComplete, onFactoryResetComplete, deviceViewModel)`，**不持 navController**，延续全局约定。MainScreen 新增同名 2 个回调，NavGraph 在 `Screen.Main` 内 wire 到 `popUpTo(0) + navigate(Splash/Init)`。理由同既往叶子屏。
+  - **退出登录走 Splash 而非直跳 Login**（用户 2026-05-28 决策）：`onLogoutComplete = { navigate(Splash) { popUpTo(0){inclusive=true} } }`。Splash 看到 `status≠AUTHENTICATED && isInitialized=true` 会自动路由到 Login，并附带 2.5s 启动动画作为视觉反馈。直跳 Login 更快但缺反馈。v4 §7.1 仅写 `deviceViewModel.logout()`、不导航，等同方案 A——屏幕不动，用户困惑；本仓库改方案 B。
+  - **恢复出厂跳 Init（不经 Splash）**：`onFactoryResetComplete = { navigate(Init) { popUpTo(0){inclusive=true} } }`，照 patch §M7 改动1 字面（避免再加 2.5s 动画延迟，且 wipeAll 后 isInitialized=false → Splash 也会路由到 Init，直跳等价但更快）。
+  - **保留"一键清理 + 恢复出厂"双按钮（用户 2026-05-28 决策）**：patch §M7 改动1 把"一键清理"合并掉换成"恢复出厂"，用户否决——两条独立通路：一键清理保持登录态仅清数据，恢复出厂走 wipeAll+跳 Init。M7.1 仅留两按钮 UI 与 M0 弹框壳（确认即关、不动作），真接线推到 M7.2。
+  - **删 M0 防录屏 Switch**（用户 2026-05-28 决策）：M0 的 `antiScreenshot: Boolean` 只是本地 state，不真正调 `window.setFlags(FLAG_SECURE)`（M2/M8 才该做），保留误导用户。M7.1 范围内整块删除；M8 落 FLAG_SECURE 时再决定是否暴露开关。
+  - **保留"关于密盾"对话框**（M0 装饰，v4/patch 无）：仅展示文案，无误导；与其他保留 M0 装饰（M2 `UsbDisconnectedOverlay`、M6.2 自定义头部）同一类决策。
+  - **保留"自动锁定 5 分钟"行**（用户决策"实现"，M7.5 落地）：M7.1 范围内保留为占位（onClick 空），M7.5 把 `DeviceViewModel.INACTIVITY_TIMEOUT_MS` 改成可调 state 并接弹框选项。
+  - **保留"密钥更新 / 设备绑定管理"行**（占位）：onClick 空，接线由 M7.4/M7.3 完成。
+  - **设备信息字段对齐**：M0 写死 `SC-2026051300001 / MI-X8F2K9A3 / 已绑定 / v1.0.3 / 16GB(明文)+32GB(加密) / T620`，与 `MockUsbManager.simulateInsert` 实际产出（`deviceId=MOCK_DEVICE_001` / boundPhoneId 视 initDevice 时的 bindDevice）不符。改为读 `deviceStatus.deviceId.ifEmpty{未知}` + 真实绑定状态 + 容量保持 "-- / 32 GB" 占位（M10 SDK 接入后读卡）；删除固件版本/芯片型号/明文区容量等 mock 无对应字段的行。
+  - **Helper 改 v4 命名**：M0 的 `DeviceInfoRow / SettingItem` 改名 `SettingsInfoItem / SettingsActionItem`，新增 `SettingsSectionHeader`（带 `color` 参数，危险分区用 Danger、设备信息分区用 Primary、其余用 TextSecondary）。
+  - **TopBar 不加**：MainScreen 已含 BottomBar，无 TopBar；Settings Tab 沿用 M0 内联 `Text("设置")` 标题（v4 §7.1 是全屏独立路由，故有 TopAppBar；本仓库 Settings 是 Tab，加 TopAppBar 与其他 Tab 不一致且占空间）。
+- **遗留**
+  - 一键清理 + 恢复出厂 在 M7.1 阶段是 M0 弹框壳（无密码、确认即关），真实接线在 M7.2。期间用户点确认无任何后端效果；为窗口期可接受。
+  - 自动锁定行（M7.5）/ 设备绑定管理行（M7.3）/ 密钥更新行（M7.4）onClick 空，点了无反馈。
+- **Commit** `d124f13`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
