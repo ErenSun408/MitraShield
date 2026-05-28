@@ -420,4 +420,21 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **影响** 退出按钮使用 `Danger` 色与"一键清理 / 恢复出厂"危险操作同色，视觉上略有"危险化"暗示（用户接受）；如需弱化可改 OutlinedButton + `Danger` 边框，本次按 patch 用户原意"红色按钮"取 filled 风格。
 - **Commit** `67dbf38`
 
+### M7.2 一键清理 + 恢复出厂 — 双危险通路、密码确认、抗作用域取消
+
+- **v4 §7.1 / patch §M7 改动1** v4 §7.1 一键清理仅"确认即关、不动作"的占位弹框；patch §M7 改动1 把"一键清理"**直接换成**"恢复出厂设置"（密码确认 + `factoryReset` + 跳 Init），不保留独立一键清理通路。
+- **本仓库实现**（用户 2026-05-28 决策保留两条独立通路，`MockUsbManager.kt` + `DeviceViewModel.kt` + `SettingsScreen.kt`）
+  - **`MockUsbManager.wipeUserData()`**（新增）：`delay(1500)` + `fileSystem.clear() + chatRepository.clear()`，**不动** `storedPassword`/`isInitialized`/`boundPhoneId`/`status`。与 `wipeAll()` 严格区分——后者多 4 项写回（清密码、清绑定、退初始化、退到 CONNECTED），是"恢复出厂"语义。
+  - **`DeviceViewModel.wipeUserData(password, onSuccess, onError)`**（新增）：`authenticate(password)` 通过 → `wipeUserData()` → `onSuccess()`；失败 → `onError("密码错误")`。
+  - **`DeviceViewModel.factoryReset(password, onSuccess, onError)`**（新增）：`authenticate(password)` 通过 → `wipeAll()` → `onSuccess()`；失败同上。与已有的 `wipeAndReset(onComplete)` 行为相似但多一道密码校验——前者来自 LoginScreen 忘记密码（无密码）、本方法来自 Settings 危险操作（必须二次校验，与 patch 一致）。两者并存、未合并，避免改动 LoginScreen。
+  - **抗作用域取消**：`factoryReset` 的 onSuccess 在弹框内触发 `dismiss() + onFactoryResetComplete()`，后者执行 `navigate(Init){popUpTo(0)}` 会销毁 Main NavBackStackEntry → DeviceViewModel.viewModelScope 取消。关键：`wipeAll()` 已在 onSuccess 触发前完成（`viewModelScope.launch{ authenticate.onSuccess{ wipeAll(); onSuccess() } }`，wipeAll 是 suspend、完成才推进），故取消时 onSuccess lambda 已经在执行同步导航；与 M3.5 忘记密码同款模式。
+  - **密码弹框**：`AlertDialog` 含 `OutlinedTextField(PasswordVisualTransformation + KeyboardType.Password)`，错误时 `isError=true + supportingText=红色"密码错误"`；处理中 confirm 按钮变 `CircularProgressIndicator + "清理中…/重置中…"`、`enabled=false`，期间 `onDismissRequest`/取消按钮均禁用（防中途关弹框、防 wipe 被异常打断）。
+  - **`onDismissRequest`**：与 M6.8 备注弹框一致——非处理中允许点外关闭并清状态（密码/错误/loading）；处理中 no-op。
+  - **一键清理副本上下游影响**：清完不导航、用户留在 Settings；返回 Files / Chat Tab 时各自 `LaunchedEffect{loadFolders()/loadContacts()}` 重读单例（M5.3 / M6.1 偏离）→ 列表自然变空。Settings 本屏不显示文件/聊天列表，故无需额外刷新。
+- **遗留**
+  - 没有"取消时也清状态"以外的回滚——一旦点确认、密码正确，清理无法撤销（与产品本意一致）。
+  - 处理失败（authenticate 网络异常等非"密码错误"场景）当前统一报"密码错误"。mock 期 `authenticate` 只可能返 `password mismatch`，所以语义无误；M10 真 SDK 接入时应按真实异常类型分支显示。
+  - 一键清理无 Snackbar/Toast 成功反馈，仅靠弹框关闭。Settings 内层无 SnackbarHost（Tab 内容、无 Scaffold），加全局 Snackbar 需上提到 MainScreen 改架构，**本里程碑不做**。
+- **Commit** `4796306`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
