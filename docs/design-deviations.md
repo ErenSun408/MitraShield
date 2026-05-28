@@ -410,4 +410,14 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - 自动锁定行（M7.5）/ 设备绑定管理行（M7.3）/ 密钥更新行（M7.4）onClick 空，点了无反馈。
 - **Commit** `d124f13`
 
+### M7.1 跟进 — 退出登录改为底部红色按钮，关于密盾降为页脚链接
+
+- **承接上文 M7.1** 原实现把"退出登录"放在"账户"分区卡片里作为一个普通 `SettingsActionItem`（图标 + 标题/副标题 + ChevronRight），把"关于密盾"放在最下方独立卡片里同样是 `SettingsActionItem`。用户 2026-05-28 反馈：希望退出登录视觉上更突出（底部红色按钮）、关于降为最底部小字链接。
+- **本仓库实现**（`SettingsScreen.kt`）
+  - 删除"账户"分区（含 `SettingsSectionHeader("账户")` 与其 Card）；改在"危险操作"分区下方 24dp 间距处放 `Button(containerColor=Danger, fillMaxWidth, height=48dp, shape=RoundedCornerShape(12dp))`，内含 `Icons.Default.Logout` + "退出登录" 文字。onClick 行为不变（`deviceViewModel.logout() + onLogoutComplete()`）。
+  - 删除"关于密盾" Card；改在退出按钮下方 24dp 处放 `Box(fillMaxWidth, contentAlignment=Center)` 包 `TextButton`，文字 `"关于密盾 v1.0.0"`（12sp / `TextSecondary`）。点击仍弹原 About 对话框（M0 保留装饰）。
+- **原因** 用户视觉优先级取舍：退出登录是高频且需要明确可见性的操作，做成红色 filled 按钮符合常见 App 末位"退出/注销"惯例（微信、支付宝、Telegram 等）；关于则是低频信息查阅，footer 小字链接足够。
+- **影响** 退出按钮使用 `Danger` 色与"一键清理 / 恢复出厂"危险操作同色，视觉上略有"危险化"暗示（用户接受）；如需弱化可改 OutlinedButton + `Danger` 边框，本次按 patch 用户原意"红色按钮"取 filled 风格。
+- **Commit** `67dbf38`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
