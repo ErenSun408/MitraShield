@@ -125,37 +125,37 @@ fun SettingsScreen(
             }
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(24.dp))
 
-        // ── 账户 ──────────────────────────────────────────────────────────────────
-        SettingsSectionHeader("账户")
-        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
-            SettingsActionItem(
-                icon = Icons.Default.Logout,
-                title = "退出登录",
-                subtitle = "清除认证状态，回到登录页",
-                iconTint = TextSecondary,
-                onClick = {
-                    deviceViewModel.logout()
-                    onLogoutComplete()
-                }
-            )
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        // ── 关于（M0 装饰，v4/patch 无；保留） ──────────────────────────────────────
-        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
-            SettingsActionItem(
-                icon = Icons.Default.Info,
-                title = "关于密盾",
-                subtitle = "v1.0.0",
-                iconTint = Primary,
-                onClick = { showAboutDialog = true }
-            )
+        // ── 退出登录：底部红色按钮，与上方卡片留出明显间距 ─────────────────────────
+        Button(
+            onClick = {
+                deviceViewModel.logout()
+                onLogoutComplete()
+            },
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Danger)
+        ) {
+            Icon(Icons.Default.Logout, null)
+            Spacer(Modifier.width(8.dp))
+            Text("退出登录", fontWeight = FontWeight.Medium)
         }
 
         Spacer(Modifier.height(24.dp))
+
+        // ── 关于：最底部小字链接 ──────────────────────────────────────────────────
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            TextButton(onClick = { showAboutDialog = true }) {
+                Text(
+                    "关于密盾 v1.0.0",
+                    fontSize = 12.sp,
+                    color = TextSecondary
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
     }
 
     if (showCleanDialog) {
