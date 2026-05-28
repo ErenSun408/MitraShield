@@ -329,13 +329,30 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **本仓库实现** 保留三项 DEV 能力与调用链不变，仅把 UI 收束为左上角一个圆形 `MoreVert` 悬浮按钮；点击后通过 `DropdownMenu` 展开三项操作。按钮使用 `statusBarsPadding()` 避开状态栏，仍覆盖在 `NavGraph` / `UsbDisconnectedOverlay` 之上，便于调试拔卡场景。
 - **原因** 三个常驻按钮遮挡真实页面，影响验收与截图观察；收束为单入口后默认只占 44dp 左上角区域，DEV 操作仍随时可达。
 - **遗留** 该入口仍是 mock 期脚手架；M10 接真实 FSShell SDK 时与 `MainActivity` 启动兜底分支、`DeviceViewModel.debug*` 方法一起删除。
-- **Commit** 待提交
+- **Commit** `08c223a`
 
 ### M6.4 跟进 — 删除/撤回消息后重算联系人列表摘要
 
 - **问题** 联系人列表显示 `Contact.lastMessage` / `lastMessageTime`，但原 `MockChatRepository.deleteMessage()` 只删除会话消息，不回写联系人摘要；`ChatViewModel.deleteMessage()` 也只刷新当前会话消息。因此删除或撤回最后一条消息后，列表仍显示旧摘要，只有清空会话会变空。
 - **本仓库实现** `MockChatRepository` 新增 `updateContactPreview(contactId)`，按该会话剩余消息中 `timestamp` 最新的一条回写 `lastMessage` / `lastMessageTime`；若会话已空则写空串与 `0L`。`sendMessage`、`deleteMessage`、`clearMessages` 统一调用该函数。`ChatViewModel.deleteMessage()` 删除后同步重读 `_contacts`。
 - **原因** mock 期也应维护与真实数据源一致的会话摘要契约：联系人列表永远展示对应会话的最后一条消息，不区分己方/对方。
-- **Commit** 待提交
+- **Commit** `1550632`
+
+### M6.7 QrCodeScreen 生成模式 — 保留 M0 Tab 壳 + 120s 倒计时，仅替换生成区为真实渲染
+
+- **v4 §6.4** 单屏（仅生成）布局：`QrCodeScreen(navController, chatViewModel)` 内 `generateQrContent()` → `QRCode.ofSquares().withSize(10).build(content).render()` → `BitmapFactory.decodeByteArray` → `Image`；失败兜底文案；屏幕持 `navController` 自行返回。
+- **本仓库实现**（`QrCodeScreen.kt`）
+  - **保留 M0 Tab 壳**（生成/识别双 Tab + `TopAppBar("扫码建链")`），仅替换"生成" Tab 内容；"识别" Tab 维持 M0 占位不动，留给 M6.8 接 CameraX。**原因** 用户 2026-05-24 决策：M6.8 仍要双 Tab 形态，来回拆装更乱。
+  - **保留 M0 120s 倒计时**：现屏 `qrGenerated` 触发倒计时；过期 → `qrGenerated=false` 回 pre-gen，且**同时清 `qrBitmap`/`qrContent`**（v4 未规定过期行为）。**原因** 用户 2026-05-24 决策保留；与 v4 patch 后续扫码侧的 TTL 概念一致。
+  - **真实渲染**：注入 `ChatViewModel = hiltViewModel()`；点"生成"按钮 → `chatViewModel.generateQrContent()` → 在 `Dispatchers.Default` 内 `QRCode.ofSquares().withSize(10).build(content).render().getBytes()` → `BitmapFactory.decodeByteArray` → `qrBitmap`；成功置 `qrGenerated=true`，失败置 `qrError="二维码生成失败，请重试"` 显示在按钮下方。**原因** v4 范例直接在 LaunchedEffect 内同步渲染；qrcode-kotlin 渲染是 CPU 工作，提到 `withContext(Dispatchers.Default)` 避免阻塞主线程。按钮 `enabled=!isGenerating` 防双击。
+  - **InfoRow 字段对齐 mock schema**：M0 写死 `SC-2026051300001/ECDH secp256r1/33字节(压缩格式)` 与 `MockChatRepository.generateQrContent()` 实际输出（`ver=1,sn=MOCK_SN_001,ipv6=fe80::1,sid=…,tpk=MOCK_PUBLIC_KEY_BASE64`）不符。改为 `设备SN=MOCK_SN_001 / IPv6=fe80::1 / 会话ID=随机生成 / 临时公钥=MOCK_PUBLIC_KEY_BASE64 / 有效期=120秒`，pre-gen 卡片所列字段即 QR 实际内容。
+  - **生成后内容预览**：M0 在二维码下方写死 JSON 风格字串；改为显示 `qrContent`（实际 `generateQrContent()` 返回的 CSV 风格 `key=value,…`）。
+  - **导航**：维持 M0 `onBack` 回调（不持 navController），延续全局约定（见顶部"全局约定"节）。
+  - **"重新生成" / "分享"**：重新生成按钮额外清 `qrBitmap`/`qrContent`；"分享"按钮维持 M0 no-op 占位，未在 v4 §6.4 中规定，留待后续。
+- **遗留**
+  - "识别" Tab 整体仍是 M0 假相机占位 → M6.8 接 CameraX + MLKit。
+  - `generateQrContent()` 输出为 `key=value,…` CSV 而非 v4 §6.4 范例提到的 JSON——属 M1.4 既有现状（mock 期），未改动。
+  - `qrcode-kotlin` 解码出的 PNG 直接 `BitmapFactory` 解码后未做尺寸裁剪/缓存，重复生成会重新分配 Bitmap；mock 期可接受。
+- **Commit** `99ef281`
 
 <!-- 后续里程碑的偏离继续在下面追加 -->
