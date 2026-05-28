@@ -38,6 +38,8 @@ fun MainScreen(
     onCreateFolder: () -> Unit,
     onContactClick: (String) -> Unit,
     onQrCodeClick: () -> Unit,
+    onLogoutComplete: () -> Unit,
+    onFactoryResetComplete: () -> Unit,
     chatViewModel: ChatViewModel = hiltViewModel()
 ) {
     // 底部"通信"Tab 的真实未读角标。chatViewModel 与内部 ChatListScreen 同属 Main
@@ -97,7 +99,10 @@ fun MainScreen(
                     )
                     1 -> FilesScreen(onFolderClick = onFolderClick, onCreateFolder = onCreateFolder)
                     2 -> ChatListScreen(onContactClick = onContactClick, onQrCodeClick = onQrCodeClick)
-                    3 -> SettingsScreen()
+                    3 -> SettingsScreen(
+                        onLogoutComplete = onLogoutComplete,
+                        onFactoryResetComplete = onFactoryResetComplete
+                    )
                 }
             }
         }

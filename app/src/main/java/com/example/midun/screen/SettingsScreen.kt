@@ -15,15 +15,32 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.ui.theme.*
+import com.example.midun.viewmodel.DeviceViewModel
 
+/**
+ * 设置 Tab。
+ *
+ * 导航约定（与全局回调风格一致，不持 navController）：
+ * - [onLogoutComplete]：本屏调 [DeviceViewModel.logout] 之后由 NavGraph 决定去向（当前接 Splash → 自然路由到 Login）。
+ * - [onFactoryResetComplete]：M7.2 的"恢复出厂"成功后由 NavGraph 接 `navigate(Init){popUpTo(0)}`，本屏只负责回调。
+ *
+ * M7.1 范围：骨架重写 + 设备信息真值 + 退出登录。其余动作按钮（密钥更新/绑定/自动锁定/一键清理/恢复出厂）为占位，
+ * 接线在 M7.2 ~ M7.5 完成。
+ */
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(
+    onLogoutComplete: () -> Unit,
+    onFactoryResetComplete: () -> Unit,
+    deviceViewModel: DeviceViewModel = hiltViewModel()
+) {
+    val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
+
+    // M0 的清理/恢复确认弹框暂保留壳（弹完即关、无后端动作）；M7.2 替换为带密码框的真实版本。
     var showCleanDialog by remember { mutableStateOf(false) }
     var showResetDialog by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
-    var antiScreenshot by remember { mutableStateOf(true) }
-    var autoLockMin by remember { mutableIntStateOf(5) }
 
     Column(
         modifier = Modifier
@@ -34,99 +51,113 @@ fun SettingsScreen() {
         Text("设置", fontSize = 20.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(16.dp))
 
-        // 设备信息
+        // ── 设备信息 ──────────────────────────────────────────────────────────────
+        SettingsSectionHeader("设备信息", color = Primary)
         Card(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
             colors = CardDefaults.cardColors(containerColor = Primary.copy(0.05f))
         ) {
             Column(Modifier.padding(16.dp)) {
-                Text("设备信息", fontWeight = FontWeight.Bold, color = Primary)
-                Spacer(Modifier.height(12.dp))
-                DeviceInfoRow("安全卡SN", "SC-2026051300001")
-                DeviceInfoRow("手机设备ID", "MI-X8F2K9A3")
-                DeviceInfoRow("绑定状态", "已绑定")
-                DeviceInfoRow("固件版本", "v1.0.3")
-                DeviceInfoRow("存储总容量", "16GB(明文) + 32GB(加密)")
-                DeviceInfoRow("芯片型号", "T620")
+                SettingsInfoItem("设备ID", deviceStatus.deviceId.ifEmpty { "未知" })
+                SettingsInfoItem(
+                    "绑定状态",
+                    if (deviceStatus.boundPhoneId != null) "已绑定本机" else "未绑定"
+                )
+                // M10 真 SDK 接入后从安全卡读取实际容量；mock 期占位。
+                SettingsInfoItem("存储使用", "-- / 32 GB")
             }
         }
 
         Spacer(Modifier.height(16.dp))
 
-        // 安全设置
-        Text("安全设置", fontWeight = FontWeight.Bold, color = TextSecondary, fontSize = 13.sp)
-        Spacer(Modifier.height(8.dp))
-
+        // ── 安全操作 ──────────────────────────────────────────────────────────────
+        SettingsSectionHeader("安全操作")
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
             Column {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.ScreenLockPortrait, null, tint = Primary)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("防录屏", fontWeight = FontWeight.Medium)
-                        Text("使用时禁止截屏和录屏", fontSize = 12.sp, color = TextSecondary)
-                    }
-                    Switch(
-                        checked = antiScreenshot,
-                        onCheckedChange = { antiScreenshot = it },
-                        colors = SwitchDefaults.colors(checkedTrackColor = Accent)
-                    )
-                }
+                SettingsActionItem(
+                    icon = Icons.Default.Key,
+                    title = "密钥更新",
+                    subtitle = "替换文件加密的二级密钥",
+                    iconTint = Accent,
+                    onClick = { /* M7.4 */ }
+                )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Default.Timer, null, tint = Primary)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("自动锁定", fontWeight = FontWeight.Medium)
-                        Text("后台${autoLockMin}分钟无操作自动退出", fontSize = 12.sp, color = TextSecondary)
-                    }
-                    Text("${autoLockMin}分钟", color = Primary, fontWeight = FontWeight.Medium)
-                }
+                SettingsActionItem(
+                    icon = Icons.Default.PhoneAndroid,
+                    title = "设备绑定管理",
+                    subtitle = "绑定/解绑本机",
+                    iconTint = Accent,
+                    onClick = { /* M7.3 */ }
+                )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                SettingItem(Icons.Default.Key, "密钥更新", "更新ECDH通信密钥") {}
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                SettingItem(Icons.Default.PhoneAndroid, "设备绑定管理", "解绑/更换绑定设备") {}
+                SettingsActionItem(
+                    icon = Icons.Default.Timer,
+                    title = "自动锁定",
+                    subtitle = "后台 5 分钟无操作自动退出",
+                    iconTint = Accent,
+                    onClick = { /* M7.5 */ }
+                )
             }
         }
 
         Spacer(Modifier.height(16.dp))
 
-        // 危险操作
-        Text("危险操作", fontWeight = FontWeight.Bold, color = Danger, fontSize = 13.sp)
-        Spacer(Modifier.height(8.dp))
-
+        // ── 危险操作 ──────────────────────────────────────────────────────────────
+        SettingsSectionHeader("危险操作", color = Danger)
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
             Column {
-                SettingItem(Icons.Default.DeleteForever, "一键清理", "清除所有聊天记录和文件", Danger) {
-                    showCleanDialog = true
-                }
+                SettingsActionItem(
+                    icon = Icons.Default.DeleteForever,
+                    title = "一键清理",
+                    subtitle = "清除所有聊天记录和文件，保留登录态",
+                    iconTint = Danger,
+                    onClick = { showCleanDialog = true }
+                )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                SettingItem(Icons.Default.RestartAlt, "恢复出厂", "擦除根密钥，还原初始状态", Danger) {
-                    showResetDialog = true
-                }
+                SettingsActionItem(
+                    icon = Icons.Default.RestartAlt,
+                    title = "恢复出厂",
+                    subtitle = "擦除根密钥，还原初始状态",
+                    iconTint = Danger,
+                    onClick = { showResetDialog = true }
+                )
             }
         }
 
         Spacer(Modifier.height(16.dp))
 
-        // 关于
+        // ── 账户 ──────────────────────────────────────────────────────────────────
+        SettingsSectionHeader("账户")
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
-            SettingItem(Icons.Default.Info, "关于密盾", "v1.0.0") {
-                showAboutDialog = true
-            }
+            SettingsActionItem(
+                icon = Icons.Default.Logout,
+                title = "退出登录",
+                subtitle = "清除认证状态，回到登录页",
+                iconTint = TextSecondary,
+                onClick = {
+                    deviceViewModel.logout()
+                    onLogoutComplete()
+                }
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ── 关于（M0 装饰，v4/patch 无；保留） ──────────────────────────────────────
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+            SettingsActionItem(
+                icon = Icons.Default.Info,
+                title = "关于密盾",
+                subtitle = "v1.0.0",
+                iconTint = Primary,
+                onClick = { showAboutDialog = true }
+            )
         }
 
         Spacer(Modifier.height(24.dp))
     }
 
-    // 一键清理对话框
     if (showCleanDialog) {
         AlertDialog(
             onDismissRequest = { showCleanDialog = false },
@@ -139,7 +170,6 @@ fun SettingsScreen() {
                     Text("  - 所有聊天记录", color = Danger)
                     Text("  - 所有隐私文件夹及文件", color = Danger)
                     Text("  - 所有联系人信息", color = Danger)
-                    Text("  - 操作日志", color = Danger)
                     Spacer(Modifier.height(8.dp))
                     Text("此操作不可恢复！", fontWeight = FontWeight.Bold, color = Danger)
                 }
@@ -156,7 +186,6 @@ fun SettingsScreen() {
         )
     }
 
-    // 恢复出厂对话框
     if (showResetDialog) {
         AlertDialog(
             onDismissRequest = { showResetDialog = false },
@@ -169,8 +198,6 @@ fun SettingsScreen() {
                     Text("  - 擦除根密钥", color = Danger)
                     Text("  - 删除所有存储文件", color = Danger)
                     Text("  - 清除APP设置和登录密码", color = Danger)
-                    Text("  - 擦除flash中版本号", color = Danger)
-                    Text("  - 还原为出厂初始状态", color = Danger)
                     Spacer(Modifier.height(8.dp))
                     Text("USB安全卡将需要重新初始化！", fontWeight = FontWeight.Bold, color = Danger)
                 }
@@ -212,8 +239,21 @@ fun SettingsScreen() {
     }
 }
 
+/** 分区标题。颜色默认用 TextSecondary，分区为危险/主色时按需覆盖。 */
 @Composable
-private fun DeviceInfoRow(label: String, value: String) {
+private fun SettingsSectionHeader(title: String, color: Color = TextSecondary) {
+    Text(
+        title,
+        fontWeight = FontWeight.Bold,
+        color = color,
+        fontSize = 13.sp,
+        modifier = Modifier.padding(bottom = 8.dp)
+    )
+}
+
+/** 设备信息只读行：标签 + 值。 */
+@Composable
+private fun SettingsInfoItem(label: String, value: String) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
         horizontalArrangement = Arrangement.SpaceBetween
@@ -223,10 +263,14 @@ private fun DeviceInfoRow(label: String, value: String) {
     }
 }
 
+/** 可点行：图标 + 标题/副标题 + 右尾 ChevronRight。 */
 @Composable
-private fun SettingItem(
-    icon: ImageVector, title: String, subtitle: String,
-    iconTint: Color = Primary, onClick: () -> Unit = {}
+private fun SettingsActionItem(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    iconTint: Color = Primary,
+    onClick: () -> Unit = {}
 ) {
     Row(
         modifier = Modifier

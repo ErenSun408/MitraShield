@@ -51,6 +51,19 @@ fun NavGraph(navController: NavHostController) {
                 },
                 onQrCodeClick = {
                     navController.navigate(Screen.QrCode.route)
+                },
+                // 退出登录：用户选"导航 Splash 让其自然路由"——Splash 看到 status≠AUTHENTICATED
+                // 会按既有路由表落到 Login（同时给一次 2.5s splash 动画作为视觉反馈）。
+                onLogoutComplete = {
+                    navController.navigate(Screen.Splash.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
+                // 恢复出厂：patch §M7 改动1 明确直跳 Init；wipeAll 已把 isInitialized=false。
+                onFactoryResetComplete = {
+                    navController.navigate(Screen.Init.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
                 }
             )
         }
