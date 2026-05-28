@@ -1,7 +1,16 @@
 package com.example.midun.screen
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.Preview
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -16,13 +25,21 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
+import com.google.mlkit.vision.barcode.BarcodeScanning
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -32,6 +49,7 @@ import qrcode.QRCode
 @Composable
 fun QrCodeScreen(
     onBack: () -> Unit,
+    onScanConnected: () -> Unit = onBack,
     chatViewModel: ChatViewModel = hiltViewModel()
 ) {
     var selectedTab by remember { mutableIntStateOf(0) } // 0=生成 1=识别
@@ -41,6 +59,11 @@ fun QrCodeScreen(
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var qrContent by remember { mutableStateOf<String?>(null) }
     var qrError by remember { mutableStateOf<String?>(null) }
+
+    // 扫码状态（patch §M6 改动4）
+    var scanned by remember { mutableStateOf(false) }
+    var scannedContent by remember { mutableStateOf("") }
+    var showRemarkDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(qrGenerated) {
         if (qrGenerated) {
@@ -233,55 +256,235 @@ fun QrCodeScreen(
                     }
                 }
             } else {
-                // 识别二维码
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(300.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(PrimaryDark),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.CameraAlt, null, tint = Color.White.copy(0.5f), modifier = Modifier.size(64.dp))
-                        Spacer(Modifier.height(12.dp))
-                        Text("相机预览区域", color = Color.White.copy(0.5f))
-                        Spacer(Modifier.height(4.dp))
-                        Text("(演示模式)", color = Color.White.copy(0.3f), fontSize = 12.sp)
+                ScanTab(
+                    scanned = scanned,
+                    onQrDetected = { value ->
+                        scanned = true
+                        scannedContent = value
+                        showRemarkDialog = true
                     }
+                )
+            }
+        }
+    }
+
+    if (showRemarkDialog) {
+        var remark by remember { mutableStateOf("") }
+        AlertDialog(
+            // 强制填备注：点外部 / 返回键不关闭弹框（按用户决策，仍提供"取消"按钮逃生口）。
+            onDismissRequest = { /* no-op：禁止点外部关闭 */ },
+            icon = { Icon(Icons.Default.PersonAdd, null, tint = Primary) },
+            title = { Text("为联系人添加备注") },
+            text = {
+                Column {
+                    Text(
+                        "设备ID：${scannedContent.take(40)}${if (scannedContent.length > 40) "..." else ""}",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = remark,
+                        onValueChange = { remark = it },
+                        label = { Text("备注名称（如：张三）") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        chatViewModel.addContact(scannedContent, remark.trim())
+                        showRemarkDialog = false
+                        scanned = false
+                        scannedContent = ""
+                        onScanConnected()
+                    },
+                    enabled = remark.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                ) { Text("确认建链") }
+            },
+            dismissButton = {
+                // 偏离 patch：patch 无取消按钮（强制填写），实测对误扫无逃生口。
+                TextButton(onClick = {
+                    showRemarkDialog = false
+                    scanned = false        // 允许重扫
+                    scannedContent = ""
+                }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
+}
 
-                Spacer(Modifier.height(16.dp))
+@Composable
+private fun ScanTab(
+    scanned: Boolean,
+    onQrDetected: (String) -> Unit
+) {
+    val context = LocalContext.current
+    var hasCameraPermission by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted -> hasCameraPermission = granted }
 
-                OutlinedButton(
-                    onClick = {},
-                    modifier = Modifier.fillMaxWidth()
+    // 首次进入识别 Tab、未授权 → 自动弹一次系统权限框。被拒后改为手动点按钮重试。
+    LaunchedEffect(Unit) {
+        if (!hasCameraPermission) {
+            permissionLauncher.launch(Manifest.permission.CAMERA)
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(300.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(PrimaryDark)
+            .border(2.dp, Primary, RoundedCornerShape(16.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        if (hasCameraPermission) {
+            CameraPreview(scanned = scanned, onQrDetected = onQrDetected)
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    Icons.Default.CameraAlt,
+                    null,
+                    tint = Color.White.copy(0.5f),
+                    modifier = Modifier.size(64.dp)
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("需要相机权限以扫描二维码", color = Color.White.copy(0.8f), fontSize = 13.sp)
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
                 ) {
-                    Icon(Icons.Default.Image, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("从手机相册选择二维码图片")
-                }
-
-                Spacer(Modifier.height(16.dp))
-
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(containerColor = Surface)
-                ) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Info, null, tint = Primary, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "识别成功后将验证来源、IPv6地址及签名，确认后建立加密连接",
-                            fontSize = 12.sp,
-                            color = TextSecondary
-                        )
-                    }
+                    Text("授权相机")
                 }
             }
         }
     }
+
+    Spacer(Modifier.height(16.dp))
+
+    // M0 占位：相册选图扫码非 patch 规定，留待后续实现（与 M6.7 "分享" 同样保留）。
+    OutlinedButton(
+        onClick = {},
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Icon(Icons.Default.Image, null)
+        Spacer(Modifier.width(8.dp))
+        Text("从手机相册选择二维码图片")
+    }
+
+    Spacer(Modifier.height(16.dp))
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = Surface)
+    ) {
+        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Info, null, tint = Primary, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "识别成功后将验证来源、IPv6地址及签名，确认后建立加密连接",
+                fontSize = 12.sp,
+                color = TextSecondary
+            )
+        }
+    }
+}
+
+@Composable
+private fun CameraPreview(
+    scanned: Boolean,
+    onQrDetected: (String) -> Unit
+) {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    // 读取最新的 scanned 闭包值：analyzer 注册一次但每帧都读这个 state。
+    val scannedState = rememberUpdatedState(scanned)
+    val onQrDetectedState = rememberUpdatedState(onQrDetected)
+
+    val barcodeScanner = remember {
+        BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .build()
+        )
+    }
+
+    // 离开识别 Tab / 屏幕销毁时显式 unbind 相机并关闭 scanner。
+    // CameraX 虽绑定到 Activity lifecycle，但 Tab 切回生成后 AndroidView 离场，
+    // 相机会继续占用传感器、analyzer 持续解码——主动释放避免泄漏。
+    DisposableEffect(Unit) {
+        onDispose {
+            runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }
+            runCatching { barcodeScanner.close() }
+        }
+    }
+
+    AndroidView(
+        factory = { ctx ->
+            val previewView = PreviewView(ctx)
+            val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+            cameraProviderFuture.addListener({
+                val cameraProvider = cameraProviderFuture.get()
+                val preview = Preview.Builder().build().also {
+                    it.setSurfaceProvider(previewView.surfaceProvider)
+                }
+                val imageAnalyzer = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+                    .also { analysis ->
+                        analysis.setAnalyzer(ContextCompat.getMainExecutor(ctx)) { imageProxy ->
+                            if (scannedState.value) {
+                                imageProxy.close()
+                                return@setAnalyzer
+                            }
+                            val mediaImage = imageProxy.image
+                            if (mediaImage != null) {
+                                val image = InputImage.fromMediaImage(
+                                    mediaImage,
+                                    imageProxy.imageInfo.rotationDegrees
+                                )
+                                barcodeScanner.process(image)
+                                    .addOnSuccessListener { barcodes ->
+                                        barcodes.firstOrNull()?.rawValue?.let { raw ->
+                                            if (!scannedState.value) {
+                                                onQrDetectedState.value(raw)
+                                            }
+                                        }
+                                    }
+                                    .addOnCompleteListener { imageProxy.close() }
+                            } else {
+                                imageProxy.close()
+                            }
+                        }
+                    }
+                runCatching {
+                    cameraProvider.unbindAll()
+                    cameraProvider.bindToLifecycle(
+                        lifecycleOwner,
+                        CameraSelector.DEFAULT_BACK_CAMERA,
+                        preview,
+                        imageAnalyzer
+                    )
+                }
+            }, ContextCompat.getMainExecutor(ctx))
+            previewView
+        },
+        modifier = Modifier.fillMaxSize()
+    )
 }
 
 @Composable

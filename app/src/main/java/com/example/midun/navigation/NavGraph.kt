@@ -64,7 +64,10 @@ fun NavGraph(navController: NavHostController) {
         }
 
         composable(Screen.QrCode.route) {
-            QrCodeScreen(onBack = { navController.popBackStack() })
+            QrCodeScreen(
+                onBack = { navController.popBackStack() },
+                onScanConnected = { navController.popBackStack() }
+            )
         }
 
         composable(
