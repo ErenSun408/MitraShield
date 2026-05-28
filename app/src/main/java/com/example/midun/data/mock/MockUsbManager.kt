@@ -108,4 +108,13 @@ class MockUsbManager @Inject constructor(
         } else null
         _deviceStatus.value = _deviceStatus.value.copy(boundPhoneId = deviceId)
     }
+
+    /**
+     * 密钥更新（M7.4 patch §M7 改动3）：mock 期无实际密钥状态可轮换，仅 delay 模拟工作时长。
+     * 真 SDK 接入后调安全卡密钥更新接口；历史文件由旧密钥派生的会话密钥保留，仍可解密。
+     */
+    suspend fun updateKey(): Result<Unit> {
+        delay(1000)
+        return Result.success(Unit)
+    }
 }

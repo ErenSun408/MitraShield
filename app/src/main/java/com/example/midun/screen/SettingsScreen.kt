@@ -59,6 +59,13 @@ fun SettingsScreen(
     var bindError by remember { mutableStateOf("") }
     var bindLoading by remember { mutableStateOf(false) }
 
+    // 密钥更新（M7.4 patch §M7 改动3）：弹框含两态——输入密码态 vs 成功态。
+    var showKeyDialog by remember { mutableStateOf(false) }
+    var keyPassword by remember { mutableStateOf("") }
+    var keyError by remember { mutableStateOf("") }
+    var keyLoading by remember { mutableStateOf(false) }
+    var keySuccess by remember { mutableStateOf(false) }
+
     var showAboutDialog by remember { mutableStateOf(false) }
 
     val isBound = deviceStatus.boundPhoneId != null
@@ -101,7 +108,7 @@ fun SettingsScreen(
                     title = "密钥更新",
                     subtitle = "替换文件加密的二级密钥",
                     iconTint = Accent,
-                    onClick = { /* M7.4 */ }
+                    onClick = { showKeyDialog = true }
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 SettingsActionItem(
@@ -408,6 +415,109 @@ fun SettingsScreen(
             dismissButton = {
                 TextButton(onClick = dismiss, enabled = !bindLoading) {
                     Text("取消", color = TextSecondary)
+                }
+            }
+        )
+    }
+
+    if (showKeyDialog) {
+        val dismiss = {
+            showKeyDialog = false
+            keyPassword = ""
+            keyError = ""
+            keyLoading = false
+            keySuccess = false
+        }
+        AlertDialog(
+            onDismissRequest = { if (!keyLoading) dismiss() },
+            icon = {
+                Icon(
+                    if (keySuccess) Icons.Default.CheckCircle else Icons.Default.Key,
+                    null,
+                    tint = if (keySuccess) Success else Accent
+                )
+            },
+            title = { Text(if (keySuccess) "密钥已更新" else "密钥更新") },
+            text = {
+                if (keySuccess) {
+                    Text(
+                        "新二级加密密钥已生成。历史文件和聊天记录均可继续使用旧密钥解密；新密钥不暴露给上层，无法查看或复制。",
+                        color = TextSecondary
+                    )
+                } else {
+                    Column {
+                        Text(
+                            "将生成新的二级加密密钥替换旧密钥。\n\n" +
+                                "• 历史文件和聊天记录仍可正常解密\n" +
+                                "• 新密钥不支持查看或复制\n" +
+                                "• 此操作不可撤销\n\n" +
+                                "请输入密码确认：",
+                            color = TextSecondary
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = keyPassword,
+                            onValueChange = { keyPassword = it; keyError = "" },
+                            label = { Text("当前密码") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            isError = keyError.isNotEmpty(),
+                            supportingText = {
+                                if (keyError.isNotEmpty()) Text(keyError, color = Danger)
+                            },
+                            enabled = !keyLoading,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                if (keySuccess) {
+                    Button(
+                        onClick = dismiss,
+                        colors = ButtonDefaults.buttonColors(containerColor = Success)
+                    ) { Text("完成") }
+                } else {
+                    Button(
+                        onClick = {
+                            keyLoading = true
+                            keyError = ""
+                            deviceViewModel.updateKey(
+                                password = keyPassword,
+                                onSuccess = {
+                                    keyLoading = false
+                                    keyPassword = ""
+                                    keySuccess = true
+                                },
+                                onError = { msg ->
+                                    keyError = msg
+                                    keyLoading = false
+                                }
+                            )
+                        },
+                        enabled = keyPassword.isNotBlank() && !keyLoading,
+                        colors = ButtonDefaults.buttonColors(containerColor = Accent)
+                    ) {
+                        if (keyLoading) {
+                            CircularProgressIndicator(
+                                color = Color.White,
+                                strokeWidth = 2.dp,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text("更新中…")
+                        } else {
+                            Text("确认更新")
+                        }
+                    }
+                }
+            },
+            dismissButton = {
+                if (!keySuccess) {
+                    TextButton(onClick = dismiss, enabled = !keyLoading) {
+                        Text("取消", color = TextSecondary)
+                    }
                 }
             }
         )

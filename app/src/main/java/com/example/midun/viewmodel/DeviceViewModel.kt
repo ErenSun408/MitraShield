@@ -102,6 +102,21 @@ class DeviceViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 密钥更新（M7.4 patch §M7 改动3）：校验密码 → 调安全卡密钥轮换（mock：delay 1s）→ onSuccess。
+     * 真 SDK 接入后历史文件仍可用旧会话密钥解密，新生成的二级密钥不暴露给上层。
+     */
+    fun updateKey(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            mockUsbManager.authenticate(password)
+                .onSuccess {
+                    mockUsbManager.updateKey()
+                    onSuccess()
+                }
+                .onFailure { onError("密码错误") }
+        }
+    }
+
     // M10 hook: replace with SFCloseDisk() once the real FSShell SDK lands.
     private fun clearSensitiveMemory() {
     }
