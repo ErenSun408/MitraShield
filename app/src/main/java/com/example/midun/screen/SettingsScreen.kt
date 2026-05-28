@@ -1,7 +1,12 @@
 package com.example.midun.screen
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -66,6 +71,11 @@ fun SettingsScreen(
     var keyLoading by remember { mutableStateOf(false) }
     var keySuccess by remember { mutableStateOf(false) }
 
+    // 自动锁定（M7.5）：当前值来自 VM；picker 内的暂选值在 dialog 打开期间存活，确定才写回 VM。
+    val timeoutMin by deviceViewModel.inactivityTimeoutMinutes.collectAsState()
+    var showTimeoutDialog by remember { mutableStateOf(false) }
+    var pickedTimeout by remember { mutableIntStateOf(timeoutMin) }
+
     var showAboutDialog by remember { mutableStateOf(false) }
 
     val isBound = deviceStatus.boundPhoneId != null
@@ -125,9 +135,20 @@ fun SettingsScreen(
                 SettingsActionItem(
                     icon = Icons.Default.Timer,
                     title = "自动锁定",
-                    subtitle = "后台 5 分钟无操作自动退出",
+                    subtitle = "后台无操作 $timeoutMin 分钟后自动退出",
                     iconTint = Accent,
-                    onClick = { /* M7.5 */ }
+                    trailing = {
+                        Text(
+                            "$timeoutMin 分钟",
+                            color = Primary,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp
+                        )
+                    },
+                    onClick = {
+                        pickedTimeout = timeoutMin
+                        showTimeoutDialog = true
+                    }
                 )
             }
         }
@@ -523,6 +544,43 @@ fun SettingsScreen(
         )
     }
 
+    if (showTimeoutDialog) {
+        AlertDialog(
+            onDismissRequest = { showTimeoutDialog = false },
+            icon = { Icon(Icons.Default.Timer, null, tint = Accent) },
+            title = { Text("自动锁定") },
+            text = {
+                Column {
+                    Text(
+                        "选择后台无操作多久后自动退出登录（重启后回默认 5 分钟）。",
+                        color = TextSecondary,
+                        fontSize = 13.sp
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    WheelTimePicker(
+                        options = TIMEOUT_OPTIONS_MIN,
+                        initialValue = pickedTimeout,
+                        onSelectionChanged = { pickedTimeout = it }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        deviceViewModel.setInactivityTimeoutMinutes(pickedTimeout)
+                        showTimeoutDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTimeoutDialog = false }) {
+                    Text("取消", color = TextSecondary)
+                }
+            }
+        )
+    }
+
     if (showAboutDialog) {
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
@@ -572,13 +630,82 @@ private fun SettingsInfoItem(label: String, value: String) {
     }
 }
 
-/** 可点行：整行响应点击；ChevronRight 仅做视觉指示，非独立按钮。 */
+/** 自动锁定可选时长（分钟）。位置居中、首尾留余更利于 wheel 滚动手感。 */
+private val TIMEOUT_OPTIONS_MIN = listOf(1, 3, 5, 10, 15, 30, 60)
+
+/**
+ * 滚轮时长选择：LazyColumn + rememberSnapFlingBehavior，中间一格为选中态。
+ * - 初次进入按 [initialValue] 滚到对应项。
+ * - 滚停后 firstVisibleItemIndex 即中心项（因 contentPadding=itemHeight、可视 3 项）。
+ * - 选择变化通过 [onSelectionChanged] 回调实时上抛，父层只在"确定"时提交到 VM。
+ */
+@Composable
+private fun WheelTimePicker(
+    options: List<Int>,
+    initialValue: Int,
+    onSelectionChanged: (Int) -> Unit
+) {
+    val itemHeight = 48.dp
+    val listState = rememberLazyListState()
+    val flingBehavior = rememberSnapFlingBehavior(listState)
+
+    LaunchedEffect(Unit) {
+        val idx = options.indexOf(initialValue).coerceAtLeast(0)
+        listState.scrollToItem(idx)
+    }
+
+    val centerIndex by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex.coerceIn(0, options.size - 1)
+        }
+    }
+    LaunchedEffect(centerIndex) {
+        onSelectionChanged(options[centerIndex])
+    }
+
+    Box(modifier = Modifier.fillMaxWidth().height(itemHeight * 3)) {
+        // 中间高亮条：标识"当前选中行"的位置
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(itemHeight)
+                .align(Alignment.Center)
+                .background(Primary.copy(0.08f), RoundedCornerShape(8.dp))
+        )
+        LazyColumn(
+            state = listState,
+            flingBehavior = flingBehavior,
+            contentPadding = PaddingValues(vertical = itemHeight),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(options) { value ->
+                val isCenter = options[centerIndex] == value
+                Box(
+                    modifier = Modifier.fillMaxWidth().height(itemHeight),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "$value 分钟",
+                        fontSize = if (isCenter) 20.sp else 14.sp,
+                        fontWeight = if (isCenter) FontWeight.Bold else FontWeight.Normal,
+                        color = if (isCenter) Primary else TextSecondary.copy(0.5f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 可点行：整行响应点击；右尾 [trailing] 默认是 ChevronRight 视觉指示，需要展示状态值（如自动锁定的"5 分钟"）时由调用方覆盖。 */
 @Composable
 private fun SettingsActionItem(
     icon: ImageVector,
     title: String,
     subtitle: String,
     iconTint: Color = Primary,
+    trailing: @Composable () -> Unit = {
+        Icon(Icons.Default.ChevronRight, null, tint = TextSecondary)
+    },
     onClick: () -> Unit = {}
 ) {
     Row(
@@ -594,6 +721,6 @@ private fun SettingsActionItem(
             Text(title, fontWeight = FontWeight.Medium)
             Text(subtitle, fontSize = 12.sp, color = TextSecondary)
         }
-        Icon(Icons.Default.ChevronRight, null, tint = TextSecondary)
+        trailing()
     }
 }

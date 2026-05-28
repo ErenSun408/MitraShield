@@ -9,8 +9,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -136,10 +138,19 @@ class DeviceViewModel @Inject constructor(
 
     private var inactivityJob: Job? = null
 
+    // 自动锁定超时（M7.5）：UI 可设；mock 期不持久化、重启回 DEFAULT_TIMEOUT_MIN。
+    // M10 接 SharedPreferences/DataStore 时只需把读写换掉、保留这条 StateFlow 接口。
+    private val _inactivityTimeoutMinutes = MutableStateFlow(DEFAULT_TIMEOUT_MIN)
+    val inactivityTimeoutMinutes: StateFlow<Int> = _inactivityTimeoutMinutes.asStateFlow()
+
+    fun setInactivityTimeoutMinutes(minutes: Int) {
+        _inactivityTimeoutMinutes.value = minutes
+    }
+
     private fun resetInactivityTimer() {
         inactivityJob?.cancel()
         inactivityJob = viewModelScope.launch {
-            delay(INACTIVITY_TIMEOUT_MS)
+            delay(_inactivityTimeoutMinutes.value * 60_000L)
             mockUsbManager.logout()
         }
     }
@@ -153,6 +164,6 @@ class DeviceViewModel @Inject constructor(
     }
 
     private companion object {
-        const val INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000L
+        const val DEFAULT_TIMEOUT_MIN = 5
     }
 }
