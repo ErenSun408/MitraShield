@@ -55,6 +55,38 @@ class DeviceViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 一键清理用户数据（M7.2 patch §M7 改动1 之外的用户决策）：先校验密码，通过后清
+     * fileSystem + chatRepository。保留登录态、初始化态、绑定与密码。回调成功/错误，
+     * 由 UI 关闭弹框或显示"密码错误"。
+     */
+    fun wipeUserData(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            mockUsbManager.authenticate(password)
+                .onSuccess {
+                    mockUsbManager.wipeUserData()
+                    onSuccess()
+                }
+                .onFailure { onError("密码错误") }
+        }
+    }
+
+    /**
+     * 恢复出厂（M7.2 patch §M7 改动1）：校验密码 → wipeAll → onSuccess。由 UI 在
+     * onSuccess 里 navigate(Init){popUpTo(0)}；与 [wipeAndReset] 的区别仅是入口（前者
+     * 来自 Settings 危险操作，后者来自 Login 忘记密码）+ 多一道密码校验。
+     */
+    fun factoryReset(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            mockUsbManager.authenticate(password)
+                .onSuccess {
+                    mockUsbManager.wipeAll()
+                    onSuccess()
+                }
+                .onFailure { onError("密码错误") }
+        }
+    }
+
     // M10 hook: replace with SFCloseDisk() once the real FSShell SDK lands.
     private fun clearSensitiveMemory() {
     }

@@ -84,4 +84,16 @@ class MockUsbManager @Inject constructor(
         )
         return Result.success(Unit)
     }
+
+    /**
+     * 一键清理用户数据：清隐私文件 + 聊天 + 联系人，**保留**登录态/初始化态/绑定/密码。
+     * 与 [wipeAll]（恢复出厂）的关键区别——后者额外清 storedPassword、isInitialized、boundPhoneId
+     * 并把 status 退回 CONNECTED，本方法只动数据层。
+     */
+    suspend fun wipeUserData(): Result<Unit> {
+        delay(1500)
+        fileSystem.clear()
+        chatRepository.clear()
+        return Result.success(Unit)
+    }
 }

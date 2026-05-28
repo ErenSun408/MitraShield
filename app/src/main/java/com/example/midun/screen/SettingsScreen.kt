@@ -3,6 +3,7 @@ package com.example.midun.screen
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -13,6 +14,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -37,9 +40,17 @@ fun SettingsScreen(
 ) {
     val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
 
-    // M0 的清理/恢复确认弹框暂保留壳（弹完即关、无后端动作）；M7.2 替换为带密码框的真实版本。
+    // 一键清理 / 恢复出厂：M7.2 带密码确认的危险操作弹框。
     var showCleanDialog by remember { mutableStateOf(false) }
+    var cleanPassword by remember { mutableStateOf("") }
+    var cleanError by remember { mutableStateOf("") }
+    var cleanLoading by remember { mutableStateOf(false) }
+
     var showResetDialog by remember { mutableStateOf(false) }
+    var resetPassword by remember { mutableStateOf("") }
+    var resetError by remember { mutableStateOf("") }
+    var resetLoading by remember { mutableStateOf(false) }
+
     var showAboutDialog by remember { mutableStateOf(false) }
 
     Column(
@@ -159,57 +170,150 @@ fun SettingsScreen(
     }
 
     if (showCleanDialog) {
+        val dismiss = {
+            showCleanDialog = false
+            cleanPassword = ""
+            cleanError = ""
+            cleanLoading = false
+        }
         AlertDialog(
-            onDismissRequest = { showCleanDialog = false },
+            onDismissRequest = { if (!cleanLoading) dismiss() },
             icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
             title = { Text("一键清理") },
             text = {
                 Column {
-                    Text("此操作将清除USB安全卡中的：")
-                    Spacer(Modifier.height(8.dp))
-                    Text("  - 所有聊天记录", color = Danger)
-                    Text("  - 所有隐私文件夹及文件", color = Danger)
-                    Text("  - 所有联系人信息", color = Danger)
-                    Spacer(Modifier.height(8.dp))
-                    Text("此操作不可恢复！", fontWeight = FontWeight.Bold, color = Danger)
+                    Text(
+                        "将清除安全卡中的所有聊天记录、隐私文件与联系人，保留登录态。\n\n此操作不可恢复，请输入当前密码确认：",
+                        color = TextSecondary
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = cleanPassword,
+                        onValueChange = { cleanPassword = it; cleanError = "" },
+                        label = { Text("当前密码") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        isError = cleanError.isNotEmpty(),
+                        supportingText = {
+                            if (cleanError.isNotEmpty()) Text(cleanError, color = Danger)
+                        },
+                        enabled = !cleanLoading,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             },
             confirmButton = {
                 Button(
-                    onClick = { showCleanDialog = false },
+                    onClick = {
+                        cleanLoading = true
+                        cleanError = ""
+                        deviceViewModel.wipeUserData(
+                            password = cleanPassword,
+                            onSuccess = { dismiss() },
+                            onError = { msg ->
+                                cleanError = msg
+                                cleanLoading = false
+                            }
+                        )
+                    },
+                    enabled = cleanPassword.isNotBlank() && !cleanLoading,
                     colors = ButtonDefaults.buttonColors(containerColor = Danger)
-                ) { Text("确认清除") }
+                ) {
+                    if (cleanLoading) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("清理中…")
+                    } else {
+                        Text("确认清除")
+                    }
+                }
             },
             dismissButton = {
-                TextButton(onClick = { showCleanDialog = false }) { Text("取消") }
+                TextButton(onClick = dismiss, enabled = !cleanLoading) {
+                    Text("取消", color = TextSecondary)
+                }
             }
         )
     }
 
     if (showResetDialog) {
+        val dismiss = {
+            showResetDialog = false
+            resetPassword = ""
+            resetError = ""
+            resetLoading = false
+        }
         AlertDialog(
-            onDismissRequest = { showResetDialog = false },
+            onDismissRequest = { if (!resetLoading) dismiss() },
             icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
-            title = { Text("恢复出厂设置") },
+            title = { Text("恢复出厂设置", color = Danger) },
             text = {
                 Column {
-                    Text("此操作将：")
-                    Spacer(Modifier.height(8.dp))
-                    Text("  - 擦除根密钥", color = Danger)
-                    Text("  - 删除所有存储文件", color = Danger)
-                    Text("  - 清除APP设置和登录密码", color = Danger)
-                    Spacer(Modifier.height(8.dp))
-                    Text("USB安全卡将需要重新初始化！", fontWeight = FontWeight.Bold, color = Danger)
+                    Text(
+                        "此操作将永久删除安全卡内所有文件、聊天记录和密码，且无法恢复。\n\n请输入当前密码确认：",
+                        color = TextSecondary
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = resetPassword,
+                        onValueChange = { resetPassword = it; resetError = "" },
+                        label = { Text("当前密码") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        isError = resetError.isNotEmpty(),
+                        supportingText = {
+                            if (resetError.isNotEmpty()) Text(resetError, color = Danger)
+                        },
+                        enabled = !resetLoading,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             },
             confirmButton = {
                 Button(
-                    onClick = { showResetDialog = false },
+                    onClick = {
+                        resetLoading = true
+                        resetError = ""
+                        deviceViewModel.factoryReset(
+                            password = resetPassword,
+                            onSuccess = {
+                                // 顺序与 [DeviceViewModel.wipeAndReset] / M3.5 一致：
+                                // wipeAll 已完成才回调；这里再触发导航，避免本 VM 在 wipeAll 中途被 popUpTo(0) 取消。
+                                dismiss()
+                                onFactoryResetComplete()
+                            },
+                            onError = { msg ->
+                                resetError = msg
+                                resetLoading = false
+                            }
+                        )
+                    },
+                    enabled = resetPassword.isNotBlank() && !resetLoading,
                     colors = ButtonDefaults.buttonColors(containerColor = Danger)
-                ) { Text("确认恢复") }
+                ) {
+                    if (resetLoading) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("重置中…")
+                    } else {
+                        Text("确认重置")
+                    }
+                }
             },
             dismissButton = {
-                TextButton(onClick = { showResetDialog = false }) { Text("取消") }
+                TextButton(onClick = dismiss, enabled = !resetLoading) {
+                    Text("取消", color = TextSecondary)
+                }
             }
         )
     }
