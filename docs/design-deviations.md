@@ -501,4 +501,34 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - **WheelTimePicker 形参 `options` IDE 警告"始终是 TIMEOUT_OPTIONS_MIN"**：保留形参便于后续在改密码超时/QR 有效期等场景复用；轻微 IDE noise 接受。
 - **Commit** `ba5566f`
 
+---
+
+## M8 — 防录屏 & 安全加固
+
+### M8.1 / M8.2 — 由 M2 + M7.5 预满足，M8 范围内仅追认
+
+- **v4 §8.1** 要求 `MainActivity.onCreate` 调 `window.setFlags(FLAG_SECURE)`。
+- **v4 §8.2** 要求 `DeviceViewModel.onAppBackground/Foreground` + `MainActivity` 用 `DefaultLifecycleObserver` 触发，超时 5 分钟。
+- **本仓库实现** 两条均在 M2 commit `aea10a7` 落地（M2 文档原文 §2.1/§2.2 就把代码写在 M2 章节、注释里标 "见 M8"，v4 §M8 文本也声明 "已在 M2 实现，本里程碑仅验收"）。M7.5 commit `ba5566f` 进一步把 5 分钟硬编码升级为 1–60 分钟可调（详见 M7.5 条目）。M8 范围内**不动 code**，仅追认 + 写本条偏离。
+- **Commit** `9bad006`（M8 范围内仅追认；FLAG_SECURE 实现见 `aea10a7`、超时可调实现见 `ba5566f`）
+
+### M8.3 ProGuard / R8 — 最小规则集 + 不开 shrinkResources + lint detector 绕过
+
+- **v4 §8.3** 给三条 proguard 规则（`-keep seczure.fsudisk.**` / `-keep com.example.midun.data.**` / `-assumenosideeffects android.util.Log.d|v|i`）+ 验收 "Release 构建开启代码混淆"，未明说要翻 `isMinifyEnabled`。
+- **本仓库实现**
+  - **`app/build.gradle.kts` release buildType**：`isMinifyEnabled = true`（v4 验收第 3 条隐含要求，doc 未明写），`isShrinkResources` 保持隐式 false（资源剥离误删动态加载资源风险 > 边际 APK-size 收益）。
+  - **`app/proguard-rules.pro` 写最小集**：
+    - 保留 `-keep class seczure.fsudisk.** { *; }` 占位规则（M10 接入 FSShell SDK 前包不存在，R8 静默忽略；保留作为前瞻护栏，少一件 M10 遗忘事）
+    - 保留 `-assumenosideeffects ... Log.d|v|i`（仓库当前零 Log 调用，规则前瞻；**约定：未来生产诊断日志须用 `Log.w`/`Log.e` 或独立 logging facade，d/v/i 会被 R8 静默剥离**）
+    - **舍弃 `-keep class com.example.midun.data.** { *; }`**：grep 全仓零反射 / 零序列化（无 Gson/Moshi/kotlinx.serialization/@Serializable/Class.forName），data 包整包 keep 等于禁用 R8 对业务核心的工作，无收益且会掩盖未来 Hilt 接线被混淆破坏的真实问题。M10 接 SDK 若引入 JNI 按全限定名查 data class，再针对性 keep 即可。
+    - **未预先塞 Hilt / CameraX / MLKit / Compose / Navigation keep 规则**：这五个库通过 AAR 内置 consumer rules 向 R8 注入 keep，`assembleRelease` 已验证 R8 干净通过，无需手写。
+  - **`android.lint { disable += "NullSafeMutableLiveData" }`**：AGP 8.7.3 + Kotlin 2.1.21 组合下，`NonNullableMutableLiveDataDetector` 在新版 Kotlin analysis API 下抛 `IncompatibleClassChangeError`，导致 `lintVitalAnalyzeRelease` 必崩。本仓库零 LiveData 使用（全 StateFlow），detector 是纯 false-positive，安全禁用。AGP 8.8+ 修复后可移除该 disable。
+- **验收**
+  - `./gradlew assembleRelease` 干净通过（R8 / lint / 打包全绿）
+  - APK 体积：debug 42.9 MB → release minified 22.4 MB（缩减 ~48%）
+- **遗留**
+  - Release APK 当前未签名（`app-release-unsigned.apk`）。真签名走 M10 / 上架范围。
+  - 未做真机装机验证（emulator/device 在 M9 网络层一并跑）。若 R8 在运行时仍有 missing-class 表现（特别是 MLKit 扫码场景），需要按 logcat 报错补 keep。
+- **Commit** `9bad006`（M8 全部动作；docs 偏离记录由本条本身提交）
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
