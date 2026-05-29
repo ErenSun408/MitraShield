@@ -1,21 +1,22 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
+# MiDun ProGuard / R8 rules.
 #
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# Scope (M8): keep this file minimal — the codebase has no reflection /
+# serialization / JNI consumers today, and Hilt / CameraX / MLKit / Compose
+# ship their own consumer rules via AAR. Add targeted -keep entries here
+# only when assembleRelease's R8 step actually complains.
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# FSShell SDK placeholder. The seczure.fsudisk package does not exist yet
+# (M10 will add the real .jar/.so); this rule is a forward-looking guard
+# so we don't forget. R8 silently ignores keeps on non-existent classes.
+-keep class seczure.fsudisk.** { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Strip verbose / info / debug logging from release builds. The repo
+# currently has zero Log calls, so this is purely forward-looking: future
+# diagnostic logging at d/v/i levels will be removed from release APKs.
+# WARNING: any future production telemetry must use Log.w or Log.e (or a
+# dedicated logging facade) to survive R8.
+-assumenosideeffects class android.util.Log {
+    public static int d(...);
+    public static int v(...);
+    public static int i(...);
+}

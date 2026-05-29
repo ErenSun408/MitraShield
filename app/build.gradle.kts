@@ -23,7 +23,10 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // M8: enable R8 to exercise proguard-rules.pro. isShrinkResources
+            // stays implicit-false — resource shrinking risk outweighs the
+            // marginal APK-size win at this stage.
+            isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -39,6 +42,13 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    lint {
+        // AGP 8.7 + Kotlin 2.1.21 兼容性绕过：NonNullableMutableLiveDataDetector
+        // 在新版 Kotlin analysis API 下抛 IncompatibleClassChangeError，导致
+        // lintVitalAnalyzeRelease 必崩。本仓库零 LiveData 使用（全 StateFlow），
+        // 该 detector 是纯 false-positive，安全禁用。AGP 8.8+ 修复后可移除。
+        disable += "NullSafeMutableLiveData"
     }
 }
 
