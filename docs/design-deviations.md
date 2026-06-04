@@ -572,4 +572,21 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **决策依据** 两个一键清理入口（首页 + 设置）走同一 `wipeUserData`，行为/密码门槛一致；首页入口因展示统计需额外刷新。
 - **Commit** `8026955`
 
+### M9.3 — 操作日志：v4 外新功能，真实实现（内存版）
+
+- **v4 设计** **无**。经搜 v4 doc + patch 全文，「操作日志」无任何功能或数据层设计（见 M9.1 条「关键事实记录」）。HomeScreen「最近操作」卡原是 M0 写死的 4 条 `Triple`。
+- **本仓库实现**（用户 2026-06-04 决策：作为 v4 外新功能真实实现）
+  - **数据层**：`model/OperationLog.kt`（`OperationType` 枚举带 `label` + `OperationLog(type, description, timestamp)`）；`mock/MockOperationLog.kt`（`@Singleton`，`MutableStateFlow<List<OperationLog>>`，`record`/`clear`，最新在前、上限 50 条）。
+  - **不持久化**：内存存储，进程重启即清空——既因 mock 期无卡存储，也贴合「不留痕」。M11 接真实 SDK 时写安全卡 EMMC（聊天记录同款）。
+  - **记录点**（各 ViewModel/Manager 注入同一 `@Singleton`，在成功分支 `record`）：
+    - 登录 → `AuthViewModel.login` onSuccess（注意：只此处记，**不**在 `MockUsbManager.authenticate` 记——后者被一键清理/恢复出厂/绑定/密钥等多处复用，非「登录」语义）
+    - 文件导入/删除文件/清空文件夹/删除文件夹 → `FileViewModel` 各 onSuccess
+    - 文件导出 → 导出逻辑仍在 `FilesScreen` 本地 state（M5 mock 占位，未下沉 VM），故新增 `FileViewModel.recordExport(desc)`，由 screen 三个导出点（文件夹导出/导出全部/单文件导出）调用
+    - 扫码建联 → `ChatViewModel.addContact`
+  - **不记录的操作**（用户 2026-06-04 决策）：**一键清理 / 恢复出厂不记自身**——这两个操作本身要 `clear()` 日志，记了会被同操作立刻清掉（record 在 clear 前）或留孤儿记录、下次清理又消失（record 在 clear 后），逻辑自相矛盾；且「不留痕」语境下清空动作本不该留痕。二者只在 `MockUsbManager.wipeUserData()`/`wipeAll()` 里 `operationLog.clear()`。**消息收发亦不记**（过于频繁，会淹没列表）。
+  - **展示**：新增 `OperationLogViewModel` 转发 StateFlow，HomeScreen 注入后 `collectAsState` 实时渲染最近 `MAX_HOME_LOGS=5` 条（区别于 contacts/folders 的 reload 模式——日志是响应式流，无需手动 reload）；空态显示「暂无操作记录」；按 `OperationType` 映射图标，`timestamp` 格式化为 HH:mm。
+  - **一键清理文案**：M9.2 曾删掉「操作日志」被清项，本阶段日志真实接入 `clear()` 后加回（首页弹框文案「…联系人与操作日志…」）。
+- **遗留** 登录后首页仅 1 条「登录认证」（其余靠用户操作产生），不预置种子日志——保持「真实记录」语义，不造假数据。
+- **Commit** `2fe4608`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
