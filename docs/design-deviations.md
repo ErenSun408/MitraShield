@@ -563,4 +563,13 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **关键事实记录** 经搜 v4 doc + patch 全文，**「操作日志」在两文档中无任何功能或数据层设计**（命中均为「聊天记录」「会议记录.docx」「移除 Log 打印」等无关项）。最近操作卡的「操作日志」字样仅是 M0 自加 UI + 一键清理弹框的被清项文案。用户 2026-06-04 决策：M9.3 将其作为 **v4 外新功能真实实现**（内存版操作日志数据层，mock 期不持久化，M11 写安全卡 EMMC）。
 - **Commit** `5533042`
 
+### M9.2 — 一键清理接 `wipeUserData`（复用 M7.2 密码确认）
+
+- **现状** HomeScreen 一键清理弹框是 M0 假操作：确认/取消都只 `showCleanDialog = false`，不清任何数据，无密码门槛。
+- **本仓库实现** 套用 M7.2 SettingsScreen 同款危险操作弹框（`cleanPassword`/`cleanError`/`cleanLoading` 三态 + `dismiss` lambda 重置 + loading 期禁关）：密码输入 → `deviceViewModel.wipeUserData(password, onSuccess, onError)`（已存在，M7.2 落地）→ 校验通过清 `MockFileSystem` + `MockChatRepository`、保留登录态/绑定/密码。
+  - **清完刷新首页统计**（v4/M7.2 均无此步）：`onSuccess` 里先 `fileViewModel.loadFolders()` + `chatViewModel.loadContacts()` 再 `dismiss()`，使设备卡文件数、文件夹/未读副标题即时归零。M7.2 在 Settings 不需要这步（Settings 不显示这些统计）。
+  - **弹框文案改写**：原 M0 列「聊天记录/隐私文件/联系人/操作日志」四条 + 「不可恢复」，改为 M7.2 同款一句话 + 密码输入提示。删掉「操作日志」被清项文字——操作日志的真实清除归 M9.3（届时 `wipeUserData` 一并 clear 日志单例后再在文案体现）。
+- **决策依据** 两个一键清理入口（首页 + 设置）走同一 `wipeUserData`，行为/密码门槛一致；首页入口因展示统计需额外刷新。
+- **Commit** `8026955`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
