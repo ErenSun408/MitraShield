@@ -20,14 +20,20 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.midun.data.model.OperationType
 import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
 import com.example.midun.viewmodel.DeviceViewModel
 import com.example.midun.viewmodel.FileViewModel
+import com.example.midun.viewmodel.OperationLogViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun HomeScreen(
@@ -37,7 +43,8 @@ fun HomeScreen(
     onQrCodeClick: () -> Unit = {},
     deviceViewModel: DeviceViewModel = hiltViewModel(),
     fileViewModel: FileViewModel = hiltViewModel(),
-    chatViewModel: ChatViewModel = hiltViewModel()
+    chatViewModel: ChatViewModel = hiltViewModel(),
+    operationLogViewModel: OperationLogViewModel = hiltViewModel()
 ) {
     var showCleanDialog by remember { mutableStateOf(false) }
     var cleanPassword by remember { mutableStateOf("") }
@@ -53,6 +60,7 @@ fun HomeScreen(
     val device by deviceViewModel.deviceStatus.collectAsState()
     val fileState by fileViewModel.uiState.collectAsState()
     val contacts by chatViewModel.contacts.collectAsState()
+    val logs by operationLogViewModel.logs.collectAsState()
 
     val deviceConnected = device.status == UsbDeviceStatus.AUTHENTICATED ||
         device.status == UsbDeviceStatus.CONNECTED
@@ -154,38 +162,48 @@ fun HomeScreen(
 
         Spacer(Modifier.height(20.dp))
 
-        // 安全日志
+        // 最近操作：真实操作日志（OperationLogViewModel 观察 MockOperationLog 的 StateFlow，
+        // 各记录点经同一 @Singleton 写入，无需手动 reload）。清理类操作不记录自身（见 M9.3）。
         Text("最近操作", fontSize = 16.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))
 
-        val logs = listOf(
-            Triple("文件导入", "项目方案.pdf 导入至「工作文档」", "10:30"),
-            Triple("即时通信", "与 张三 建立加密连接", "10:15"),
-            Triple("文件导出", "会议纪要.docx 导出至手机", "09:45"),
-            Triple("登录认证", "密码验证通过，设备ID匹配", "09:30"),
-        )
-
-        logs.forEach { (title, desc, time) ->
+        val recentLogs = logs.take(MAX_HOME_LOGS)
+        if (recentLogs.isEmpty()) {
             Card(
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Text(
+                    "暂无操作记录",
+                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                    fontSize = 13.sp,
+                    color = TextSecondary,
+                    textAlign = TextAlign.Center
+                )
+            }
+        } else {
+            recentLogs.forEach { log ->
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    shape = RoundedCornerShape(12.dp)
                 ) {
-                    Box(
-                        modifier = Modifier.size(36.dp).clip(CircleShape).background(Surface),
-                        contentAlignment = Alignment.Center
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.History, null, tint = Primary, modifier = Modifier.size(18.dp))
+                        Box(
+                            modifier = Modifier.size(36.dp).clip(CircleShape).background(Surface),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(iconForOperation(log.type), null, tint = Primary, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(log.type.label, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            Text(log.description, fontSize = 12.sp, color = TextSecondary)
+                        }
+                        Text(formatLogTime(log.timestamp), fontSize = 11.sp, color = TextSecondary)
                     }
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                        Text(desc, fontSize = 12.sp, color = TextSecondary)
-                    }
-                    Text(time, fontSize = 11.sp, color = TextSecondary)
                 }
             }
         }
@@ -205,7 +223,7 @@ fun HomeScreen(
             text = {
                 Column {
                     Text(
-                        "将清除安全卡中的所有聊天记录、隐私文件与联系人，保留登录态。\n\n此操作不可恢复，请输入当前密码确认：",
+                        "将清除安全卡中的所有聊天记录、隐私文件、联系人与操作日志，保留登录态。\n\n此操作不可恢复，请输入当前密码确认：",
                         color = TextSecondary
                     )
                     Spacer(Modifier.height(12.dp))
@@ -295,3 +313,18 @@ private fun QuickActionCard(
         }
     }
 }
+
+private val homeLogTimeFormat = SimpleDateFormat("HH:mm", Locale.CHINA)
+
+private fun formatLogTime(timestamp: Long): String =
+    homeLogTimeFormat.format(Date(timestamp))
+
+private fun iconForOperation(type: OperationType): ImageVector = when (type) {
+    OperationType.LOGIN -> Icons.Default.Lock
+    OperationType.FILE_IMPORT -> Icons.Default.FileUpload
+    OperationType.FILE_EXPORT -> Icons.Default.FileDownload
+    OperationType.FILE_DELETE -> Icons.Default.DeleteForever
+    OperationType.CONNECT -> Icons.Default.Chat
+}
+
+private const val MAX_HOME_LOGS = 5

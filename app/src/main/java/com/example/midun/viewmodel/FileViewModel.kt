@@ -3,8 +3,10 @@ package com.example.midun.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.mock.MockFileSystem
+import com.example.midun.data.mock.MockOperationLog
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
+import com.example.midun.data.model.OperationType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -26,7 +28,8 @@ data class FileUiState(
 
 @HiltViewModel
 class FileViewModel @Inject constructor(
-    private val fileSystem: MockFileSystem
+    private val fileSystem: MockFileSystem,
+    private val operationLog: MockOperationLog
 ) : ViewModel() {
 
     sealed class OperationResult {
@@ -83,6 +86,7 @@ class FileViewModel @Inject constructor(
             fileSystem.importFile(folderId, fileName, fileSize)
                 .onSuccess {
                     loadFiles(folderId)
+                    operationLog.record(OperationType.FILE_IMPORT, "导入「$fileName」")
                     _operationResult.emit(OperationResult.Success("文件导入成功"))
                 }
                 .onFailure {
@@ -93,10 +97,12 @@ class FileViewModel @Inject constructor(
     }
 
     fun deleteFile(fileId: String, folderId: String) {
+        val fileName = _uiState.value.currentFiles.find { it.id == fileId }?.name ?: "文件"
         viewModelScope.launch {
             fileSystem.deleteFile(fileId)
                 .onSuccess {
                     loadFiles(folderId)
+                    operationLog.record(OperationType.FILE_DELETE, "删除「$fileName」")
                     _operationResult.emit(OperationResult.Success("文件已删除"))
                 }
                 .onFailure {
@@ -106,10 +112,15 @@ class FileViewModel @Inject constructor(
     }
 
     fun deleteAllFilesInFolder(folderId: String) {
+        val folderName = _uiState.value.folders.find { it.id == folderId }?.name
         viewModelScope.launch {
             fileSystem.deleteAllFilesInFolder(folderId)
                 .onSuccess {
                     loadFiles(folderId)
+                    operationLog.record(
+                        OperationType.FILE_DELETE,
+                        if (folderName != null) "清空「$folderName」内全部文件" else "清空文件夹内全部文件"
+                    )
                     _operationResult.emit(OperationResult.Success("文件夹内文件已全部删除"))
                 }
                 .onFailure {
@@ -119,6 +130,7 @@ class FileViewModel @Inject constructor(
     }
 
     fun deleteFolder(folderId: String) {
+        val folderName = _uiState.value.folders.find { it.id == folderId }?.name ?: "文件夹"
         viewModelScope.launch {
             fileSystem.deleteFolder(folderId)
                 .onSuccess {
@@ -126,6 +138,7 @@ class FileViewModel @Inject constructor(
                     if (_uiState.value.currentFolderId == folderId) {
                         _uiState.update { it.copy(currentFolderId = null, currentFiles = emptyList()) }
                     }
+                    operationLog.record(OperationType.FILE_DELETE, "删除文件夹「$folderName」")
                     _operationResult.emit(OperationResult.Success("文件夹已删除"))
                 }
                 .onFailure {
@@ -170,6 +183,11 @@ class FileViewModel @Inject constructor(
                     _operationResult.emit(OperationResult.Error(it.message ?: "重命名失败"))
                 }
         }
+    }
+
+    /** 记录一次导出操作。导出本身仍是 FilesScreen 的 mock 占位（M5），此处仅落日志。 */
+    fun recordExport(description: String) {
+        operationLog.record(OperationType.FILE_EXPORT, description)
     }
 
     private fun setLoading(isLoading: Boolean) {

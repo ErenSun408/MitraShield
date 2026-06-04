@@ -80,6 +80,7 @@ fun FilesScreen(
                         onClick = { onFolderClick(folder.id) },
                         onRename = { newName -> fileViewModel.renameFolder(folder.id, newName) },
                         onExportFolder = {
+                            fileViewModel.recordExport("导出文件夹「${folder.name}」")
                             folderExportMessage = "「${folder.name}」文件夹结构已按${folder.copyPolicy.exportLabel()}策略触发导出"
                         },
                         onDelete = { folderToDelete = folder }
@@ -300,6 +301,7 @@ fun FileDetailScreen(
     var showDeleteAllFilesDialog by remember { mutableStateOf(false) }
     var exportMessage by remember { mutableStateOf<String?>(null) }
     val onExportAllFiles = {
+        fileViewModel.recordExport("导出「${folder?.name ?: "文件夹"}」全部文件（${files.size}个）")
         exportMessage = "${files.size} 个文件已按${effectiveCopyPolicy.exportLabel()}策略触发导出"
         showMenu = false
     }
@@ -423,6 +425,7 @@ fun FileDetailScreen(
                         copyPolicy = effectiveCopyPolicy,
                         onRename = { newName -> fileViewModel.renameFile(file.id, newName, folderId) },
                         onExportFile = {
+                            fileViewModel.recordExport("导出「${file.name}」")
                             exportMessage = "「${file.name}」已按${effectiveCopyPolicy.exportLabel()}策略触发导出"
                         },
                         onDelete = { fileToDelete = file }

@@ -16,7 +16,8 @@ import kotlinx.coroutines.flow.asStateFlow
 class MockUsbManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val fileSystem: MockFileSystem,
-    private val chatRepository: MockChatRepository
+    private val chatRepository: MockChatRepository,
+    private val operationLog: MockOperationLog
 ) {
     private val _deviceStatus = MutableStateFlow(DeviceInfo())
     val deviceStatus: StateFlow<DeviceInfo> = _deviceStatus.asStateFlow()
@@ -74,9 +75,10 @@ class MockUsbManager @Inject constructor(
     suspend fun wipeAll(): Result<Unit> {
         delay(2000)
         storedPassword = null
-        // 整卡擦除：连同卡内文件与聊天一并清空，使"恢复出厂/忘记密码"名副其实。
+        // 整卡擦除：连同卡内文件、聊天与操作日志一并清空，使"恢复出厂/忘记密码"名副其实。
         fileSystem.clear()
         chatRepository.clear()
+        operationLog.clear()
         _deviceStatus.value = _deviceStatus.value.copy(
             isInitialized = false,
             boundPhoneId  = null,
@@ -94,6 +96,7 @@ class MockUsbManager @Inject constructor(
         delay(1500)
         fileSystem.clear()
         chatRepository.clear()
+        operationLog.clear()
         return Result.success(Unit)
     }
 

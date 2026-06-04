@@ -2,7 +2,9 @@ package com.example.midun.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.midun.data.mock.MockOperationLog
 import com.example.midun.data.mock.MockUsbManager
+import com.example.midun.data.model.OperationType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,7 +14,8 @@ import kotlinx.coroutines.launch
 
 @HiltViewModel
 class AuthViewModel @Inject constructor(
-    private val mockUsbManager: MockUsbManager
+    private val mockUsbManager: MockUsbManager,
+    private val operationLog: MockOperationLog
 ) : ViewModel() {
 
     sealed class InitState {
@@ -64,6 +67,7 @@ class AuthViewModel @Inject constructor(
             mockUsbManager.authenticate(password)
                 .onSuccess {
                     loginAttempts = 0
+                    operationLog.record(OperationType.LOGIN, "密码验证通过，设备ID匹配")
                     _loginState.value = LoginState.Success
                 }
                 .onFailure {

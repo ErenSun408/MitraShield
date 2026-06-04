@@ -3,9 +3,11 @@ package com.example.midun.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.mock.MockChatRepository
+import com.example.midun.data.mock.MockOperationLog
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageType
+import com.example.midun.data.model.OperationType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,7 +20,8 @@ import kotlinx.coroutines.launch
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
-    private val chatRepo: MockChatRepository
+    private val chatRepo: MockChatRepository,
+    private val operationLog: MockOperationLog
 ) : ViewModel() {
 
     // 联系人列表：以 MockChatRepository（单例）为唯一数据源。
@@ -156,5 +159,6 @@ class ChatViewModel @Inject constructor(
         )
         chatRepo.addContact(newContact)
         _contacts.value = chatRepo.getContacts()
+        operationLog.record(OperationType.CONNECT, "与「$remark」建立加密连接")
     }
 }
