@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 
 data class FileUiState(
     val folders: List<FileItem> = emptyList(),
+    val totalFileCount: Int = 0,
     val currentFolderId: String? = null,
     val currentFiles: List<FileItem> = emptyList(),
     val isLoading: Boolean = false
@@ -45,7 +46,10 @@ class FileViewModel @Inject constructor(
 
     fun loadFolders() {
         _uiState.update { state ->
-            state.copy(folders = fileSystem.getFolders())
+            state.copy(
+                folders = fileSystem.getFolders(),
+                totalFileCount = fileSystem.getTotalFileCount()
+            )
         }
     }
 

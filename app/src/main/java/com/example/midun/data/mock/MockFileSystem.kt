@@ -29,6 +29,9 @@ class MockFileSystem @Inject constructor() {
     fun getFilesInFolder(folderId: String): List<FileItem> =
         mockFiles.filter { it.parentId == folderId }
 
+    /** 安全卡内文件总数（跨所有文件夹）。供首页设备状态卡的「文件数量」统计使用。 */
+    fun getTotalFileCount(): Int = mockFiles.size
+
     suspend fun createFolder(name: String, policy: CopyPolicy): Result<FileItem> {
         delay(300)
         val folder = FileItem(

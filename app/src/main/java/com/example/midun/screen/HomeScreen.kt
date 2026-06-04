@@ -19,16 +19,41 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.ui.theme.*
+import com.example.midun.viewmodel.ChatViewModel
+import com.example.midun.viewmodel.DeviceViewModel
+import com.example.midun.viewmodel.FileViewModel
 
 @Composable
 fun HomeScreen(
     onNavigateToFiles: () -> Unit = {},
     onNavigateToChat: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
-    onQrCodeClick: () -> Unit = {}
+    onQrCodeClick: () -> Unit = {},
+    deviceViewModel: DeviceViewModel = hiltViewModel(),
+    fileViewModel: FileViewModel = hiltViewModel(),
+    chatViewModel: ChatViewModel = hiltViewModel()
 ) {
     var showCleanDialog by remember { mutableStateOf(false) }
+
+    // 进/返本屏重读单例，使其它 Tab 的增删（建文件夹、收消息等）即时反映到首页统计。
+    // 三个 VM 均落在 Main 的 NavBackStackEntry scope，与各 Tab 同实例；底层 Mock 为 @Singleton。
+    LaunchedEffect(Unit) {
+        fileViewModel.loadFolders()
+        chatViewModel.loadContacts()
+    }
+    val device by deviceViewModel.deviceStatus.collectAsState()
+    val fileState by fileViewModel.uiState.collectAsState()
+    val contacts by chatViewModel.contacts.collectAsState()
+
+    val deviceConnected = device.status == UsbDeviceStatus.AUTHENTICATED ||
+        device.status == UsbDeviceStatus.CONNECTED
+    val folderCount = fileState.folders.size
+    val fileCount = fileState.totalFileCount
+    val unreadCount = contacts.sumOf { it.unreadCount }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -47,25 +72,30 @@ fun HomeScreen(
                     Spacer(Modifier.width(12.dp))
                     Column {
                         Text("USB安全卡", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Text("SN: SC-2026051300001", color = Color.White.copy(0.7f), fontSize = 12.sp)
+                        Text("SN: ${device.deviceId.ifEmpty { "未知" }}", color = Color.White.copy(0.7f), fontSize = 12.sp)
                     }
                     Spacer(Modifier.weight(1f))
+                    val statusColor = if (deviceConnected) Success else Danger
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
-                            .background(Success.copy(0.2f))
+                            .background(statusColor.copy(0.2f))
                             .padding(horizontal = 12.dp, vertical = 4.dp)
                     ) {
-                        Text("已连接", color = Success, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            if (deviceConnected) "已连接" else "未连接",
+                            color = statusColor, fontSize = 12.sp, fontWeight = FontWeight.Medium
+                        )
                     }
                 }
                 Spacer(Modifier.height(16.dp))
                 Divider(color = Color.White.copy(0.15f))
                 Spacer(Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    StatusItem("存储容量", "16GB / 32GB")
-                    StatusItem("已用空间", "8.2GB")
-                    StatusItem("文件数量", "61个")
+                    // 容量/已用空间 mock 期无数据源，占位（对齐 M7 设备信息策略）；M11 接 FSShell SDK 读真实卡容量。
+                    StatusItem("存储容量", "-- / 32 GB")
+                    StatusItem("已用空间", "--")
+                    StatusItem("文件数量", "${fileCount}个")
                 }
             }
         }
@@ -80,7 +110,7 @@ fun HomeScreen(
             QuickActionCard(
                 icon = Icons.Default.FolderOpen,
                 title = "隐私文件夹",
-                subtitle = "4个文件夹",
+                subtitle = "${folderCount}个文件夹",
                 color = Primary,
                 onClick = onNavigateToFiles,
                 modifier = Modifier.weight(1f)
@@ -88,7 +118,7 @@ fun HomeScreen(
             QuickActionCard(
                 icon = Icons.Default.Chat,
                 title = "即时通信",
-                subtitle = "2条新消息",
+                subtitle = if (unreadCount > 0) "${unreadCount}条新消息" else "暂无新消息",
                 color = Accent,
                 onClick = onNavigateToChat,
                 modifier = Modifier.weight(1f)
