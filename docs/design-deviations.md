@@ -13,6 +13,18 @@
 
 ---
 
+## 里程碑重编号（HomeScreen 正式纳入）
+
+HomeScreen 接通由"v4 外增量"正式定为 **M9**，原后续里程碑各后推一位：
+
+- **M9** = HomeScreen 接通（接已有 Mock 单例，UI 收尾；原编号为 H1/M7.6 提案）
+- **M10** = 即时通信网络层（IPv6 P2P，真 Socket + ECDH，对应 v4 doc **§9**）
+- **M11** = 真 SDK 收口（FSShell 接入、authenticate 校验 boundPhoneId、自动锁定持久化、真实文件选取器/导出、签名上架等）
+
+⚠️ **编号错位提醒**：自 M9 起，本项目里程碑编号比 v4 doc 章节号 **+1**（M10 ↔ v4 §9）。v4 doc 章节号不动（它是不可改的 spec）。本文档内早先各节里"留待 M10/M11"等前瞻引用已按此规则同步更新（真 SDK 统一指 M11，网络层指 M10）。
+
+---
+
 ## 全局约定 — 导航分工（navController vs 回调）
 
 v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(...)`。本仓库采用**混用约定**：
@@ -58,14 +70,14 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 
 - **v4 §2.3** 规定顶部细窄状态条 `UsbStatusBar`，按状态变色（红/橙/绿）显示连接信息。
 - **本仓库实现** 保留 M0 时期的全屏 `UsbDisconnectedOverlay`（拔卡 → 全屏黑底警告 + 5s 倒计时 → `finishAndRemoveTask()`）。v4 §2.3 的 `UsbStatusBar` 组件及其配色 token（`AccentRed/Amber/Green`）**未创建**。
-- **原因** M0 戏剧化覆盖层提供强视觉安全信号 + 5s 重插宽限 + 进程死亡级别的内存擦除保证。v4 细条设计偏含蓄；在 M10 真实 SDK 落地、`clearSensitiveMemory()` 真正生效之前，v4 方案无法提供真实的内存擦除保证。用户选择保留 M0 UX。
+- **原因** M0 戏剧化覆盖层提供强视觉安全信号 + 5s 重插宽限 + 进程死亡级别的内存擦除保证。v4 细条设计偏含蓄；在 M11 真实 SDK 落地、`clearSensitiveMemory()` 真正生效之前，v4 方案无法提供真实的内存擦除保证。用户选择保留 M0 UX。
 - **Commit** `aea10a7`
 
 ### M2.2 MainActivity — 启动兜底分支
 
 - **v4 §2.1** 仅在 `usbManager.deviceList.isNotEmpty()` 时调 `deviceViewModel.onUsbAttached(...)`。
 - **本仓库实现** `else` 分支也调 `deviceViewModel.onUsbAttached(null)`（开发期 emulator 没有真实 USB 设备）。
-- **原因** Emulator 没有真实 USB，按 v4 设计每次启动都会立刻显示拔卡覆盖层 + 5s 倒计时；这条兜底让 mock 阶段开发体验顺畅。**M10 接真实 SDK 时这行必须删掉**——届时手机没插卡启动时，App 本就应该停在拔卡态。
+- **原因** Emulator 没有真实 USB，按 v4 设计每次启动都会立刻显示拔卡覆盖层 + 5s 倒计时；这条兜底让 mock 阶段开发体验顺畅。**M11 接真实 SDK 时这行必须删掉**——届时手机没插卡启动时，App 本就应该停在拔卡态。
 - **Commit** `aea10a7`
 
 ---
@@ -95,7 +107,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **v4** SDK 缺位期没有规定调试入口；v4 §3.1 仅在 Splash 的 DISCONNECTED 态放了两个 DEV 按钮。
 - **本仓库实现** 把 M0 单个 `UsbToggleButton` 升级为常驻顶部的 `DevControlPanel`（一列三按钮）：拔插开关 / 模拟未初始化插入→初始化 / 模拟已初始化插入→登录。后两个按钮**先改 mock 卡状态**（`debugSimulateFirstInsert()` / 新增 `debugSimulateInitializedInsert()`），**再 `navigate(Splash){ popUpTo(0) }` 重走真实路由**，从而由 SplashScreen 这一唯一路由权威决定落到 Init 还是 Login。
 - **原因** ① M2.2 兜底分支让启动恒为"已初始化已连接"，Init 流程原本**不可达**、无法验证，必须补 DEV 入口；② 选"改状态 + 重走 Splash"而非直接 `navigate(Init/Login)`，是为了验证真实路由路径（用户明确选此方案），而非绕过它；③ M3.2 曾设想把 DEV 按钮放进 `UsbDisconnectedOverlay`，但该覆盖层 5s 倒计时即 `finishAndRemoveTask()` 自毁，托管需要 CONNECTED 态的入口不现实，故改为独立常驻面板。
-- **遗留** 整组 `DevControlPanel` 及 `DeviceViewModel` 的 `debug*` 方法是 mock 期脚手架，**M10 接真实 FSShell SDK 时连同 MainActivity 的启动兜底 `else` 分支一起删除**。
+- **遗留** 整组 `DevControlPanel` 及 `DeviceViewModel` 的 `debug*` 方法是 mock 期脚手架，**M11 接真实 FSShell SDK 时连同 MainActivity 的启动兜底 `else` 分支一起删除**。
 - **Commit** `dfb8436`
 
 ### M3.4 LoginScreen — 保留 M0 视觉，接通 login，删除不可达的 usbConnected 逻辑
@@ -106,7 +118,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - 删掉 M0 桩里写死的 `isLoading`/`showError`/`delay(1500)` 假登录；改由 `loginState` 驱动：`Loading`→转圈，`Error`→密码框红框 + supportingText 显示 `"${message}（剩余${attemptsLeft}次）"`（锁定态 attemptsLeft=0 时只显示 message），`Success`→`onLoginSuccess()`。
   - 补 doc 的键盘 `ImeAction.Done` → `login`；锁定（`attemptsLeft == 0`）时禁用登录按钮（doc 未明确，本仓库加强）。
 - **删除（判断点 A）** M0 桩里 `val usbConnected = true` 及其 `if (!usbConnected){警告卡}` + 按钮门控是**不可达死代码**——按 M2 决策，DISCONNECTED 由全局 `UsbDisconnectedOverlay` 全屏兜底，人能停在 Login 时 USB 必连。故删除该分支，表头"已连接"指示保留为**静态恒真**（不引入 DeviceViewModel，保持本屏聚焦认证）。
-- **遗留** `loginAttempts` 5 次锁定计数器存于 `AuthViewModel`（沿用 doc §3.2），而 Login 的 AuthViewModel 按 NavBackStackEntry 作用域——**离开再回 Login 或进程重建即清零、锁定失效**。真实安全卡须把失败次数记在硬件，**M10 收口**。另：`initDevice`(M3.3)→`authenticate`(本阶段) 接通后，"设密码→用该密码登录成功"端到端链路至此首次闭环。
+- **遗留** `loginAttempts` 5 次锁定计数器存于 `AuthViewModel`（沿用 doc §3.2），而 Login 的 AuthViewModel 按 NavBackStackEntry 作用域——**离开再回 Login 或进程重建即清零、锁定失效**。真实安全卡须把失败次数记在硬件，**M11 收口**。另：`initDevice`(M3.3)→`authenticate`(本阶段) 接通后，"设密码→用该密码登录成功"端到端链路至此首次闭环。
 - **Commit** `e21906c`
 
 ### M3.4 调整 — 锁定文案改 "身份认证失败，请联系技术人员" 且提前到次数耗尽即显示
@@ -123,7 +135,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - 导航走新增 `onForgotPassword` 回调（NavGraph 跳 Init），延续叶子屏幕回调约定（见"全局约定"），不把 navController 塞进 LoginScreen。
   - 主题 token 深色→浅色映射：`AccentRed→Danger`、`AccentCyan→Accent`、`DarkSurface`→去掉用默认浅色弹框底。
   - **稳健擦卡**：`wipeAndReset(onComplete)` 改为 **wipeAll 完成后**才回调导航；确认框在擦卡 ~2s 期间显示"正在清除数据" loading 并锁定（隐藏按钮、禁外部点关）。
-- **原因（稳健擦卡）** patch 的 fire-and-forget + 立即 `popUpTo(0)` 会销毁 Login 的 NavBackStackEntry → 其 `DeviceViewModel.viewModelScope` 取消 → `wipeAll` 卡在 `delay(2000)` 被取消、擦除不完整。改为"擦完再导航"规避。mock 下虽因直接跳 Init + initDevice 覆盖而暂不出错，但 M10 真擦卡时是 bug。
+- **原因（稳健擦卡）** patch 的 fire-and-forget + 立即 `popUpTo(0)` 会销毁 Login 的 NavBackStackEntry → 其 `DeviceViewModel.viewModelScope` 取消 → `wipeAll` 卡在 `delay(2000)` 被取消、擦除不完整。改为"擦完再导航"规避。mock 下虽因直接跳 Init + initDevice 覆盖而暂不出错，但 M11 真擦卡时是 bug。
 - **Commit** `1278c60`
 
 ### M3.5 MockUsbManager.wipeAll — 升级为整卡擦除（连带清文件/聊天）
@@ -186,7 +198,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **本仓库实现**
   - 创建延续 M5.2 决策走独立 `CreateFolderScreen` 路由（非内联弹窗），此阶段接通 `fileViewModel.createFolder`：3 档单选 `copyMode` 经新增 `Int.toCopyPolicy()` 映射到 `CopyPolicy`；按钮按 `uiState.isLoading` 显示转圈并禁用；`collect operationResult`，`Success`→成功态、`Error`→红字提示。
   - 导入保留 M0 的**来源选择弹窗**（"手机导入" / "U盘导入" 两个 `OutlinedButton`），各自用不同占位文件名+大小调 `importFile`，而非 v4 的单一直接导入。
-- **原因** 创建走独立屏延续 M5.2，避免把流程改造混进本提交；导入留来源选择更贴近产品形态（发送/导入来源分 隐私区 / U盘 / 手机，见 patch "待实现说明 第3条"），mock 期先用占位文件名区分来源，待 M10 SDK + 系统文件选取器落地后替换为真实选取。
+- **原因** 创建走独立屏延续 M5.2，避免把流程改造混进本提交；导入留来源选择更贴近产品形态（发送/导入来源分 隐私区 / U盘 / 手机，见 patch "待实现说明 第3条"），mock 期先用占位文件名区分来源，待 M11 SDK + 系统文件选取器落地后替换为真实选取。
 - **Commit** `9e76749`
 
 ### M5.5 删除确认 — 抽出共享 `DeleteConfirmDialog`，并给文件夹删除补确认
@@ -213,7 +225,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - **导出策略以所在文件夹为准，而非单文件**：`FileDetailScreen` 取 `effectiveCopyPolicy = folder.copyPolicy`，下传给该文件夹内**所有** `FileItemCard`，而非 patch 的 `file.copyPolicy`。**原因**：本仓库数据模型里 `copyPolicy` 实际是**文件夹级**属性——`MockFileSystem` 种子中只有文件夹带策略（folder_1=COPY_PLAIN / folder_2=NO_COPY / folder_3=COPY_ENCRYPTED），而 `file_1…file_5` 全部落在 `FileItem` 默认 `NO_COPY` 上。若照 patch 用 `file.copyPolicy`，所有种子文件都会"不可导出"，与顶栏展示的文件夹策略自相矛盾。产品语义是"文件夹的拷贝策略决定其内文件能否导出"，故以文件夹策略为权威。
   - **增量 1** `FolderCard` 菜单新增"导出文件夹"项（`NO_COPY` 置灰），patch 无此项。
   - **增量 2** 接通 `FileDetailScreen` 顶栏溢出菜单的"导出全部文件"（M0 占位项），按 `effectiveCopyPolicy` 置灰、`files` 为空时禁用。
-  - **导出仍是 mock 占位**：触发后只弹"导出已触发"/"文件夹导出已触发"提示框（含按策略给出的"明文/密文导出"文案），**不做真实文件操作**。真实导出到 U盘/手机需 FSShell SDK + 系统文件 API，见 patch "待实现说明 第3、9条"，**M10 收口**。
+  - **导出仍是 mock 占位**：触发后只弹"导出已触发"/"文件夹导出已触发"提示框（含按策略给出的"明文/密文导出"文案），**不做真实文件操作**。真实导出到 U盘/手机需 FSShell SDK + 系统文件 API，见 patch "待实现说明 第3、9条"，**M11 收口**。
 - **Commit** `74280c2`
 
 ### M5.8 删除全部文件 — v4/patch 未规定，完成 M0 占位项并与删文件夹区分
@@ -282,7 +294,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - **进会话清未读（用户 2026-05-24 要求，v4/patch 均无）**：新增 `MockChatRepository.markContactRead(contactId)`（`copy(unreadCount=0)`）+ `ChatViewModel.markRead`（清后重读 `_contacts`），在 `LaunchedEffect(contactId)` 随 `loadMessages` 一起调。
   - **底部导航真实未读角标**：M0 在 `MainScreen` 通信 Tab 写死 `Badge{Text("3")}`（注释标注"待 M6 替换"）。改为 `MainScreen` 注入同实例 `ChatViewModel`（与内部 `ChatListScreen` 同属 Main NavBackStackEntry），`totalUnread = contacts.sumOf{ it.unreadCount }`，`>0` 才显示且为真实数；`LaunchedEffect(Unit){ loadContacts() }` 使进/返本屏重读单例 → ChatDetail 清未读后角标同步递减/消失。
   - **保留 M0 装饰**（v4 极简版没有）：ECDH 副标题、"已建立端到端加密连接"横幅、双侧 Person 头像、气泡下方 Lock+时间。
-  - **发送/发文件**：文字发送非空可点 + trim；AttachFile 接 mock `sendMessage("[文件] 示例文件.pdf", FILE)`（真实文件选取器按 patch 待实现第3条留 M10）。
+  - **发送/发文件**：文字发送非空可点 + trim；AttachFile 接 mock `sendMessage("[文件] 示例文件.pdf", FILE)`（真实文件选取器按 patch 待实现第3条留 M11）。
   - **长按删除/撤回**：`combinedClickable` 长按 → `messageToDelete` 弹框，删除/撤回（仅 isMine）mock 下都调 `deleteMessage`。
   - **自动滚底**：`rememberLazyListState` + `LaunchedEffect(messages.size){ animateScrollToItem(messages.size) }`；因列表 index 0 是加密横幅，末条索引为 `messages.size`（非 `size-1`）。
   - **模型适配**：`msg.time:String`→本地 `formatMessageTime(timestamp:Long)`(HH:mm)；FILE 气泡优先 `fileName`+`fileSize`（新增本地 `formatFileSize`，因 FilesScreen 的同名函数是 file-private 不可跨文件复用），缺省回退 `content`；补 `AUDIO` 分支（v4 有，mock 下不可达，为完整保留）。
@@ -328,7 +340,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **承接上文 M3.3 测试设施** 原实现把"模拟拔出/插入 USB"、"模拟未初始化插入 → 初始化"、"模拟已初始化插入 → 登录"三项 DEV 操作以三个常驻胶囊按钮显示在顶部居中。
 - **本仓库实现** 保留三项 DEV 能力与调用链不变，仅把 UI 收束为左上角一个圆形 `MoreVert` 悬浮按钮；点击后通过 `DropdownMenu` 展开三项操作。按钮使用 `statusBarsPadding()` 避开状态栏，仍覆盖在 `NavGraph` / `UsbDisconnectedOverlay` 之上，便于调试拔卡场景。
 - **原因** 三个常驻按钮遮挡真实页面，影响验收与截图观察；收束为单入口后默认只占 44dp 左上角区域，DEV 操作仍随时可达。
-- **遗留** 该入口仍是 mock 期脚手架；M10 接真实 FSShell SDK 时与 `MainActivity` 启动兜底分支、`DeviceViewModel.debug*` 方法一起删除。
+- **遗留** 该入口仍是 mock 期脚手架；M11 接真实 FSShell SDK 时与 `MainActivity` 启动兜底分支、`DeviceViewModel.debug*` 方法一起删除。
 - **Commit** `08c223a`
 
 ### M6.4 跟进 — 删除/撤回消息后重算联系人列表摘要
@@ -372,7 +384,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - "从手机相册选择二维码图片"按钮维持 M0 no-op 占位（patch 未规定）；如后续要做需引入 `ActivityResultContracts.PickVisualMedia` + `BarcodeScanner.process(InputImage.fromBitmap(...))`。
   - `addContact` 解析 `substringAfter("sn=").substringBefore(",")` 对非法 QR 不防御（M6.1 已记），M6.8 维持。若扫到非密盾 QR，会用整串后段当 deviceId 创建联系人，靠"取消"按钮逃生。
   - 被永久拒绝相机权限（"不再询问"）的兜底（跳系统设置）未做；当前表现为"授权相机"按钮无效，可后续加 `Settings.ACTION_APPLICATION_DETAILS_SETTINGS` intent。
-  - 阅后即焚、连接验证（v4 patch 卡片提到的"验证来源、IPv6 地址及签名"）仍是 mock 期文案，未实接 SDK，留待 M10+。
+  - 阅后即焚、连接验证（v4 patch 卡片提到的"验证来源、IPv6 地址及签名"）仍是 mock 期文案，未实接 SDK，留待 M11+。
 - **Commit** `2244876`
 
 ### M6.7 跟进 — "重新生成" 改为原地刷新（不退回 pre-gen 卡片）
@@ -402,7 +414,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - **保留"关于密盾"对话框**（M0 装饰，v4/patch 无）：仅展示文案，无误导；与其他保留 M0 装饰（M2 `UsbDisconnectedOverlay`、M6.2 自定义头部）同一类决策。
   - **保留"自动锁定 5 分钟"行**（用户决策"实现"，M7.5 落地）：M7.1 范围内保留为占位（onClick 空），M7.5 把 `DeviceViewModel.INACTIVITY_TIMEOUT_MS` 改成可调 state 并接弹框选项。
   - **保留"密钥更新 / 设备绑定管理"行**（占位）：onClick 空，接线由 M7.4/M7.3 完成。
-  - **设备信息字段对齐**：M0 写死 `SC-2026051300001 / MI-X8F2K9A3 / 已绑定 / v1.0.3 / 16GB(明文)+32GB(加密) / T620`，与 `MockUsbManager.simulateInsert` 实际产出（`deviceId=MOCK_DEVICE_001` / boundPhoneId 视 initDevice 时的 bindDevice）不符。改为读 `deviceStatus.deviceId.ifEmpty{未知}` + 真实绑定状态 + 容量保持 "-- / 32 GB" 占位（M10 SDK 接入后读卡）；删除固件版本/芯片型号/明文区容量等 mock 无对应字段的行。
+  - **设备信息字段对齐**：M0 写死 `SC-2026051300001 / MI-X8F2K9A3 / 已绑定 / v1.0.3 / 16GB(明文)+32GB(加密) / T620`，与 `MockUsbManager.simulateInsert` 实际产出（`deviceId=MOCK_DEVICE_001` / boundPhoneId 视 initDevice 时的 bindDevice）不符。改为读 `deviceStatus.deviceId.ifEmpty{未知}` + 真实绑定状态 + 容量保持 "-- / 32 GB" 占位（M11 SDK 接入后读卡）；删除固件版本/芯片型号/明文区容量等 mock 无对应字段的行。
   - **Helper 改 v4 命名**：M0 的 `DeviceInfoRow / SettingItem` 改名 `SettingsInfoItem / SettingsActionItem`，新增 `SettingsSectionHeader`（带 `color` 参数，危险分区用 Danger、设备信息分区用 Primary、其余用 TextSecondary）。
   - **TopBar 不加**：MainScreen 已含 BottomBar，无 TopBar；Settings Tab 沿用 M0 内联 `Text("设置")` 标题（v4 §7.1 是全屏独立路由，故有 TopAppBar；本仓库 Settings 是 Tab，加 TopAppBar 与其他 Tab 不一致且占空间）。
 - **遗留**
@@ -433,7 +445,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - **一键清理副本上下游影响**：清完不导航、用户留在 Settings；返回 Files / Chat Tab 时各自 `LaunchedEffect{loadFolders()/loadContacts()}` 重读单例（M5.3 / M6.1 偏离）→ 列表自然变空。Settings 本屏不显示文件/聊天列表，故无需额外刷新。
 - **遗留**
   - 没有"取消时也清状态"以外的回滚——一旦点确认、密码正确，清理无法撤销（与产品本意一致）。
-  - 处理失败（authenticate 网络异常等非"密码错误"场景）当前统一报"密码错误"。mock 期 `authenticate` 只可能返 `password mismatch`，所以语义无误；M10 真 SDK 接入时应按真实异常类型分支显示。
+  - 处理失败（authenticate 网络异常等非"密码错误"场景）当前统一报"密码错误"。mock 期 `authenticate` 只可能返 `password mismatch`，所以语义无误；M11 真 SDK 接入时应按真实异常类型分支显示。
   - 一键清理无 Snackbar/Toast 成功反馈，仅靠弹框关闭。Settings 内层无 SnackbarHost（Tab 内容、无 Scaffold），加全局 Snackbar 需上提到 MainScreen 改架构，**本里程碑不做**。
 - **Commit** `4796306`
 
@@ -449,7 +461,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
     点击即弹密码确认框；成功后 deviceStatus 经由 StateFlow 推到设备信息卡 + 同一行 ActionItem，整页同步翻转。
   - **`bindAction` 捕获时机**：弹框打开时按当前 `isBound` 捕获 `bindAction = !isBound`，避免成功后 deviceStatus 变化导致弹框文案/按钮颜色在 dismiss 动画期间抖动。
   - **弹框样式**：与 M7.2 一致的密码 OutlinedTextField + 内联错误 + loading spinner + 处理中禁用 dismiss。confirm 按钮颜色随 bindAction 切（绑定=Accent，解绑=Warning），与上方 ActionItem 图标颜色一致。
-  - **认证未联动 boundPhoneId**：mock 期 `MockUsbManager.authenticate` 仍只校验 storedPassword，**不**校验 boundPhoneId——即用户在 A 手机绑定后插入 B 手机，仍能用同一密码登录。这是 M2/M3 的既有现状，M7.3 不扩张范围；真 SDK 接入时（M10）需在 authenticate 处补 `boundPhoneId == currentPhoneId || boundPhoneId == null` 校验。
+  - **认证未联动 boundPhoneId**：mock 期 `MockUsbManager.authenticate` 仍只校验 storedPassword，**不**校验 boundPhoneId——即用户在 A 手机绑定后插入 B 手机，仍能用同一密码登录。这是 M2/M3 的既有现状，M7.3 不扩张范围；真 SDK 接入时（M11）需在 authenticate 处补 `boundPhoneId == currentPhoneId || boundPhoneId == null` 校验。
 - **遗留**
   - 解绑/绑定的安全卡 boundPhoneId 字段是 `Settings.Secure.ANDROID_ID`——Android 8.0+ 该值按 app 签名 + 用户隔离，重装会变；mock 期可接受，真产品需配合 SDK 出货时的唯一手机标识方案。
   - 无"绑定到不同设备时强制清空数据"流程，patch/v4 均未要求；如需可后续与 wipeUserData 串联。
@@ -495,7 +507,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - **可选项 `TIMEOUT_OPTIONS_MIN = [1, 3, 5, 10, 15, 30, 60]`**：覆盖常见 1 / 5 / 10 / 30 + 中间挡位，7 项让滚轮有可滚动手感（少于 5 项会显得呆板）。
   - **暂选/提交分离**：`pickedTimeout` 在 dialog 打开期间存活、随滚动更新；只有点"确定"才 `deviceViewModel.setInactivityTimeoutMinutes(pickedTimeout)`。取消/点外 → 丢弃，VM 不变。打开 dialog 时 `pickedTimeout = timeoutMin` 重置为当前 VM 值。
 - **遗留**
-  - **无持久化**：mock 期重启回 5 分钟。M10 接 SharedPreferences/DataStore：只需把 `MutableStateFlow(DEFAULT_TIMEOUT_MIN)` 换成从存储读初值 + `setInactivityTimeoutMinutes` 写存储，公开接口与 UI 不动。
+  - **无持久化**：mock 期重启回 5 分钟。M11 接 SharedPreferences/DataStore：只需把 `MutableStateFlow(DEFAULT_TIMEOUT_MIN)` 换成从存储读初值 + `setInactivityTimeoutMinutes` 写存储，公开接口与 UI 不动。
   - **不在登录态外生效**：超时计时仅在 `isAuthenticated.value == true` 时由 `onAppBackground()` 触发；未登录态调超时无意义。
   - **滚轮 UX 边界**：极少项（≤3）时上下"空白行"会显得突兀；7 项是经验值。如未来扩展到含"永不"选项，需特殊处理（"永不"通常映射到 0 或 `Int.MAX_VALUE`，得在 `resetInactivityTimer` 加分支不启 job）。
   - **WheelTimePicker 形参 `options` IDE 警告"始终是 TIMEOUT_OPTIONS_MIN"**：保留形参便于后续在改密码超时/QR 有效期等场景复用；轻微 IDE noise 接受。
@@ -518,17 +530,17 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **本仓库实现**
   - **`app/build.gradle.kts` release buildType**：`isMinifyEnabled = true`（v4 验收第 3 条隐含要求，doc 未明写），`isShrinkResources` 保持隐式 false（资源剥离误删动态加载资源风险 > 边际 APK-size 收益）。
   - **`app/proguard-rules.pro` 写最小集**：
-    - 保留 `-keep class seczure.fsudisk.** { *; }` 占位规则（M10 接入 FSShell SDK 前包不存在，R8 静默忽略；保留作为前瞻护栏，少一件 M10 遗忘事）
+    - 保留 `-keep class seczure.fsudisk.** { *; }` 占位规则（M11 接入 FSShell SDK 前包不存在，R8 静默忽略；保留作为前瞻护栏，少一件 M11 遗忘事）
     - 保留 `-assumenosideeffects ... Log.d|v|i`（仓库当前零 Log 调用，规则前瞻；**约定：未来生产诊断日志须用 `Log.w`/`Log.e` 或独立 logging facade，d/v/i 会被 R8 静默剥离**）
-    - **舍弃 `-keep class com.example.midun.data.** { *; }`**：grep 全仓零反射 / 零序列化（无 Gson/Moshi/kotlinx.serialization/@Serializable/Class.forName），data 包整包 keep 等于禁用 R8 对业务核心的工作，无收益且会掩盖未来 Hilt 接线被混淆破坏的真实问题。M10 接 SDK 若引入 JNI 按全限定名查 data class，再针对性 keep 即可。
+    - **舍弃 `-keep class com.example.midun.data.** { *; }`**：grep 全仓零反射 / 零序列化（无 Gson/Moshi/kotlinx.serialization/@Serializable/Class.forName），data 包整包 keep 等于禁用 R8 对业务核心的工作，无收益且会掩盖未来 Hilt 接线被混淆破坏的真实问题。M11 接 SDK 若引入 JNI 按全限定名查 data class，再针对性 keep 即可。
     - **未预先塞 Hilt / CameraX / MLKit / Compose / Navigation keep 规则**：这五个库通过 AAR 内置 consumer rules 向 R8 注入 keep，`assembleRelease` 已验证 R8 干净通过，无需手写。
   - **`android.lint { disable += "NullSafeMutableLiveData" }`**：AGP 8.7.3 + Kotlin 2.1.21 组合下，`NonNullableMutableLiveDataDetector` 在新版 Kotlin analysis API 下抛 `IncompatibleClassChangeError`，导致 `lintVitalAnalyzeRelease` 必崩。本仓库零 LiveData 使用（全 StateFlow），detector 是纯 false-positive，安全禁用。AGP 8.8+ 修复后可移除该 disable。
 - **验收**
   - `./gradlew assembleRelease` 干净通过（R8 / lint / 打包全绿）
   - APK 体积：debug 42.9 MB → release minified 22.4 MB（缩减 ~48%）
 - **遗留**
-  - Release APK 当前未签名（`app-release-unsigned.apk`）。真签名走 M10 / 上架范围。
-  - 未做真机装机验证（emulator/device 在 M9 网络层一并跑）。若 R8 在运行时仍有 missing-class 表现（特别是 MLKit 扫码场景），需要按 logcat 报错补 keep。
+  - Release APK 当前未签名（`app-release-unsigned.apk`）。真签名走 M11 / 上架范围。
+  - 未做真机装机验证（emulator/device 在 M10 网络层一并跑）。若 R8 在运行时仍有 missing-class 表现（特别是 MLKit 扫码场景），需要按 logcat 报错补 keep。
 - **Commit** `9bad006`（M8 全部动作；docs 偏离记录由本条本身提交）
 
 <!-- 后续里程碑的偏离继续在下面追加 -->
