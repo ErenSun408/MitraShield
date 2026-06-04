@@ -543,4 +543,24 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - 未做真机装机验证（emulator/device 在 M10 网络层一并跑）。若 R8 在运行时仍有 missing-class 表现（特别是 MLKit 扫码场景），需要按 logcat 报错补 keep。
 - **Commit** `9bad006`（M8 全部动作；docs 偏离记录由本条本身提交）
 
+## M9 — HomeScreen 接通
+
+### M9 整体 — 首页 dashboard 是 v4 外增量，全程无 v4 spec 可对照
+
+- **v4 设计** v4 doc 的 `HomeScreen`（§4.1）是底部导航**壳**（嵌套 NavHost），本仓库 M4 已用 `MainScreen`（`selectedTab + when` 四 Tab）取代（见本文「M4」节）。**v4 从未设计「首页 dashboard」**——当前 `screen/HomeScreen.kt`（设备状态卡 + 快捷功能 + 最近操作）是 M0 脚手架阶段本仓库自加的"首页 Tab"内容，纯硬编码。
+- **本仓库实现** M9 把这张 v4 外的首页接到真实 mock 数据。因无 v4 spec，所有字段来源/占位/语义由项目自定，逐子阶段记录于本节。里程碑编号见本文顶部「里程碑重编号」节（M9 = HomeScreen，2026-06-04 用户决策）。
+
+### M9.1 — 设备状态卡 + 快捷功能副标题接线
+
+- **现状** 设备卡 SN/状态/容量/已用/文件数全写死（`SC-2026051300001` / `已连接` / `16GB·8.2GB·61个`）；快捷功能副标题写死（`4个文件夹` / `2条新消息`）。
+- **本仓库实现** `HomeScreen` 用 `hiltViewModel()` 注入 `DeviceViewModel`/`FileViewModel`/`ChatViewModel`（落在 Main 的 NavBackStackEntry scope，与各 Tab 同实例；底层三个 Mock 为 `@Singleton`，数据天然一致）。`LaunchedEffect(Unit)` 重读 `loadFolders()`/`loadContacts()`，使其它 Tab 增删即时反映到首页。
+  - **SN** → `device.deviceId.ifEmpty{"未知"}`（对齐 M7 SettingsScreen 设备信息策略；mock 期 = `MOCK_DEVICE_001`）
+  - **连接状态** → `device.status`（AUTHENTICATED/CONNECTED → 绿「已连接」，否则红「未连接」；首页只在登录后显示，拔卡有全局 overlay 兜底）
+  - **文件数量** → 真实计数：新增 `MockFileSystem.getTotalFileCount()` + `FileUiState.totalFileCount`（`loadFolders` 时一并算）
+  - **文件夹数副标题** → `fileState.folders.size`；**未读数副标题** → `contacts.sumOf{ it.unreadCount }`（与 MainScreen 底部角标同源），0 时显示「暂无新消息」
+- **占位（无 mock 数据源）** 存储容量 `-- / 32 GB`、已用空间 `--`（DeviceInfo 无容量字段；对齐 M7 设备信息占位）。**M11 接 FSShell SDK 读真实卡容量**（加密安全卡容量是否可读取决于 FSShell 是否暴露该接口，M11 接入时确认）。
+- **本阶段不动** 一键清理弹框（仍为 M0 假操作，留 M9.2 接 `wipeUserData`）；最近操作日志卡（留 M9.3）。
+- **关键事实记录** 经搜 v4 doc + patch 全文，**「操作日志」在两文档中无任何功能或数据层设计**（命中均为「聊天记录」「会议记录.docx」「移除 Log 打印」等无关项）。最近操作卡的「操作日志」字样仅是 M0 自加 UI + 一键清理弹框的被清项文案。用户 2026-06-04 决策：M9.3 将其作为 **v4 外新功能真实实现**（内存版操作日志数据层，mock 期不持久化，M11 写安全卡 EMMC）。
+- **Commit** `5533042`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
