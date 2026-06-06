@@ -693,10 +693,16 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - **「删除」vs「撤回」语义分离**：ChatDetailScreen 长按菜单——「删除」→ `deleteMessage`（仅删本机视图，不通知对端，所有消息可用）；「撤回」→ `recallMessage`（仅自己消息可用，联网删双方）。原本两者都调 `deleteMessage`。
   - **离线退化**：`recallMessage` 无活动会话时退化为本地删除（同删除）。
   - **`writeFrame` 加 id 参**；`generateMessageId()` = `msg_<ts>_<6hex>`（两端用发送方 id，撤回引用一致）。IDENTITY/RECALL 帧的 `id` 为一次性占位（接收方不据此入库）。
-- **未做 / 后续**
-  - **无「已撤回」墓碑**：撤回后两端直接删除气泡（不留「你撤回了一条消息」提示）。v4 无要求，保持简单；如需 WeChat 式墓碑后续加。
+- **后续/补充**
   - 跨端 msg id 理论可在同毫秒撞车，已加 6hex 随机降概率；会话内引用足够。
 - **验证** `:app:compileDebugKotlin` + `:app:testDebugUnitTest` BUILD SUCCESSFUL。撤回双删的真机效果留 M10.6 联调。
 - **Commit** `951858b`
+
+#### M10.5 补充 — 已撤回墓碑（`4db15cf`）
+- **改为墓碑而非删除**（用户 2026-06-06 追加）：撤回不再整条删除，而是 `ChatMessage` 加 `recalled: Boolean`，`MockChatRepository.markRecalled` 标记 + **抹掉原文**（content=""、fileName/fileSize=null、type=TEXT）。三处撤回路径（发送方本地、接收方收 RECALL、离线退化）由 `deleteMessage` 改 `markRecalled`。
+- **安全考量**：撤回须让内容从存储消失（不只 UI 隐藏）——密盾语境下原文不应残留内存；搜索（按 content）/预览自然不再命中。
+- **渲染**：ChatDetailScreen 对 `msg.recalled` 渲染居中灰色 `RecalledTombstone` 替代气泡——撤回方「你撤回了一条消息」、对端「对方撤回了一条消息」（按 isMine）。墓碑无长按菜单（终态，不可再撤/删墓碑本身；WeChat 可删墓碑，暂从简）。
+- **会话预览**：最后一条被撤回时列表预览显示「[消息已撤回]」（`updateContactPreview` 加分支），避免显示空或残留原文。
+- **「删除」不变**：仍整条移除本机视图（不通知对端、无墓碑）。删除 vs 撤回语义保持分离。
 
 <!-- 后续里程碑的偏离继续在下面追加 -->
