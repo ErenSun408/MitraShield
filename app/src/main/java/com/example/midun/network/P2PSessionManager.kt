@@ -46,6 +46,12 @@ class P2PSessionManager @Inject constructor() {
     /** 当前会话；M10.3 由 ChatViewModel 观察以驱动连接状态。 */
     val activeSession: StateFlow<P2PSession?> = _activeSession.asStateFlow()
 
+    /** 连接状态（单例=唯一真相，跨屏一致）。M10.3 由 ChatViewModel 转发给 UI。 */
+    private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
+    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+
+    enum class ConnectionState { DISCONNECTED, LISTENING, CONNECTING, CONNECTED, FAILED }
+
     /** A 侧临时密钥对：generateConnectionInfo 生成、startListening 握手时消费。 */
     private var listenerKeyPair: KeyPair? = null
 
@@ -78,24 +84,37 @@ class P2PSessionManager @Inject constructor() {
     /** 监听方（A，生成二维码）：阻塞等待对端连入并完成 ECDH 握手。 */
     suspend fun startListening(port: Int = 8888, onConnected: (P2PSession) -> Unit) {
         withContext(Dispatchers.IO) {
-            val server = ServerSocket(port)
-            serverSocket.value = server
-            val socket = server.accept()
-            val session = performListenerHandshake(socket)
-            _activeSession.value = session
-            onConnected(session)
+            try {
+                val server = ServerSocket(port)
+                serverSocket.value = server
+                _connectionState.value = ConnectionState.LISTENING
+                val socket = server.accept() // 阻塞；disconnect() 关闭 server 会以异常打断
+                val session = performListenerHandshake(socket)
+                _activeSession.value = session
+                _connectionState.value = ConnectionState.CONNECTED
+                onConnected(session)
+            } catch (e: Exception) {
+                // accept 被 disconnect() 主动关闭打断属正常拆除，不标 FAILED
+                if (_connectionState.value != ConnectionState.CONNECTED) {
+                    _connectionState.value = ConnectionState.DISCONNECTED
+                }
+                throw e
+            }
         }
     }
 
     /** 连接方（B，扫码）：用二维码里的连接信息主动连接监听方并完成 ECDH 握手。 */
     suspend fun connectTo(info: ConnectionInfo, port: Int = 8888): Result<P2PSession> =
         withContext(Dispatchers.IO) {
+            _connectionState.value = ConnectionState.CONNECTING
             try {
                 val socket = Socket(info.ipv6, port)
                 val session = performConnectorHandshake(socket, info.tempPublicKey)
                 _activeSession.value = session
+                _connectionState.value = ConnectionState.CONNECTED
                 Result.success(session)
             } catch (e: Exception) {
+                _connectionState.value = ConnectionState.FAILED
                 Result.failure(e)
             }
         }
@@ -147,6 +166,7 @@ class P2PSessionManager @Inject constructor() {
         _activeSession.value = null
         serverSocket.value = null
         listenerKeyPair = null
+        _connectionState.value = ConnectionState.DISCONNECTED
     }
 
     /** 遍历网卡取第一个非回环、非 link-local 的 IPv6 地址；取不到回退 ::1。 */

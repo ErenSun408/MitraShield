@@ -102,17 +102,6 @@ class MockChatRepository @Inject constructor() {
         mockMessages.clear()
     }
 
-    fun generateQrContent(): String {
-        val mockData = mapOf(
-            "ver" to 1,
-            "sn" to "MOCK_SN_001",
-            "ipv6" to "fe80::1",
-            "sid" to System.currentTimeMillis().toString(16),
-            "tpk" to "MOCK_PUBLIC_KEY_BASE64"
-        )
-        return mockData.entries.joinToString(",") { "${it.key}=${it.value}" }
-    }
-
     private fun updateContactPreview(contactId: String) {
         val index = mockContacts.indexOfFirst { it.id == contactId }
         if (index == -1) return

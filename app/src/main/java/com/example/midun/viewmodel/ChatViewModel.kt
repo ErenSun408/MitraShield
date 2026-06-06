@@ -8,6 +8,8 @@ import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageType
 import com.example.midun.data.model.OperationType
+import com.example.midun.network.ConnectionInfo
+import com.example.midun.network.P2PSessionManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,7 +23,8 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val chatRepo: MockChatRepository,
-    private val operationLog: MockOperationLog
+    private val operationLog: MockOperationLog,
+    private val p2pManager: P2PSessionManager
 ) : ViewModel() {
 
     // 联系人列表：以 MockChatRepository（单例）为唯一数据源。
@@ -37,11 +40,8 @@ class ChatViewModel @Inject constructor(
 
     private val _currentContactId = MutableStateFlow<String?>(null)
 
-    // 连接状态：mock 期占位，真实 SDK 接入后驱动连接指示（M6 UI 暂未消费）。
-    private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
-    val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
-
-    enum class ConnectionState { DISCONNECTED, CONNECTING, CONNECTED }
+    // 连接状态：转发 P2PSessionManager（单例）的真实连接状态，跨屏一致（M10.3）。
+    val connectionState: StateFlow<P2PSessionManager.ConnectionState> = p2pManager.connectionState
 
     // 联系人搜索（patch §M6 改动1）
     private val _searchQuery = MutableStateFlow("")
@@ -146,14 +146,62 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun generateQrContent(): String = chatRepo.generateQrContent()
+    /**
+     * A（出码方）：准备连接——关旧会话 → 生成真实 ConnectionInfo（含本机 IPv6 + 临时 ECDH 公钥）
+     * → 后台开始监听对端连入。返回 JSON 供渲染二维码。每次重新出码都会重置会话。
+     */
+    suspend fun prepareConnection(): String {
+        p2pManager.disconnect() // 关旧 ServerSocket/会话，避免端口占用与状态残留
+        val info = p2pManager.generateConnectionInfo()
+        listenForPeer()
+        return info.toJson()
+    }
 
-    /** 扫码建联：从二维码内容解析 deviceId，加备注新建联系人（patch §M6 改动4）。 */
-    fun addContact(qrContent: String, remark: String) {
-        val deviceId = qrContent.substringAfter("sn=").substringBefore(",")
+    /** 后台监听对端连入（A=监听方）。握手成功后 connectionState 转 CONNECTED。 */
+    private fun listenForPeer() {
+        viewModelScope.launch {
+            // 监听异常（含 disconnect 主动打断 accept）由 manager 内部归位状态，这里吞掉即可
+            runCatching {
+                p2pManager.startListening { /* M10.4：握手成功后交换身份、建联系人、收发消息 */ }
+            }
+        }
+    }
+
+    /**
+     * B（扫码方）：解析二维码 → 真实 TCP connectTo + ECDH 握手 → **成功才**加联系人并记日志。
+     * 失败经 onError 反馈，不创建联系人（偏离 M6.8「先加联系人」的 mock 行为）。
+     */
+    fun connectToContact(
+        qrContent: String,
+        remark: String,
+        onConnected: () -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val info = runCatching { ConnectionInfo.fromJson(qrContent) }.getOrNull()
+        if (info == null) {
+            onError("二维码格式无效，请确认扫描的是密盾连接码")
+            return
+        }
+        viewModelScope.launch {
+            p2pManager.connectTo(info)
+                .onSuccess {
+                    addContact(info, remark)
+                    onConnected()
+                }
+                .onFailure { onError(it.message ?: "连接失败，请确认对方正在等待且处于移动数据网络") }
+        }
+    }
+
+    /** 停止当前连接/监听（离开扫码屏且未连上时调用，释放 ServerSocket）。 */
+    fun stopConnection() {
+        p2pManager.disconnect()
+    }
+
+    /** 连接成功后新建联系人：deviceId 取对端 deviceSn，加备注。 */
+    private fun addContact(info: ConnectionInfo, remark: String) {
         val newContact = Contact(
             id = "c_${System.currentTimeMillis()}",
-            deviceId = deviceId,
+            deviceId = info.deviceSn,
             remark = remark,
             lastMessageTime = System.currentTimeMillis()
         )

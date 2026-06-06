@@ -34,6 +34,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -65,17 +67,32 @@ fun QrCodeScreen(
     var scannedContent by remember { mutableStateOf("") }
     var showRemarkDialog by remember { mutableStateOf(false) }
 
+    // 真实连接状态（M10.3）：源自 P2PSessionManager 单例，A 出码后显示等待/已连接。
+    val connectionState by chatViewModel.connectionState.collectAsStateWithLifecycle()
+
+    // 离开本屏时：若未建立连接，停止监听释放 ServerSocket；已连接则保留会话供后续聊天（M10.4）。
+    DisposableEffect(Unit) {
+        onDispose {
+            if (chatViewModel.connectionState.value != ConnectionState.CONNECTED) {
+                chatViewModel.stopConnection()
+            }
+        }
+    }
+
     LaunchedEffect(qrGenerated) {
         if (qrGenerated) {
             while (countdown > 0) {
                 delay(1000)
                 countdown--
             }
-            // 过期：清状态与图像，回到 pre-gen，下次需重新点按钮渲染。
+            // 过期：清状态与图像，回到 pre-gen，下次需重新点按钮渲染。未连上则一并停监听。
             qrGenerated = false
             countdown = 120
             qrBitmap = null
             qrContent = null
+            if (chatViewModel.connectionState.value != ConnectionState.CONNECTED) {
+                chatViewModel.stopConnection()
+            }
         }
     }
 
@@ -83,7 +100,8 @@ fun QrCodeScreen(
     // 也能复用同一渲染路径——原地刷新 bitmap/content + 重置倒计时，不退回 pre-gen 卡片。
     LaunchedEffect(isGenerating) {
         if (isGenerating) {
-            val content = chatViewModel.generateQrContent()
+            // M10.3：生成真实 ConnectionInfo（含本机 IPv6 + 临时 ECDH 公钥）并后台开始监听对端连入。
+            val content = chatViewModel.prepareConnection()
             val bitmap = runCatching {
                 withContext(Dispatchers.Default) {
                     val pngBytes = QRCode.ofSquares()
@@ -159,11 +177,12 @@ fun QrCodeScreen(
                         Column(Modifier.padding(20.dp)) {
                             Text("连接信息", fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(12.dp))
-                            // 字段对齐 MockChatRepository.generateQrContent() 输出的 mock schema。
-                            InfoRow("设备SN", "MOCK_SN_001")
-                            InfoRow("IPv6地址", "fe80::1")
+                            // M10.3：点生成时实时取真实值（本机 IPv6、随机会话 ID、临时 ECDH 公钥），
+                            // pre-gen 卡仅说明将包含哪些字段。
+                            InfoRow("设备SN", "本机安全卡")
+                            InfoRow("IPv6地址", "生成时获取本机地址")
                             InfoRow("会话ID", "随机生成")
-                            InfoRow("临时公钥", "MOCK_PUBLIC_KEY_BASE64")
+                            InfoRow("临时公钥", "P-256 临时 ECDH 公钥")
                             InfoRow("有效期", "120秒")
                         }
                     }
@@ -235,6 +254,23 @@ fun QrCodeScreen(
                         )
                     }
 
+                    Spacer(Modifier.height(16.dp))
+
+                    // 真实连接状态（M10.3）：等待对端扫码连入 → 已建立加密连接
+                    when (connectionState) {
+                        ConnectionState.CONNECTED -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CheckCircle, null, tint = Success, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("已建立加密连接", color = Success, fontWeight = FontWeight.Medium)
+                        }
+                        ConnectionState.LISTENING -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp), color = Primary)
+                            Spacer(Modifier.width(8.dp))
+                            Text("等待对方扫码连接…", color = TextSecondary, fontSize = 13.sp)
+                        }
+                        else -> {}
+                    }
+
                     Spacer(Modifier.height(20.dp))
 
                     OutlinedButton(
@@ -288,15 +324,18 @@ fun QrCodeScreen(
 
     if (showRemarkDialog) {
         var remark by remember { mutableStateOf("") }
+        var connecting by remember { mutableStateOf(false) }
+        var connectError by remember { mutableStateOf<String?>(null) }
         AlertDialog(
             // 强制填备注：点外部 / 返回键不关闭弹框（按用户决策，仍提供"取消"按钮逃生口）。
+            // 连接进行中也禁止点外部关闭。
             onDismissRequest = { /* no-op：禁止点外部关闭 */ },
             icon = { Icon(Icons.Default.PersonAdd, null, tint = Primary) },
             title = { Text("为联系人添加备注") },
             text = {
                 Column {
                     Text(
-                        "设备ID：${scannedContent.take(40)}${if (scannedContent.length > 40) "..." else ""}",
+                        "连接码：${scannedContent.take(40)}${if (scannedContent.length > 40) "..." else ""}",
                         color = TextSecondary,
                         fontSize = 12.sp
                     )
@@ -306,30 +345,60 @@ fun QrCodeScreen(
                         onValueChange = { remark = it },
                         label = { Text("备注名称（如：张三）") },
                         singleLine = true,
+                        enabled = !connecting,
                         modifier = Modifier.fillMaxWidth()
                     )
+                    connectError?.let {
+                        Spacer(Modifier.height(8.dp))
+                        Text(it, color = Danger, fontSize = 12.sp)
+                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        chatViewModel.addContact(scannedContent, remark.trim())
-                        showRemarkDialog = false
-                        scanned = false
-                        scannedContent = ""
-                        onScanConnected()
+                        // M10.3：先真实 connectTo + ECDH 握手，成功才建联系人并返回。
+                        connecting = true
+                        connectError = null
+                        chatViewModel.connectToContact(
+                            qrContent = scannedContent,
+                            remark = remark.trim(),
+                            onConnected = {
+                                connecting = false
+                                showRemarkDialog = false
+                                scanned = false
+                                scannedContent = ""
+                                onScanConnected()
+                            },
+                            onError = { msg ->
+                                connecting = false
+                                connectError = msg
+                            }
+                        )
                     },
-                    enabled = remark.isNotBlank(),
+                    enabled = remark.isNotBlank() && !connecting,
                     colors = ButtonDefaults.buttonColors(containerColor = Primary)
-                ) { Text("确认建链") }
+                ) {
+                    if (connecting) {
+                        CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("连接中…")
+                    } else {
+                        Text("确认建链")
+                    }
+                }
             },
             dismissButton = {
-                // 偏离 patch：patch 无取消按钮（强制填写），实测对误扫无逃生口。
-                TextButton(onClick = {
-                    showRemarkDialog = false
-                    scanned = false        // 允许重扫
-                    scannedContent = ""
-                }) { Text("取消", color = TextSecondary) }
+                // 偏离 patch：patch 无取消按钮（强制填写），实测对误扫无逃生口。连接中禁用。
+                TextButton(
+                    onClick = {
+                        chatViewModel.stopConnection() // 放弃本次连接尝试
+                        showRemarkDialog = false
+                        scanned = false        // 允许重扫
+                        scannedContent = ""
+                    },
+                    enabled = !connecting
+                ) { Text("取消", color = TextSecondary) }
             }
         )
     }
