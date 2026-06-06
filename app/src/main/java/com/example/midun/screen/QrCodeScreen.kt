@@ -164,7 +164,26 @@ fun QrCodeScreen(
                 }
             }
 
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(16.dp))
+
+            // 网络环境提示（v4 §9.1）：WiFi 下家用路由器常拦截入站 IPv6，建议移动数据。
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Warning.copy(alpha = 0.12f))
+            ) {
+                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.SignalCellularAlt, null, tint = Warning, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "建议双方使用移动数据（4G/5G）：WiFi 下家用路由器常拦截入站连接，易失败。",
+                        fontSize = 12.sp,
+                        color = TextSecondary
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
 
             if (selectedTab == 0) {
                 // 生成二维码

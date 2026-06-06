@@ -11,6 +11,7 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.io.PrintWriter
 import java.net.Inet6Address
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
@@ -137,7 +138,10 @@ class P2PSessionManager @Inject constructor(
         withContext(Dispatchers.IO) {
             _connectionState.value = ConnectionState.CONNECTING
             try {
-                val socket = Socket(info.ipv6, port)
+                // 显式连接超时：不可达/对方未监听时快速失败（默认无超时会卡到系统级 ~分钟）。
+                val socket = Socket().apply {
+                    connect(InetSocketAddress(info.ipv6, port), CONNECT_TIMEOUT_MS)
+                }
                 val handshaken = performConnectorHandshake(socket, info.tempPublicKey)
                 val contactId = bindContact(info.deviceSn, remark)
                 val session = handshaken.copy(contactId = contactId)
@@ -358,6 +362,8 @@ class P2PSessionManager @Inject constructor(
         private const val IDENTITY_TYPE = "IDENTITY"
         /** 撤回控制帧的 type 值（payload=目标消息 id）。 */
         private const val RECALL_TYPE = "RECALL"
+        /** TCP 连接超时（ms）：不可达/对方未监听时快速失败。 */
+        private const val CONNECT_TIMEOUT_MS = 10_000
     }
 }
 

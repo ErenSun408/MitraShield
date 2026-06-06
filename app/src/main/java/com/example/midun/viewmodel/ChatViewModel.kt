@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -39,6 +40,12 @@ class ChatViewModel @Inject constructor(
 
     // 连接状态：转发 P2PSessionManager（单例）的真实连接状态，跨屏一致（M10.3）。
     val connectionState: StateFlow<P2PSessionManager.ConnectionState> = p2pManager.connectionState
+
+    // 当前活动会话绑定的 contactId（M10.6）：会话详情据此判断「本会话是否已连接」以驱动加密横幅。
+    val activeContactId: StateFlow<String?> =
+        p2pManager.activeSession
+            .map { it?.contactId }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     // 联系人搜索（patch §M6 改动1）
     private val _searchQuery = MutableStateFlow("")
@@ -223,8 +230,16 @@ class ChatViewModel @Inject constructor(
                     _contacts.value = chatRepo.getContacts()
                     onConnected()
                 }
-                .onFailure { onError(it.message ?: "连接失败，请确认对方正在等待且处于移动数据网络") }
+                .onFailure { onError(friendlyConnectError(it)) }
         }
+    }
+
+    /** 把底层 socket 异常翻译成可读的中文连接失败提示（M10.6）。 */
+    private fun friendlyConnectError(e: Throwable): String = when (e) {
+        is java.net.SocketTimeoutException ->
+            "连接超时：对方可能不在线，或当前网络无法直达。建议双方改用移动数据（4G/5G）。"
+        else ->
+            "无法连接：网络不可达或对方未在等待。请确认对方已生成二维码，且双方均在移动数据（公网 IPv6）下。"
     }
 
     /** 停止当前连接/监听（离开扫码屏且未连上时调用，释放 ServerSocket）。 */

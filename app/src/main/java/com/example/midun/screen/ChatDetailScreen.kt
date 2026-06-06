@@ -33,6 +33,7 @@ import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.MessageType
+import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
 import java.text.SimpleDateFormat
@@ -49,6 +50,11 @@ fun ChatDetailScreen(
     val contacts by chatViewModel.contacts.collectAsState()
     val messages by chatViewModel.messages.collectAsState()
     val contact = contacts.find { it.id == contactId }
+
+    // 本会话是否已建立 P2P 连接（M10.6）：驱动顶部加密横幅 + 真实/离线提示。
+    val connectionState by chatViewModel.connectionState.collectAsState()
+    val activeContactId by chatViewModel.activeContactId.collectAsState()
+    val connectedHere = connectionState == ConnectionState.CONNECTED && activeContactId == contactId
 
     var inputText by remember { mutableStateOf("") }
     var showBurnDialog by remember { mutableStateOf(false) }
@@ -203,9 +209,15 @@ fun ChatDetailScreen(
                     ) {
                         Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Lock, null, tint = Accent, modifier = Modifier.size(12.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("已建立端到端加密连接", fontSize = 11.sp, color = Accent)
+                            if (connectedHere) {
+                                Icon(Icons.Default.Lock, null, tint = Accent, modifier = Modifier.size(12.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("已建立端到端加密连接", fontSize = 11.sp, color = Accent)
+                            } else {
+                                Icon(Icons.Default.LockOpen, null, tint = TextSecondary, modifier = Modifier.size(12.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("未连接 · 消息仅存本地，未实时送达", fontSize = 11.sp, color = TextSecondary)
+                            }
                         }
                     }
                 }
