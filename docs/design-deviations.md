@@ -612,4 +612,28 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **验证** `:app:compileDebugKotlin` BUILD SUCCESSFUL；真实连接行为需两台真机（M10.3+）。
 - **Commit** `14ab583`
 
+### M10.2 — 真实 ECDH(P-256) + AES-256-GCM + QR 绑定式握手（B 方案核心）
+
+- **v4 设计** §9.2 `performHandshake` 用 `mockSessionKey = ByteArray(32){it}` 写死会话密钥，注 `// TODO 真实ECDH协商，调用FSShell密钥接口`；§9.3 `mockEncrypt = Base64`（明文 Base64 假加密）；`generateConnectionInfo.tempPublicKey = "MOCK_TEMP_PK_..."`。即 v4 的「加密通信」实为明文，加密整体留给 FSShell（=M11）。
+- **本仓库实现**（用户 2026-06-04 决策：B 方案——传输真实 + 软件标准库真加密，不依赖 FSShell）
+  - **新建 `network/P2PCrypto.kt`**（`object`，纯 `java.security`/`javax.crypto`，零 Android 依赖）：
+    - `generateEcKeyPair()` EC secp256r1（NIST P-256）临时密钥对
+    - `deriveSharedKey(private, peerPubBytes)` ECDH 协商 → **HKDF-SHA256**（RFC 5869，salt 全零、info=`MiDun-P2P-AES256`、单块输出）派生 32 字节 AES-256 密钥
+    - `encrypt/decrypt` **AES-256-GCM**（12B 随机 IV ‖ 密文+128bit tag），替换 Base64 假加密
+    - **拆为独立类的理由**：只收发 `ByteArray`（Base64 包装留给 SessionManager），从而脱离 `android.util.Base64`（JVM 单测里是抛异常的桩）→ 可在 JVM 直接单测。
+  - **握手模型改为「QR 绑定式 ECDH」**（偏离 v4 把 tpk 与握手脱节的写法，使二维码 `tpk` 真正被消费、无死代码）：
+    - A（出码/监听方）`generateConnectionInfo` 生成临时对，公钥真实 Base64 写入二维码 `tpk`，私钥暂存 `listenerKeyPair`；`startListening` 接入后用「暂存私钥 + 对端 socket 发来的公钥」派生。
+    - B（扫码/连接方）`connectTo(ConnectionInfo)` 用二维码里 A 的 `tpk`，生成自己临时对、把公钥经 socket 发给 A，用「自己私钥 + A 的 tpk」派生。
+    - 双方得同一 ECDH 共享密钥。**A 的公钥走二维码带外通道**，对 TCP 路径上替换 A 密钥的 MITM 免疫（**单向认证**：A→B 已认证；B→A 未认证，因 B 公钥仍走 socket）。
+  - **`connectTo` 签名变更** `(ipv6: String)` → `(info: ConnectionInfo)`：握手需读 QR 里的 `tpk`，故传整个 ConnectionInfo。M10.1 时无 UI 调用方，改动零波及（M10.3 接线时按新签名）。
+  - **新增消息加解密 API** `encryptMessage(session, plaintext): String` / `decryptMessage(session, payload): String`（AES-GCM + `android.util.Base64`），供 M10.4 收发用。
+  - **`disconnect` 销毁会话密钥** `session.sessionKey.fill(0)` 抹内存 + 清 `listenerKeyPair`（对齐 v4 验收「断开后会话密钥清除」；v4 仅关 socket 未抹密钥）。socket/serverSocket 关闭包 `runCatching` 防抛。
+  - **`tempPublicKey` 真实化** 从 `"MOCK_TEMP_PK_..."` 改为真实 P-256 临时公钥的 Base64。
+- **自测** 新建 `src/test/.../P2PCryptoTest.kt`（纯 JVM，无 socket/Android）：ECDH 双方派生同一密钥、AES-GCM 往返、随机 IV 使同明文密文不同、tag 防篡改、错误密钥拒解，共 5 例。`:app:testDebugUnitTest --tests P2PCryptoTest` 全过。
+- **遗留 / M11 收口**
+  - **仅单向认证**：完整双向认证需两端密钥都走带外通道或硬件密钥证明 → M11 接 FSShell 安全卡硬件密钥时一并解决；M10 阶段软件 ECDH 已是端到端真加密，仅认证不对称。
+  - **HKDF salt 取全零**：每会话临时密钥新生（`generateConnectionInfo` 每次新对）已保证会话密钥不复用，故未把 `sessionId` 编入 salt；如需更强会话绑定可后续把 sid 作 salt。
+  - **`contactId = "unknown"`**：握手未协商联系人身份（M10.3 由扫码建联时绑定）。
+- **Commit** `6dba79c`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
