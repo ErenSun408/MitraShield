@@ -115,12 +115,29 @@ class ChatViewModel @Inject constructor(
         _contacts.value = chatRepo.getContacts()
     }
 
+    /** 删除：仅删本机视图（不通知对端）。 */
     fun deleteMessage(messageId: String) {
         val contactId = _currentContactId.value ?: return
         viewModelScope.launch {
             chatRepo.deleteMessage(messageId, contactId)
             _messages.value = chatRepo.getMessages(contactId)
             _contacts.value = chatRepo.getContacts()
+        }
+    }
+
+    /**
+     * 撤回（M10.5）：有活动会话则发 RECALL 帧令对端一并删除（双方都删）；无连接则退化为本地删除。
+     */
+    fun recallMessage(messageId: String) {
+        val contactId = _currentContactId.value ?: return
+        val session = p2pManager.activeSession.value
+        viewModelScope.launch {
+            if (session != null && session.contactId == contactId) {
+                p2pManager.recallMessage(messageId)
+            } else {
+                chatRepo.deleteMessage(messageId, contactId)
+            }
+            reloadCurrent(contactId)
         }
     }
 

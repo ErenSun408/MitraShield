@@ -40,11 +40,13 @@ class MockChatRepository @Inject constructor() {
     suspend fun sendMessage(
         contactId: String,
         content: String,
-        type: MessageType = MessageType.TEXT
+        type: MessageType = MessageType.TEXT,
+        messageId: String? = null
     ): Result<ChatMessage> {
         delay(200)
         val msg = ChatMessage(
-            id = "msg_${System.currentTimeMillis()}",
+            // 联网发送传入稳定 id（两端同 id，供撤回引用）；本地/离线则自生成。
+            id = messageId ?: "msg_${System.currentTimeMillis()}",
             contactId = contactId,
             content = content,
             type = type,
@@ -89,9 +91,15 @@ class MockChatRepository @Inject constructor() {
     /**
      * 收到对端消息入库（isMine=false）+ 未读 +1 + 刷新预览。由 P2PSessionManager 接收循环调用（M10.4）。
      */
-    fun receiveMessage(contactId: String, content: String, type: MessageType): ChatMessage {
+    fun receiveMessage(
+        contactId: String,
+        content: String,
+        type: MessageType,
+        messageId: String? = null
+    ): ChatMessage {
         val msg = ChatMessage(
-            id = "msg_${System.currentTimeMillis()}_${(0..9999).random()}",
+            // 用发送方的稳定 id（供撤回引用）；缺省才自生成。
+            id = messageId ?: "msg_${System.currentTimeMillis()}_${(0..9999).random()}",
             contactId = contactId,
             content = content,
             type = type,

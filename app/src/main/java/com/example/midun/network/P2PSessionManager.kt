@@ -198,8 +198,27 @@ class P2PSessionManager @Inject constructor(
         val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT }
             ?: return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
         try {
-            writeFrame(session, type.name, content)
-            chatRepo.sendMessage(contactId, content, type) // 本地入库 isMine=true
+            val messageId = generateMessageId()
+            writeFrame(session, messageId, type.name, content) // 帧带稳定 id
+            chatRepo.sendMessage(contactId, content, type, messageId) // 本地入库 isMine=true，同一 id
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 撤回自己发的消息（M10.5）：发 RECALL 控制帧（payload=目标消息 id）→ 对端按 id 删；本地也删。
+     * 无活动会话 → Result.failure（调用方回退本地删除）。
+     */
+    suspend fun recallMessage(messageId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val session = _activeSession.value
+            ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
+        val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT }
+            ?: return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
+        try {
+            writeFrame(session, generateMessageId(), RECALL_TYPE, messageId) // payload=目标 id
+            chatRepo.deleteMessage(messageId, contactId) // 本地删
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -209,7 +228,7 @@ class P2PSessionManager @Inject constructor(
     /** 握手完成后：启动接收循环 + 主动发送本机身份帧（供对端建联系人/绑定会话）。 */
     private fun onSessionEstablished(session: P2PSession) {
         startReceiveLoop(session)
-        scope.launch { runCatching { writeFrame(session, IDENTITY_TYPE, localDeviceSn) } }
+        scope.launch { runCatching { writeFrame(session, generateMessageId(), IDENTITY_TYPE, localDeviceSn) } }
     }
 
     /** 后台读 socket：逐行解析 MessageFrame → 解密 → 分发（身份帧 / 普通消息）。对端关闭则归位状态。 */
@@ -232,27 +251,38 @@ class P2PSessionManager @Inject constructor(
         val session = _activeSession.value ?: return
         val frame = runCatching { MessageFrame.fromJson(line) }.getOrNull() ?: return
         val plaintext = runCatching { decryptMessage(session, frame.payload) }.getOrNull() ?: return
-        if (frame.type == IDENTITY_TYPE) {
-            // 对端身份帧：建/找联系人并绑定到会话（A 侧由此首次建联系人）。
-            val contactId = bindContact(plaintext, remark = plaintext)
-            if (session.contactId == UNKNOWN_CONTACT) {
-                _activeSession.value = session.copy(contactId = contactId)
+        when (frame.type) {
+            IDENTITY_TYPE -> {
+                // 对端身份帧：建/找联系人并绑定到会话（A 侧由此首次建联系人）。
+                val contactId = bindContact(plaintext, remark = plaintext)
+                if (session.contactId == UNKNOWN_CONTACT) {
+                    _activeSession.value = session.copy(contactId = contactId)
+                }
+                _incomingMessages.emit(contactId)
             }
-            _incomingMessages.emit(contactId)
-        } else {
-            val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
-            val type = runCatching { MessageType.valueOf(frame.type) }.getOrDefault(MessageType.TEXT)
-            chatRepo.receiveMessage(contactId, plaintext, type)
-            _incomingMessages.emit(contactId)
+            RECALL_TYPE -> {
+                // 对端撤回：plaintext = 目标消息 id，删本地对应消息（M10.5）。
+                val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
+                chatRepo.deleteMessage(plaintext, contactId)
+                _incomingMessages.emit(contactId)
+            }
+            else -> {
+                val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
+                val type = runCatching { MessageType.valueOf(frame.type) }.getOrDefault(MessageType.TEXT)
+                chatRepo.receiveMessage(contactId, plaintext, type, frame.id) // 用发送方的稳定 id 入库
+                _incomingMessages.emit(contactId)
+            }
         }
     }
 
-    /** AES-GCM 加密 content → MessageFrame → 写 socket（一帧一行）。写失败抛 IOException。 */
-    private fun writeFrame(session: P2PSession, type: String, content: String) {
-        val frame = MessageFrame(type, encryptMessage(session, content), System.currentTimeMillis())
+    /** AES-GCM 加密 content → MessageFrame(带 id) → 写 socket（一帧一行）。写失败抛 IOException。 */
+    private fun writeFrame(session: P2PSession, id: String, type: String, content: String) {
+        val frame = MessageFrame(id, type, encryptMessage(session, content), System.currentTimeMillis())
         session.writer.println(frame.toJson())
         if (session.writer.checkError()) throw IOException("发送失败：socket 写入错误")
     }
+
+    private fun generateMessageId(): String = "msg_${System.currentTimeMillis()}_${generateRandomHex(3)}"
 
     /** 按 deviceId 找联系人，没有则按备注新建并记 CONNECT 日志；返回 contactId。 */
     private suspend fun bindContact(deviceSn: String, remark: String): String {
@@ -326,6 +356,8 @@ class P2PSessionManager @Inject constructor(
         private const val UNKNOWN_CONTACT = "unknown"
         /** 身份交换帧的 type 值（与 MessageType 枚举名不冲突）。 */
         private const val IDENTITY_TYPE = "IDENTITY"
+        /** 撤回控制帧的 type 值（payload=目标消息 id）。 */
+        private const val RECALL_TYPE = "RECALL"
     }
 }
 
@@ -366,14 +398,17 @@ data class ConnectionInfo(
 
 /**
  * 网络消息帧（v4 §9.3）。payload 为 AES-GCM 密文的 Base64（M10.2 起，见 [P2PSessionManager.encryptMessage]）。
- * 序列化用 org.json（偏离 v4 的 kotlinx.serialization）。
+ * `id` 为消息稳定 ID（M10.5）：发送方生成、两端按此 ID 入库，使「撤回」能引用对端的同一条消息。
+ * IDENTITY/RECALL 控制帧的 `id` 为一次性占位（接收方不据此入库）。序列化用 org.json（偏离 v4 kotlinx）。
  */
 data class MessageFrame(
+    val id: String,
     val type: String,
     val payload: String,
     val timestamp: Long
 ) {
     fun toJson(): String = JSONObject().apply {
+        put("id", id)
         put("type", type)
         put("payload", payload)
         put("ts", timestamp)
@@ -382,6 +417,7 @@ data class MessageFrame(
     companion object {
         fun fromJson(text: String): MessageFrame = JSONObject(text).run {
             MessageFrame(
+                id = getString("id"),
                 type = getString("type"),
                 payload = getString("payload"),
                 timestamp = getLong("ts")

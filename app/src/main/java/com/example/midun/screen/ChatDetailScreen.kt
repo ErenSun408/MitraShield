@@ -215,7 +215,7 @@ fun ChatDetailScreen(
                 ChatBubble(
                     msg = msg,
                     onDelete = { chatViewModel.deleteMessage(msg.id) },
-                    onRecall = { chatViewModel.deleteMessage(msg.id) }
+                    onRecall = { chatViewModel.recallMessage(msg.id) }
                 )
             }
 
