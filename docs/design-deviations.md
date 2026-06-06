@@ -658,4 +658,28 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **Commit** `ecd2e43`
 - **修订（真机验证发现，`4f8a728`）** `getLocalIPv6Address()` 原仅排回环 + link-local，**漏排站点本地 `fec0::/10`**（已废弃、不可路由）→ 真机/模拟器拿到 `fec0::` 地址写进二维码，对端连接报 `ENETUNREACH`。修为：排除 loopback/link-local/**site-local**/multicast/anyLocal，**优先全局单播 2000::/3**（`isGlobalUnicast`：首字节 `and 0xE0 == 0x20`），都没有才回退 `::1`（明确「无可用 IPv6」而非塞不可路由地址误导对端）。另：模拟器（MAC `52:54:00:..` QEMU）网络为 NAT、无真实可路由 IPv6，**P2P 必须两台真机**（v4 §9 明文警告），此修订不改变该结论。
 
+### M10.4 — 加密消息收发走 socket + 身份交换 + 双向建联系人
+
+> ⚠️ 真机验证项：本地仅编译 + 单测通过；互发加密消息需两台真机联调（M10.5 集中验收）。
+
+- **v4 设计** §9.3 仅给 `sendEncryptedMessage`（`mockEncrypt = Base64` 假加密 + `Json.encodeToString` 发 frame）；**无接收循环、无身份交换、无联系人创建**（v4 把这些留白）。
+- **本仓库实现**
+  - **接收循环 + 消息落库归 `P2PSessionManager`（单例）**：新增常驻 `CoroutineScope(SupervisorJob+IO)`，握手成功后 `startReceiveLoop` 后台逐行 `reader.readLine()` → `MessageFrame.fromJson` → AES-GCM 解密 → 分发。**注入 `MockChatRepository`+`MockOperationLog`**（network→data 耦合，**偏离分层**）。理由：连接由 QR 屏 VM 建立但须跨屏存活独占 socket，只有单例能跑唯一接收循环（多 VM 实例各自读同一 socket 会乱）。M11 接 FSShell 时此持久化职责重构（FSShell 既管传输又管存储）。
+  - **身份交换（补 M10.3 遗留的 A 侧建联系人）**：握手后双方各发一条**加密** `IDENTITY` 帧（type=`"IDENTITY"`，payload=本机 deviceSn）。`handleIncoming` 收到 IDENTITY → `bindContact(peerSn)`（按 deviceId 去重，没有才建）→ 绑定到 `session.contactId`。
+    - **B 侧**：`connectTo(info, remark)` 握手成功即用「二维码 deviceSn + 用户备注」`bindContact` 并绑定会话（B 事先知对端身份）。
+    - **A 侧**：监听方事先不知对端，收到 B 的 IDENTITY 才首次 `bindContact`（remark 用对端 deviceSn 占位，无用户备注通道）。
+  - **`connectTo` 签名加 `remark`**：`(info, port)` → `(info, remark, port)`，联系人创建从 ChatViewModel 下沉到 manager（单一创建路径，消除「VM 建 + 身份帧建」竞态导致的重复联系人）。ChatViewModel 删去自有 `addContact`。
+  - **deviceSn 每进程唯一**：`localDeviceSn = "DEV-<8hex>"`（构造时随机一次）替换 M10.2 写死的 `"DEVICE_SN_001"`——否则两机同 SN，身份去重/联系人区分失效。M11 取安全卡真实 SN。
+  - **发送路由（ChatViewModel.sendMessage）**：有活动会话且 `session.contactId == 当前会话` → `p2pManager.sendText`（AES-GCM 加密 → frame → socket，manager 内 `chatRepo.sendMessage` 本地入库 isMine=true）；否则回退 `chatRepo.sendMessage`（离线本地）。
+  - **响应式收消息**：manager 暴露 `incomingMessages: SharedFlow<String>`（contactId，`extraBufferCapacity=32` 防 emit 阻塞接收循环）；ChatViewModel `init` 里 collect → 重载 contacts，正看该会话则刷 messages + 清未读。`MockChatRepository.receiveMessage`（isMine=false/RECEIVED/未读+1/刷预览）+ `findContactByDevice`（去重）新增。
+  - **断开检测**：接收循环 `readLine` 返回 null / 抛异常（对端关闭）→ `onPeerDisconnected`：若非主动 disconnect（状态仍 CONNECTED）则抹密钥 + 置 DISCONNECTED。完整断开 UI 反馈留 M10.5。
+  - **一帧一行**：`MessageFrame.toJson()` 单行 JSON + `writer.println`；payload 为 Base64.NO_WRAP（无换行）故 `readLine` 按帧切分可靠。
+- **未做 / 后续**
+  - **文件传输仍是占位**：ChatDetailScreen 发文件按钮仍发 mock 字串 `[文件] 示例文件.pdf`（会作为 type=FILE 帧真实加密传输并在对端显示，但**无真实文件分块/落盘**）。真实文件收发（分块/进度/落隐私区）属更大工作，按 v4 §9 验收范围（仅文字）不展开，留后续。
+  - **阅后即焚 / 撤回**：UI 占位未联网络语义（M6 既有现状）。
+  - **A 侧联系人 remark = 对端 deviceSn**（无备注输入通道）；可后续加 A 侧备注编辑。
+  - **单会话**：单 activeSession 模型，多并发会话不支持（v4 验收不要求）。
+- **验证** `:app:compileDebugKotlin` + `:app:testDebugUnitTest` BUILD SUCCESSFUL。两机互发加密消息留 M10.5 真机联调。
+- **Commit** `d346129`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
