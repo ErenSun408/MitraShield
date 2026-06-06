@@ -705,4 +705,21 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **会话预览**：最后一条被撤回时列表预览显示「[消息已撤回]」（`updateContactPreview` 加分支），避免显示空或残留原文。
 - **「删除」不变**：仍整条移除本机视图（不通知对端、无墓碑）。删除 vs 撤回语义保持分离。
 
+### M10.6 — 网络提示 + 连接超时/断开反馈 +（验收待真机）
+
+> 子阶段调换后 M10.6 = 原 M10.5 内容（网络提示+错误/断开反馈+验收）。本次完成**本地可写部分**；**v4 四条验收**（两机建链/互发加密消息/断开清密钥/不复用旧会话）须两台真机联调，留待拿到设备时执行。
+
+- **v4 设计** §9.1 仅文字要求「App 内提示用户『通信时建议使用移动数据以确保连接稳定』」；§9 连接/超时/断开的 UI 反馈无具体设计。
+- **本仓库实现（本地部分）**
+  - **TCP 连接超时**：`connectTo` 由 `Socket(ip, port)`（无超时，不可达时卡到系统级 ~分钟）改为 `Socket().connect(InetSocketAddress, CONNECT_TIMEOUT_MS=10s)`，不可达/对方未监听时 10s 内快速失败。
+  - **连接失败提示中文化**：ChatViewModel 新增 `friendlyConnectError`——`SocketTimeoutException` → 「连接超时…建议改用移动数据」；其余（ENETUNREACH/无路由/拒绝）→ 「无法连接：网络不可达或对方未在等待…双方均在移动数据(公网IPv6)」。替换 M10.3 直接抛 `it.message`。
+  - **网络提示卡（v4 §9.1）**：QrCodeScreen TabRow 下方常驻黄色提示卡「建议双方使用移动数据(4G/5G)：WiFi 下家用路由器常拦截入站连接，易失败」，生成/识别两 Tab 都可见。
+  - **会话内实时连接横幅**：ChatDetailScreen 顶部加密横幅由写死「已建立端到端加密连接」改为**随真实连接态变化**——`connectedHere = connectionState==CONNECTED && activeContactId==本会话` 时绿锁「已建立端到端加密连接」，否则灰开锁「未连接 · 消息仅存本地，未实时送达」。ChatViewModel 新增 `activeContactId: StateFlow<String?>`（map 自 `p2pManager.activeSession`）。对端断开时 `onPeerDisconnected` 置 DISCONNECTED → 横幅实时变灰（断开反馈）。
+    - 副作用：mock 种子联系人（张三/李四/王五，无真实会话）横幅显示「未连接·离线」——属诚实反映（它们本就无对端），非 bug。
+- **未做（留真机联调 = M10 收尾验收）**
+  - **v4 四条验收**：两机建链 / 互发加密消息 / 断开清密钥 / 不复用旧会话——全程真机 + 移动数据公网 IPv6。
+  - 断开后的「重连」入口、消息发送失败的逐条重发——超出 v4 §9 范围，未做。
+- **验证** `:app:compileDebugKotlin` + `:app:testDebugUnitTest` BUILD SUCCESSFUL。
+- **Commit** `4e74393`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
