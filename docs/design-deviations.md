@@ -722,4 +722,13 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **验证** `:app:compileDebugKotlin` + `:app:testDebugUnitTest` BUILD SUCCESSFUL。
 - **Commit** `4e74393`
 
+#### M10.6 补充 — 未送达状态诚实化（`9ff0a58`）
+- **背景**：纯 P2P 无服务器、无离线队列/重连补发——未连接时发的消息只存本机、不会在对方上线后送达（架构本质，见 M10 计划「不做后台保活」）。原实现离线消息默认 `status=SENT`，气泡看起来"已发"，误导。
+- **改动**（用户 2026-06-06 要求诚实化）
+  - `MockChatRepository.sendMessage` 加 `status: MessageStatus = SENT` 参。
+  - **离线发送**（ChatViewModel 无会话分支）→ 存 `status=FAILED`；**联网发送 socket 写失败**（P2PSessionManager.sendText catch）→ 也存 `status=FAILED`（原来直接 return failure、根本不入库，气泡不显，用户以为没发）。联网成功才 SENT。
+  - **气泡渲染**：ChatDetailScreen 自己发的且 `status==FAILED` → 时间行前加红色 `ErrorOutline` + 「未送达」。
+  - **横幅文案**：「未连接 · 消息仅存本地，未实时送达」→ 「未连接 · 消息无法送达（需双方同时在线）」，杜绝"稍后会发"的误解。
+- **未做**：发送失败的「重发」按钮、本地待发队列（outbox）、store-and-forward 中转——真异步离线消息需中转服务器，破坏无服务器安全模型，须甲方决策，不在此阶段做。
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
