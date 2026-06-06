@@ -656,5 +656,6 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - `onScanConnected` 仍 `popBackStack()` 回会话列表（NavGraph 未改）；M10.4 可考虑改为直接进新联系人会话。
 - **验证** `:app:compileDebugKotlin` + `:app:testDebugUnitTest` BUILD SUCCESSFUL（含 M10.2 的 P2PCryptoTest）。真机联调留 M10.5。
 - **Commit** `ecd2e43`
+- **修订（真机验证发现，`4f8a728`）** `getLocalIPv6Address()` 原仅排回环 + link-local，**漏排站点本地 `fec0::/10`**（已废弃、不可路由）→ 真机/模拟器拿到 `fec0::` 地址写进二维码，对端连接报 `ENETUNREACH`。修为：排除 loopback/link-local/**site-local**/multicast/anyLocal，**优先全局单播 2000::/3**（`isGlobalUnicast`：首字节 `and 0xE0 == 0x20`），都没有才回退 `::1`（明确「无可用 IPv6」而非塞不可路由地址误导对端）。另：模拟器（MAC `52:54:00:..` QEMU）网络为 NAT、无真实可路由 IPv6，**P2P 必须两台真机**（v4 §9 明文警告），此修订不改变该结论。
 
 <!-- 后续里程碑的偏离继续在下面追加 -->
