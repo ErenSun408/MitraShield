@@ -589,4 +589,27 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **遗留** 登录后首页仅 1 条「登录认证」（其余靠用户操作产生），不预置种子日志——保持「真实记录」语义，不造假数据。
 - **Commit** `2fe4608`
 
+## M10 — 即时通信网络层（IPv6 P2P）
+
+> ⚠️ **编号错位**：M10 = v4 **§9**（自 M9=HomeScreen 起里程碑号比 v4 章节号 +1，见本文顶部「里程碑重编号」节）。
+>
+> **v4 §9 本身是「半 mock」**：传输层真实（`ServerSocket`/`Socket`/真 IPv6/JSON frame），但加密被推给 FSShell（=M11）——`sessionKey = ByteArray(32){it}` 写死、ECDH 标 `// TODO 调用FSShell`、`mockEncrypt = Base64`、`tempPublicKey = "MOCK..."` 全是假的。照搬 v4 则「加密通信」仍是明文 Base64。
+>
+> **整体决策（用户 2026-06-04）**：
+> 1. **加密走 B 方案**——传输真实 + `java.security` 软件 ECDH(P-256) 协商 + AES-256-GCM 真加密，不依赖 FSShell。M10 端到端真加密（密钥来自软件而非安全卡硬件）；M11 再把软件 ECDH 换成 FSShell 硬件密钥接口。（v4 把 ECDH 留给 FSShell，B 方案是提前用标准库实现 → 偏离。）
+> 2. **序列化用 `org.json`**（Android 内置）而非 v4 的 kotlinx.serialization——零依赖、不破坏 M8「零序列化让 R8 干净」、混淆更彻底（kotlinx 需 `-keep` 暴露协议结构类名）。
+
+### M10.1 — `P2PSessionManager` 传输骨架（明文跑通，不接 UI）
+
+- **v4 设计** §9.2 给出 `P2PSessionManager`（`@Singleton`，`generateConnectionInfo`/`startListening`/`connectTo`/`disconnect`/`performHandshake`/`getLocalIPv6Address`）、`ConnectionInfo` data class、§9.3 `MessageFrame` + `Json.encodeToString` 编码，类散在示例片段里。
+- **本仓库实现** 新建 `network/P2PSessionManager.kt`，含 `P2PSessionManager` + `ConnectionInfo` + `MessageFrame` 三类。本阶段只建**传输骨架**，握手沿用 v4 mock 明文（`sessionKey = ByteArray(32){it}`、`tpk = MOCK_...` 占位），真 ECDH/AES-GCM 留 M10.2，与 ChatViewModel/QR 的接线留 M10.3。
+  - **偏离1 — 序列化用 org.json**：`ConnectionInfo`/`MessageFrame` 各带 `toJson()`/`fromJson()`（`org.json.JSONObject`），替换 v4 的 `Json.encodeToString`（M10 决策2）。`MessageFrame` 字段对齐 v4（type/payload/timestamp，JSON key 用 `ts`）；`ConnectionInfo` JSON key 沿用 M6 二维码既有约定（`ver`/`sn`/`ipv6`/`sid`/`tpk` + 新增 `exp`）。
+  - **偏离2 — 包归属**：统一收入 `com.example.midun.network`（v4 把类散在示例里无明确包）。
+  - **`getLocalIPv6Address()` 真实化 + 两点加固**：在 v4 遍历网卡基础上①额外排除 link-local（`!addr.isLinkLocalAddress`）——`fe80::` 段跨设备不可路由，v4 只排回环会选到无用的 link-local 地址；②`stripZoneId()` 去掉 `%wlan0` 之类 zone id——scope id 只在本机有意义，跨设备连接需裸地址。
+  - **`disconnect()` 补 `serverSocket.value = null`**：v4 关 socket 后未清 serverSocket 引用，重新监听会残留旧引用；本阶段一并置空（与 activeSession 对齐）。
+  - **`MessageType` 复用**：v4 §9.3 `sendEncryptedMessage` 引用的 `MessageType` 直接用 M1 既有 `data/model/ChatMessage.kt` 的枚举，不重定义（M10.4 发消息时接入）。
+- **本阶段不动** `ChatViewModel.generateQrContent`/`addContact`、`MockChatRepository.generateQrContent`（仍产 mock 二维码）——接线属 M10.3，M10.1 保持骨架隔离、独立可编译。
+- **验证** `:app:compileDebugKotlin` BUILD SUCCESSFUL；真实连接行为需两台真机（M10.3+）。
+- **Commit** `14ab583`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
