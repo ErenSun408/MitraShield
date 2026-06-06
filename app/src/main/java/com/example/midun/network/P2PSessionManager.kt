@@ -169,17 +169,33 @@ class P2PSessionManager @Inject constructor() {
         _connectionState.value = ConnectionState.DISCONNECTED
     }
 
-    /** 遍历网卡取第一个非回环、非 link-local 的 IPv6 地址；取不到回退 ::1。 */
+    /**
+     * 取本机最适合 P2P 直连的 IPv6：**优先全局单播(2000::/3)**，排除回环/链路本地(fe80::)/
+     * 站点本地(fec0::，已废弃不可路由)/多播/通配。都没有则回退 ::1（明确表示「本机无可用 IPv6」，
+     * 而非塞一个不可路由地址误导对端连接）。
+     */
     private fun getLocalIPv6Address(): String {
+        val candidates = mutableListOf<Inet6Address>()
         NetworkInterface.getNetworkInterfaces()?.toList()?.forEach { iface ->
             iface.inetAddresses?.toList()?.forEach { addr ->
-                if (addr is Inet6Address && !addr.isLoopbackAddress && !addr.isLinkLocalAddress) {
-                    return stripZoneId(addr.hostAddress ?: "")
+                if (addr is Inet6Address &&
+                    !addr.isLoopbackAddress &&
+                    !addr.isLinkLocalAddress &&
+                    !addr.isSiteLocalAddress &&
+                    !addr.isMulticastAddress &&
+                    !addr.isAnyLocalAddress
+                ) {
+                    candidates += addr
                 }
             }
         }
-        return "::1"
+        val best = candidates.firstOrNull(::isGlobalUnicast) ?: candidates.firstOrNull()
+        return best?.hostAddress?.let(::stripZoneId) ?: "::1"
     }
+
+    /** 全局单播 IPv6 = 2000::/3（首字节高 3 位为 001，即 0x20..0x3F）。 */
+    private fun isGlobalUnicast(addr: Inet6Address): Boolean =
+        (addr.address.firstOrNull()?.toInt() ?: 0) and 0xE0 == 0x20
 
     /** 去掉 IPv6 的 zone id（如 fe80::1%wlan0 → fe80::1），跨设备连接时 scope 无意义。 */
     private fun stripZoneId(address: String): String = address.substringBefore('%')
