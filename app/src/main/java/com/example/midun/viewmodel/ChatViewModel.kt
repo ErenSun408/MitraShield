@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.midun.data.mock.MockChatRepository
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
+import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.network.ConnectionInfo
 import com.example.midun.network.P2PSessionManager
@@ -110,8 +111,8 @@ class ChatViewModel @Inject constructor(
                 p2pManager.sendText(content, type)
                 reloadCurrent(contactId)
             } else {
-                // 无连接：回退 mock 本地存储（离线/未建链时仍可写本地草稿式记录）。
-                chatRepo.sendMessage(contactId, content, type)
+                // 无连接：仅存本地并标 FAILED（未实时送达，且不会在对方上线后补发）。
+                chatRepo.sendMessage(contactId, content, type, status = MessageStatus.FAILED)
                     .onSuccess { reloadCurrent(contactId) }
             }
         }

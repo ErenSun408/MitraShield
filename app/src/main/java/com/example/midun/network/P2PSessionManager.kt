@@ -4,6 +4,7 @@ import android.util.Base64
 import com.example.midun.data.mock.MockChatRepository
 import com.example.midun.data.mock.MockOperationLog
 import com.example.midun.data.model.Contact
+import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.data.model.OperationType
 import java.io.BufferedReader
@@ -201,12 +202,14 @@ class P2PSessionManager @Inject constructor(
             ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
         val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT }
             ?: return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
+        val messageId = generateMessageId()
         try {
-            val messageId = generateMessageId()
-            writeFrame(session, messageId, type.name, content) // 帧带稳定 id
-            chatRepo.sendMessage(contactId, content, type, messageId) // 本地入库 isMine=true，同一 id
+            writeFrame(session, messageId, type.name, content) // 帧带稳定 id（可能抛 IOException）
+            chatRepo.sendMessage(contactId, content, type, messageId, MessageStatus.SENT)
             Result.success(Unit)
         } catch (e: Exception) {
+            // 写 socket 失败（连接已断）：本地入库标 FAILED，让气泡显「未送达」。
+            chatRepo.sendMessage(contactId, content, type, messageId, MessageStatus.FAILED)
             Result.failure(e)
         }
     }

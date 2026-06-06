@@ -32,6 +32,7 @@ import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.data.model.ChatMessage
+import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
@@ -216,7 +217,7 @@ fun ChatDetailScreen(
                             } else {
                                 Icon(Icons.Default.LockOpen, null, tint = TextSecondary, modifier = Modifier.size(12.dp))
                                 Spacer(Modifier.width(4.dp))
-                                Text("未连接 · 消息仅存本地，未实时送达", fontSize = 11.sp, color = TextSecondary)
+                                Text("未连接 · 消息无法送达（需双方同时在线）", fontSize = 11.sp, color = TextSecondary)
                             }
                         }
                     }
@@ -390,6 +391,13 @@ private fun ChatBubble(msg: ChatMessage, onDelete: () -> Unit, onRecall: () -> U
             }
             Spacer(Modifier.height(2.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // 自己发的且未送达：红色「未送达」提示（离线发送或连接已断，且不会在对方上线后补发）。
+                if (msg.isMine && msg.status == MessageStatus.FAILED) {
+                    Icon(Icons.Default.ErrorOutline, "未送达", tint = Danger, modifier = Modifier.size(11.dp))
+                    Spacer(Modifier.width(2.dp))
+                    Text("未送达", fontSize = 10.sp, color = Danger)
+                    Spacer(Modifier.width(6.dp))
+                }
                 Icon(Icons.Default.Lock, null, tint = TextSecondary.copy(0.5f), modifier = Modifier.size(10.dp))
                 Spacer(Modifier.width(2.dp))
                 Text(formatMessageTime(msg.timestamp), fontSize = 10.sp, color = TextSecondary.copy(0.6f))

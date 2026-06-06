@@ -41,7 +41,8 @@ class MockChatRepository @Inject constructor() {
         contactId: String,
         content: String,
         type: MessageType = MessageType.TEXT,
-        messageId: String? = null
+        messageId: String? = null,
+        status: MessageStatus = MessageStatus.SENT
     ): Result<ChatMessage> {
         delay(200)
         val msg = ChatMessage(
@@ -51,7 +52,8 @@ class MockChatRepository @Inject constructor() {
             content = content,
             type = type,
             isMine = true,
-            status = MessageStatus.SENT
+            // 离线/发送失败标 FAILED（UI 显「未送达」）；联网成功为 SENT。
+            status = status
         )
         mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
         updateContactPreview(contactId)
