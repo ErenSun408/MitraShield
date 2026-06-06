@@ -636,4 +636,25 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - **`contactId = "unknown"`**：握手未协商联系人身份（M10.3 由扫码建联时绑定）。
 - **Commit** `6dba79c`
 
+### M10.3 — ChatViewModel/QrCodeScreen 接真实 P2P（连接生命周期 + 真实 connectionState）
+
+> ⚠️ 真机验证项：本阶段本地仅编译 + 单测通过；二维码建链/连接成功/失败的真实行为需两台真机 + 移动数据公网 IPv6（M10.5 集中联调）。
+
+- **v4 设计** §9 给出 manager API，但 UI 接线（ChatViewModel/QrCodeScreen）沿用 M6 mock：`generateQrContent()` 返回 `MockChatRepository` 的 CSV 假串；扫码 `addContact(qrContent, remark)` 直接 `substringAfter("sn=")` 加联系人、**不**真实连接；`connectionState` 为 ChatViewModel 内部占位枚举（DISCONNECTED/CONNECTING/CONNECTED），M6 UI 未消费。
+- **本仓库实现**
+  - **connectionState 上移到 P2PSessionManager（单例=唯一真相）**：枚举扩为 `DISCONNECTED/LISTENING/CONNECTING/CONNECTED/FAILED`，由 `startListening`/`connectTo`/`disconnect` 真实驱动；ChatViewModel 删掉自有枚举与 `_connectionState`，`connectionState` 直接转发 `p2pManager.connectionState`。理由：QR 屏（A）建链、聊天屏（B）用会话是不同 NavBackStackEntry → 不同 VM 实例，状态须放共享单例才跨屏一致。
+  - **A（出码方）`prepareConnection()`**（替换 `generateQrContent`）：`disconnect()` 关旧 ServerSocket/会话 → `generateConnectionInfo()`（真实本机 IPv6 + 临时 ECDH 公钥）→ 后台 `viewModelScope.launch { startListening { } }` 监听对端连入 → 返回 `info.toJson()` 供渲染二维码。QrCodeScreen 生成区由 `generateQrContent()` 改调 `prepareConnection()`（已在 LaunchedEffect 协程内）。
+  - **B（扫码方）`connectToContact(qr, remark, onConnected, onError)`**（替换 `addContact(qr, remark)` 的直接加联系人）：`ConnectionInfo.fromJson` 解析（失败 → onError「二维码格式无效」，**对非密盾 QR 防御**，修掉 M6.8 记的「整串当 deviceId」隐患）→ `connectTo(info)` 真实 TCP+ECDH → **成功才** `addContact` + 记 CONNECT 日志；失败 onError 反馈、不建联系人。`addContact` 改为私有、入参 `ConnectionInfo`，deviceId 取 `info.deviceSn`。
+  - **QrCodeScreen 扫码弹框异步化**：新增 `connecting`/`connectError` 局部态——「确认建链」改为先 `connectToContact`（按钮转「连接中…」+ spinner、禁输入禁取消），成功才关弹框 + `onScanConnected()`，失败弹框内红字显错可改备注重试；「取消」调 `stopConnection()` 放弃尝试。
+  - **A 出码区连接状态指示**：二维码下方按 `connectionState` 显示 LISTENING「等待对方扫码连接…」(spinner) / CONNECTED「✓ 已建立加密连接」(绿)。
+  - **生命周期清理**：QrCodeScreen 顶层 `DisposableEffect` onDispose——未连上则 `stopConnection()` 释放 ServerSocket（已连上保留会话供 M10.4 聊天）；120s 倒计时到期同理（未连上才停监听）。解决 `startListening` 的 `accept()` 阻塞在 IO 线程、viewModelScope 取消无法打断 → 须显式关 socket 才能解阻塞。
+  - **pre-gen InfoRow 去假值**：原写死 `MOCK_SN_001/fe80::1/MOCK_PUBLIC_KEY_BASE64` 改为字段说明（「本机安全卡」「生成时获取本机地址」「P-256 临时 ECDH 公钥」），实际值在生成时取真实。
+  - **清理**：删 `MockChatRepository.generateQrContent()`（mock CSV，已无调用方）。
+- **遗留 / 后续**
+  - **A（监听方）侧不建联系人、connectionState 之外无身份**：握手未交换对端身份（`contactId="unknown"`，见 M10.2），故 A 接受连接后仅状态转 CONNECTED、未把 B 加入联系人。**M10.4 补握手后身份交换（互发 deviceSn/显示名）+ 双向建联系人**，使 A 也能发起会话。当前 M10.3 只满足 memory 明列的「扫码方成功才加联系人」。
+  - **端口固定 8888、单会话**：P2PSessionManager 单 activeSession 模型；多并发会话/端口协商非 v4 验收范围，不做。
+  - `onScanConnected` 仍 `popBackStack()` 回会话列表（NavGraph 未改）；M10.4 可考虑改为直接进新联系人会话。
+- **验证** `:app:compileDebugKotlin` + `:app:testDebugUnitTest` BUILD SUCCESSFUL（含 M10.2 的 P2PCryptoTest）。真机联调留 M10.5。
+- **Commit** `ecd2e43`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
