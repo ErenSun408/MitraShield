@@ -3,11 +3,9 @@ package com.example.midun.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.mock.MockChatRepository
-import com.example.midun.data.mock.MockOperationLog
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageType
-import com.example.midun.data.model.OperationType
 import com.example.midun.network.ConnectionInfo
 import com.example.midun.network.P2PSessionManager
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,7 +21,6 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val chatRepo: MockChatRepository,
-    private val operationLog: MockOperationLog,
     private val p2pManager: P2PSessionManager
 ) : ViewModel() {
 
@@ -61,6 +58,17 @@ class ChatViewModel @Inject constructor(
 
     init {
         loadContacts()
+        // 收到对端消息（或身份建联系人）信号 → 重载列表；若正看该会话则一并刷消息并清未读（M10.4）。
+        viewModelScope.launch {
+            p2pManager.incomingMessages.collect { contactId ->
+                _contacts.value = chatRepo.getContacts()
+                if (_currentContactId.value == contactId) {
+                    _messages.value = chatRepo.getMessages(contactId)
+                    chatRepo.markContactRead(contactId)
+                    _contacts.value = chatRepo.getContacts()
+                }
+            }
+        }
     }
 
     /** 重读单例联系人列表。进屏（LaunchedEffect）与任何改动后调用。 */
@@ -87,15 +95,24 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage(content: String, type: MessageType = MessageType.TEXT) {
         val contactId = _currentContactId.value ?: return
+        val session = p2pManager.activeSession.value
         viewModelScope.launch {
-            chatRepo.sendMessage(contactId, content, type)
-                .onSuccess {
-                    // 以 repo 为准刷新：v4 原码在 launch 外同步 getMessages，读不到 delay 后
-                    // 才落库的新消息（竞态），且只刷 contacts 不刷 messages。改为成功后一并重读。
-                    _messages.value = chatRepo.getMessages(contactId)
-                    _contacts.value = chatRepo.getContacts()
-                }
+            if (session != null && session.contactId == contactId) {
+                // 有活动会话：走 socket 加密发送（manager 内部一并本地入库）。
+                // 失败也刷新（失败态标记留 M10.5）。
+                p2pManager.sendText(content, type)
+                reloadCurrent(contactId)
+            } else {
+                // 无连接：回退 mock 本地存储（离线/未建链时仍可写本地草稿式记录）。
+                chatRepo.sendMessage(contactId, content, type)
+                    .onSuccess { reloadCurrent(contactId) }
+            }
         }
+    }
+
+    private fun reloadCurrent(contactId: String) {
+        _messages.value = chatRepo.getMessages(contactId)
+        _contacts.value = chatRepo.getContacts()
     }
 
     fun deleteMessage(messageId: String) {
@@ -168,8 +185,9 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * B（扫码方）：解析二维码 → 真实 TCP connectTo + ECDH 握手 → **成功才**加联系人并记日志。
-     * 失败经 onError 反馈，不创建联系人（偏离 M6.8「先加联系人」的 mock 行为）。
+     * B（扫码方）：解析二维码 → 真实 TCP connectTo + ECDH 握手 → **成功才**建链。
+     * 联系人由 P2PSessionManager.connectTo 在握手成功后创建（用此处备注 + 二维码 deviceSn），
+     * 并启动收发/身份交换；失败经 onError 反馈、不创建联系人。
      */
     fun connectToContact(
         qrContent: String,
@@ -183,9 +201,9 @@ class ChatViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            p2pManager.connectTo(info)
+            p2pManager.connectTo(info, remark.ifBlank { info.deviceSn })
                 .onSuccess {
-                    addContact(info, remark)
+                    _contacts.value = chatRepo.getContacts()
                     onConnected()
                 }
                 .onFailure { onError(it.message ?: "连接失败，请确认对方正在等待且处于移动数据网络") }
@@ -195,18 +213,5 @@ class ChatViewModel @Inject constructor(
     /** 停止当前连接/监听（离开扫码屏且未连上时调用，释放 ServerSocket）。 */
     fun stopConnection() {
         p2pManager.disconnect()
-    }
-
-    /** 连接成功后新建联系人：deviceId 取对端 deviceSn，加备注。 */
-    private fun addContact(info: ConnectionInfo, remark: String) {
-        val newContact = Contact(
-            id = "c_${System.currentTimeMillis()}",
-            deviceId = info.deviceSn,
-            remark = remark,
-            lastMessageTime = System.currentTimeMillis()
-        )
-        chatRepo.addContact(newContact)
-        _contacts.value = chatRepo.getContacts()
-        operationLog.record(OperationType.CONNECT, "与「$remark」建立加密连接")
     }
 }

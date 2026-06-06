@@ -77,9 +77,34 @@ class MockChatRepository @Inject constructor() {
         return Result.success(Unit)
     }
 
-    /** 扫码建联：新增一个联系人。由 ChatViewModel.addContact 调用。 */
+    /** 扫码建联：新增一个联系人。由 P2PSessionManager 建联系人时调用。 */
     fun addContact(contact: Contact) {
         mockContacts.add(contact)
+    }
+
+    /** 是否已存在该 deviceId 的联系人（P2PSessionManager 身份交换去重用）。 */
+    fun findContactByDevice(deviceId: String): Contact? =
+        mockContacts.firstOrNull { it.deviceId == deviceId }
+
+    /**
+     * 收到对端消息入库（isMine=false）+ 未读 +1 + 刷新预览。由 P2PSessionManager 接收循环调用（M10.4）。
+     */
+    fun receiveMessage(contactId: String, content: String, type: MessageType): ChatMessage {
+        val msg = ChatMessage(
+            id = "msg_${System.currentTimeMillis()}_${(0..9999).random()}",
+            contactId = contactId,
+            content = content,
+            type = type,
+            isMine = false,
+            status = MessageStatus.RECEIVED
+        )
+        mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
+        val idx = mockContacts.indexOfFirst { it.id == contactId }
+        if (idx >= 0) {
+            mockContacts[idx] = mockContacts[idx].copy(unreadCount = mockContacts[idx].unreadCount + 1)
+        }
+        updateContactPreview(contactId)
+        return msg
     }
 
     /** 切换联系人置顶状态。由 ChatViewModel.togglePin 调用；置顶项在 getContacts 中排在最前。 */

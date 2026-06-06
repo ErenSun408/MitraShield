@@ -1,6 +1,11 @@
 package com.example.midun.network
 
 import android.util.Base64
+import com.example.midun.data.mock.MockChatRepository
+import com.example.midun.data.mock.MockOperationLog
+import com.example.midun.data.model.Contact
+import com.example.midun.data.model.MessageType
+import com.example.midun.data.model.OperationType
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStreamReader
@@ -13,10 +18,16 @@ import java.security.KeyPair
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.random.Random
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -38,7 +49,13 @@ import org.json.JSONObject
  * 偏离 v4：序列化用 org.json（非 kotlinx.serialization，M10 决策2）；类统一收入 network/ 包。
  */
 @Singleton
-class P2PSessionManager @Inject constructor() {
+class P2PSessionManager @Inject constructor(
+    private val chatRepo: MockChatRepository,
+    private val operationLog: MockOperationLog
+) {
+
+    /** 接收循环 / 身份发送的常驻协程作用域（单例，独占 socket，跨屏存活）。 */
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val serverSocket = MutableStateFlow<ServerSocket?>(null)
 
@@ -51,6 +68,13 @@ class P2PSessionManager @Inject constructor() {
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
     enum class ConnectionState { DISCONNECTED, LISTENING, CONNECTING, CONNECTED, FAILED }
+
+    /** 收到对端消息后发出的 contactId 信号，ChatViewModel 收到即重载列表/会话（M10.4）。 */
+    private val _incomingMessages = MutableSharedFlow<String>(extraBufferCapacity = 32)
+    val incomingMessages: SharedFlow<String> = _incomingMessages.asSharedFlow()
+
+    /** 本机设备 SN：mock 期每进程随机一个（替死值，保证两机可区分）；M11 取安全卡真实 SN。 */
+    private val localDeviceSn: String = "DEV-${generateRandomHex(4)}"
 
     /** A 侧临时密钥对：generateConnectionInfo 生成、startListening 握手时消费。 */
     private var listenerKeyPair: KeyPair? = null
@@ -73,7 +97,7 @@ class P2PSessionManager @Inject constructor() {
         listenerKeyPair = keyPair
         ConnectionInfo(
             version = 1,
-            deviceSn = "DEVICE_SN_001",
+            deviceSn = localDeviceSn,
             ipv6 = getLocalIPv6Address(),
             sessionId = generateRandomHex(8),
             tempPublicKey = Base64.encodeToString(keyPair.public.encoded, Base64.NO_WRAP),
@@ -93,6 +117,8 @@ class P2PSessionManager @Inject constructor() {
                 _activeSession.value = session
                 _connectionState.value = ConnectionState.CONNECTED
                 onConnected(session)
+                // A 侧联系人在收到 B 的 IDENTITY 帧后才建（A 事先不知对端身份）。
+                onSessionEstablished(session)
             } catch (e: Exception) {
                 // accept 被 disconnect() 主动关闭打断属正常拆除，不标 FAILED
                 if (_connectionState.value != ConnectionState.CONNECTED) {
@@ -103,15 +129,21 @@ class P2PSessionManager @Inject constructor() {
         }
     }
 
-    /** 连接方（B，扫码）：用二维码里的连接信息主动连接监听方并完成 ECDH 握手。 */
-    suspend fun connectTo(info: ConnectionInfo, port: Int = 8888): Result<P2PSession> =
+    /**
+     * 连接方（B，扫码）：用二维码里的连接信息主动连接监听方并完成 ECDH 握手。
+     * B 事先知道对端身份（二维码的 deviceSn）+ 用户备注，故连上即建联系人并绑定会话。
+     */
+    suspend fun connectTo(info: ConnectionInfo, remark: String, port: Int = 8888): Result<P2PSession> =
         withContext(Dispatchers.IO) {
             _connectionState.value = ConnectionState.CONNECTING
             try {
                 val socket = Socket(info.ipv6, port)
-                val session = performConnectorHandshake(socket, info.tempPublicKey)
+                val handshaken = performConnectorHandshake(socket, info.tempPublicKey)
+                val contactId = bindContact(info.deviceSn, remark)
+                val session = handshaken.copy(contactId = contactId)
                 _activeSession.value = session
                 _connectionState.value = ConnectionState.CONNECTED
+                onSessionEstablished(session)
                 Result.success(session)
             } catch (e: Exception) {
                 _connectionState.value = ConnectionState.FAILED
@@ -131,7 +163,7 @@ class P2PSessionManager @Inject constructor() {
         val peerPubLine = reader.readLine() ?: throw IOException("握手失败：对端未发送公钥")
         val peerPubBytes = Base64.decode(peerPubLine.trim(), Base64.NO_WRAP)
         val sessionKey = P2PCrypto.deriveSharedKey(myKeyPair.private, peerPubBytes)
-        return P2PSession(socket, contactId = "unknown", sessionKey = sessionKey, reader = reader, writer = writer)
+        return P2PSession(socket, contactId = UNKNOWN_CONTACT, sessionKey = sessionKey, reader = reader, writer = writer)
     }
 
     /**
@@ -145,7 +177,7 @@ class P2PSessionManager @Inject constructor() {
         writer.println(Base64.encodeToString(myKeyPair.public.encoded, Base64.NO_WRAP))
         val peerPubBytes = Base64.decode(peerTempPublicKey, Base64.NO_WRAP)
         val sessionKey = P2PCrypto.deriveSharedKey(myKeyPair.private, peerPubBytes)
-        return P2PSession(socket, contactId = "unknown", sessionKey = sessionKey, reader = reader, writer = writer)
+        return P2PSession(socket, contactId = UNKNOWN_CONTACT, sessionKey = sessionKey, reader = reader, writer = writer)
     }
 
     /** AES-GCM 加密消息内容 → Base64（替换 v4 §9.3 的 `mockEncrypt`）。供 M10.4 发送用。 */
@@ -155,6 +187,92 @@ class P2PSessionManager @Inject constructor() {
     /** AES-GCM 解密 frame payload（Base64 → 明文）。供 M10.4 接收用。 */
     fun decryptMessage(session: P2PSession, payload: String): String =
         P2PCrypto.decrypt(session.sessionKey, Base64.decode(payload, Base64.NO_WRAP))
+
+    /**
+     * 发送文字消息（M10.4）：AES-GCM 加密 → MessageFrame(org.json) → socket，并本地入库展示（isMine=true）。
+     * 无活动会话 / 未绑定联系人 / socket 写错 → Result.failure。
+     */
+    suspend fun sendText(content: String, type: MessageType): Result<Unit> = withContext(Dispatchers.IO) {
+        val session = _activeSession.value
+            ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
+        val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT }
+            ?: return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
+        try {
+            writeFrame(session, type.name, content)
+            chatRepo.sendMessage(contactId, content, type) // 本地入库 isMine=true
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** 握手完成后：启动接收循环 + 主动发送本机身份帧（供对端建联系人/绑定会话）。 */
+    private fun onSessionEstablished(session: P2PSession) {
+        startReceiveLoop(session)
+        scope.launch { runCatching { writeFrame(session, IDENTITY_TYPE, localDeviceSn) } }
+    }
+
+    /** 后台读 socket：逐行解析 MessageFrame → 解密 → 分发（身份帧 / 普通消息）。对端关闭则归位状态。 */
+    private fun startReceiveLoop(session: P2PSession) {
+        scope.launch {
+            try {
+                while (true) {
+                    val line = session.reader.readLine() ?: break // null = 对端关闭
+                    handleIncoming(line)
+                }
+            } catch (_: Exception) {
+                // socket 被 disconnect() 关闭或断网，正常结束循环
+            } finally {
+                onPeerDisconnected()
+            }
+        }
+    }
+
+    private suspend fun handleIncoming(line: String) {
+        val session = _activeSession.value ?: return
+        val frame = runCatching { MessageFrame.fromJson(line) }.getOrNull() ?: return
+        val plaintext = runCatching { decryptMessage(session, frame.payload) }.getOrNull() ?: return
+        if (frame.type == IDENTITY_TYPE) {
+            // 对端身份帧：建/找联系人并绑定到会话（A 侧由此首次建联系人）。
+            val contactId = bindContact(plaintext, remark = plaintext)
+            if (session.contactId == UNKNOWN_CONTACT) {
+                _activeSession.value = session.copy(contactId = contactId)
+            }
+            _incomingMessages.emit(contactId)
+        } else {
+            val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
+            val type = runCatching { MessageType.valueOf(frame.type) }.getOrDefault(MessageType.TEXT)
+            chatRepo.receiveMessage(contactId, plaintext, type)
+            _incomingMessages.emit(contactId)
+        }
+    }
+
+    /** AES-GCM 加密 content → MessageFrame → 写 socket（一帧一行）。写失败抛 IOException。 */
+    private fun writeFrame(session: P2PSession, type: String, content: String) {
+        val frame = MessageFrame(type, encryptMessage(session, content), System.currentTimeMillis())
+        session.writer.println(frame.toJson())
+        if (session.writer.checkError()) throw IOException("发送失败：socket 写入错误")
+    }
+
+    /** 按 deviceId 找联系人，没有则按备注新建并记 CONNECT 日志；返回 contactId。 */
+    private suspend fun bindContact(deviceSn: String, remark: String): String {
+        chatRepo.findContactByDevice(deviceSn)?.let { return it.id }
+        val id = "c_${System.currentTimeMillis()}"
+        chatRepo.addContact(
+            Contact(id = id, deviceId = deviceSn, remark = remark, lastMessageTime = System.currentTimeMillis())
+        )
+        operationLog.record(OperationType.CONNECT, "与「$remark」建立加密连接")
+        return id
+    }
+
+    /** 接收循环结束（对端断开）：若非主动 disconnect，归位为 DISCONNECTED 并抹密钥。 */
+    private fun onPeerDisconnected() {
+        if (_connectionState.value == ConnectionState.CONNECTED) {
+            _activeSession.value?.sessionKey?.fill(0)
+            _activeSession.value = null
+            _connectionState.value = ConnectionState.DISCONNECTED
+        }
+    }
 
     /** 断开连接并清理：销毁会话密钥（v4 验收「断开后会话密钥清除」）+ 清临时私钥。 */
     fun disconnect() {
@@ -202,6 +320,13 @@ class P2PSessionManager @Inject constructor() {
 
     private fun generateRandomHex(bytes: Int): String =
         ByteArray(bytes).also { Random.nextBytes(it) }.joinToString("") { "%02x".format(it) }
+
+    companion object {
+        /** 握手后、绑定联系人前的占位 contactId。 */
+        private const val UNKNOWN_CONTACT = "unknown"
+        /** 身份交换帧的 type 值（与 MessageType 枚举名不冲突）。 */
+        private const val IDENTITY_TYPE = "IDENTITY"
+    }
 }
 
 /**
