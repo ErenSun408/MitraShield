@@ -682,4 +682,21 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **验证** `:app:compileDebugKotlin` + `:app:testDebugUnitTest` BUILD SUCCESSFUL。两机互发加密消息留 M10.5 真机联调。
 - **Commit** `d346129`
 
+### M10.5 — 撤回联网（共享消息 ID + RECALL 控制帧）
+
+> 子阶段调换（用户 2026-06-06）：原 M10.5（网络提示+错误/断开反馈+验收）与 M10.6（撤回联网）对调。撤回是纯代码功能、本地可编译，先做；验收/反馈多为真机失败场景，挪到 M10.6 真机联调一起做。
+
+- **v4 设计** 无。v4 §9 不涉及撤回；M6 的撤回是 `deleteMessage` 纯本地删除（每端各自生成 msg id，无共享引用，无法通知对端）。
+- **本仓库实现**
+  - **MessageFrame 加 `id` 字段**（消息稳定 ID）：发送方生成、**两端按同一 id 入库**，使撤回能引用对端的同一条消息。`MockChatRepository.sendMessage`/`receiveMessage` 加 `messageId: String? = null` 参（联网传稳定 id，本地/离线缺省自生成）。
+  - **新增 `RECALL` 控制帧**：`P2PSessionManager.recallMessage(id)` 发 type=`RECALL`、payload=目标消息 id（同样 AES-GCM 加密）→ 对端 `handleIncoming` 解出目标 id → `chatRepo.deleteMessage` 删本地对应消息；发送方本地也删。
+  - **「删除」vs「撤回」语义分离**：ChatDetailScreen 长按菜单——「删除」→ `deleteMessage`（仅删本机视图，不通知对端，所有消息可用）；「撤回」→ `recallMessage`（仅自己消息可用，联网删双方）。原本两者都调 `deleteMessage`。
+  - **离线退化**：`recallMessage` 无活动会话时退化为本地删除（同删除）。
+  - **`writeFrame` 加 id 参**；`generateMessageId()` = `msg_<ts>_<6hex>`（两端用发送方 id，撤回引用一致）。IDENTITY/RECALL 帧的 `id` 为一次性占位（接收方不据此入库）。
+- **未做 / 后续**
+  - **无「已撤回」墓碑**：撤回后两端直接删除气泡（不留「你撤回了一条消息」提示）。v4 无要求，保持简单；如需 WeChat 式墓碑后续加。
+  - 跨端 msg id 理论可在同毫秒撞车，已加 6hex 随机降概率；会话内引用足够。
+- **验证** `:app:compileDebugKotlin` + `:app:testDebugUnitTest` BUILD SUCCESSFUL。撤回双删的真机效果留 M10.6 联调。
+- **Commit** `951858b`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
