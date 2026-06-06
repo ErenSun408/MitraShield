@@ -218,7 +218,7 @@ class P2PSessionManager @Inject constructor(
             ?: return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
         try {
             writeFrame(session, generateMessageId(), RECALL_TYPE, messageId) // payload=目标 id
-            chatRepo.deleteMessage(messageId, contactId) // 本地删
+            chatRepo.markRecalled(messageId, contactId) // 本地标记已撤回（抹原文）
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -261,9 +261,9 @@ class P2PSessionManager @Inject constructor(
                 _incomingMessages.emit(contactId)
             }
             RECALL_TYPE -> {
-                // 对端撤回：plaintext = 目标消息 id，删本地对应消息（M10.5）。
+                // 对端撤回：plaintext = 目标消息 id，标记本地对应消息为已撤回（M10.5）。
                 val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
-                chatRepo.deleteMessage(plaintext, contactId)
+                chatRepo.markRecalled(plaintext, contactId)
                 _incomingMessages.emit(contactId)
             }
             else -> {

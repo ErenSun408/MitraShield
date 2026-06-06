@@ -135,7 +135,7 @@ class ChatViewModel @Inject constructor(
             if (session != null && session.contactId == contactId) {
                 p2pManager.recallMessage(messageId)
             } else {
-                chatRepo.deleteMessage(messageId, contactId)
+                chatRepo.markRecalled(messageId, contactId) // 离线退化：仅本地标记已撤回
             }
             reloadCurrent(contactId)
         }

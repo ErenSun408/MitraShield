@@ -14,7 +14,8 @@ data class ChatMessage(
     val status: MessageStatus = MessageStatus.SENT,
     val burnAfterRead: Boolean = false,
     val fileSize: Long? = null,
-    val fileName: String? = null
+    val fileName: String? = null,
+    val recalled: Boolean = false
 )
 
 data class Contact(

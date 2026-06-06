@@ -212,11 +212,15 @@ fun ChatDetailScreen(
             }
 
             items(displayMessages, key = { it.id }) { msg ->
-                ChatBubble(
-                    msg = msg,
-                    onDelete = { chatViewModel.deleteMessage(msg.id) },
-                    onRecall = { chatViewModel.recallMessage(msg.id) }
-                )
+                if (msg.recalled) {
+                    RecalledTombstone(isMine = msg.isMine)
+                } else {
+                    ChatBubble(
+                        msg = msg,
+                        onDelete = { chatViewModel.deleteMessage(msg.id) },
+                        onRecall = { chatViewModel.recallMessage(msg.id) }
+                    )
+                }
             }
 
             if (searchQuery.isNotBlank() && displayMessages.isEmpty()) {
@@ -272,6 +276,18 @@ fun ChatDetailScreen(
             dismissButton = {
                 TextButton(onClick = { showClearConfirm = false }) { Text("取消", color = TextSecondary) }
             }
+        )
+    }
+}
+
+/** 已撤回墓碑（M10.5）：居中灰色系统行，替代原气泡；撤回方/对端文案不同。 */
+@Composable
+private fun RecalledTombstone(isMine: Boolean) {
+    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
+        Text(
+            text = if (isMine) "你撤回了一条消息" else "对方撤回了一条消息",
+            fontSize = 11.sp,
+            color = TextSecondary
         )
     }
 }

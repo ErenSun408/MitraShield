@@ -65,6 +65,24 @@ class MockChatRepository @Inject constructor() {
         return Result.success(Unit)
     }
 
+    /**
+     * 撤回消息（M10.5）：保留占位但**抹掉原文**（content/文件名/大小清空）并标记 recalled，
+     * 渲染为「已撤回」墓碑。安全考量：撤回须让内容从存储消失，不只是 UI 隐藏。
+     */
+    fun markRecalled(messageId: String, contactId: String) {
+        val list = mockMessages[contactId] ?: return
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx < 0) return
+        list[idx] = list[idx].copy(
+            content = "",
+            type = MessageType.TEXT,
+            fileName = null,
+            fileSize = null,
+            recalled = true
+        )
+        updateContactPreview(contactId)
+    }
+
     suspend fun clearMessages(contactId: String): Result<Unit> {
         delay(300)
         mockMessages[contactId]?.clear()
@@ -143,7 +161,11 @@ class MockChatRepository @Inject constructor() {
             ?.maxByOrNull { it.timestamp }
 
         mockContacts[index] = mockContacts[index].copy(
-            lastMessage = lastMessage?.content.orEmpty(),
+            lastMessage = when {
+                lastMessage == null -> ""
+                lastMessage.recalled -> "[消息已撤回]"
+                else -> lastMessage.content
+            },
             lastMessageTime = lastMessage?.timestamp ?: 0L
         )
     }
