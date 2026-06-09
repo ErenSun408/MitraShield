@@ -744,4 +744,18 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **真机验收结果（用户 2026-06-09）**：**同 WiFi 局域网 IPv4 下完整跑通**——扫码秒连成功，证明握手/加密/收发代码全对。**跨蜂窝/公网仍连不上属运营商网络限制，非代码问题**，需中转服务器（甲方决策）。v4 四条验收（建链/互发加密/断开清密钥/不复用旧会话）在同 WiFi 范围内可执行。
 - **验证** `:app:assembleDebug` BUILD SUCCESSFUL；同 WiFi 真机扫码建链成功。
 
+## M10.7 — 联系人资料页：编辑备注 + 删除联系人（v4 外增量）
+
+> **完全是 v4 外增量**：v4 doc + patch 无「联系人资料/详情页」设计，也无改备注/删联系人入口。这两项在 M6/M10 多处被记为推迟项（「当前任何联系人都不能改备注」「deleteContact 后端已建但 UI 无入口」「A 侧 remark=对端 deviceSn，无备注输入通道」）。本节把它们补齐。M11 仍 = 真 SDK，未被占用。
+
+- **触发入口**：ChatDetailScreen 顶栏联系人名（原为纯展示 `Text`）改为 `clickable` → 新增 `onOpenProfile` 回调进资料页。
+- **新增屏幕** `screen/ContactProfileScreen.kt`：头像（备注首字符）+ 备注 + 设备 ID + 在线态；信息卡内「备注名称」整行可点 → 编辑弹框（OutlinedTextField，非空才可保存）；底部 Danger 按钮「删除联系人」→ 二次确认弹框。叶子屏幕走回调（`onBack`/`onContactDeleted`），不持 navController（全局约定）。
+- **新增路由** `Screen.ContactProfile`（`contact_profile/{contactId}`）；NavGraph 中 `onContactDeleted` 用 `popBackStack(Screen.Main.route, inclusive=false)` 越过已失效的会话页回列表。
+- **后端**
+  - `MockChatRepository.updateRemark(contactId, remark)`（同步 copy 改 remark）+ `ChatViewModel.updateRemark`（写后重读 `_contacts`，使会话/列表标题刷新）。
+  - `ChatViewModel.deleteContact` 加 `onComplete` 回调：删除落定后才导航，避免资料页提前 popBackStack 销毁本 VM scope 打断 `repo.deleteContact` 的 `delay(500)`（同 M3.5 / clearAllMessages 坑）。`deleteContact` 后端自 M6.4 就在，本节才接 UI。
+- **未做 / 后续**：A 侧扫码建联仍把 remark 设为对端 deviceSn（建联时无备注输入），现在可进资料页补改；联系人头像仍是首字符占位，无真实头像。
+- **验证** `:app:assembleDebug` BUILD SUCCESSFUL（仅 AutoMirrored 图标弃用告警，与全项目既有写法一致）。
+- **Commit** `d974a29`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
