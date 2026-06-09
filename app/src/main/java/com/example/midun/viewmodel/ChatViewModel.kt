@@ -48,6 +48,10 @@ class ChatViewModel @Inject constructor(
             .map { it?.contactId }
             .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
+    // 本端阅后即焚模式（B 阶段）：转发 P2PSessionManager（单例）的真实模式状态，跨屏一致；
+    // 会话详情据此高亮火苗图标、决定发出的消息是否为焚毁消息。收发行为接线在 B.2/B.3。
+    val burnMode: StateFlow<P2PSessionManager.BurnMode> = p2pManager.burnMode
+
     // 联系人搜索（patch §M6 改动1）
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()

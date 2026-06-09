@@ -1,6 +1,6 @@
 package com.example.midun.data.model
 
-enum class MessageType { TEXT, IMAGE, VIDEO, AUDIO, FILE }
+enum class MessageType { TEXT, IMAGE, VIDEO, AUDIO, FILE, SYSTEM }
 
 enum class MessageStatus { SENDING, SENT, RECEIVED, FAILED }
 
@@ -15,7 +15,11 @@ data class ChatMessage(
     val burnAfterRead: Boolean = false,
     val fileSize: Long? = null,
     val fileName: String? = null,
-    val recalled: Boolean = false
+    val recalled: Boolean = false,
+    // 焚毁 TTL（秒）：阅后即焚消息「读到」后的倒计时时长。0 = 非焚毁消息。
+    val burnTtl: Int = 0,
+    // 已焚毁标记（阅后即焚墓碑），与 recalled 同为「原地把真实消息变残骸」，渲染为焚毁墓碑。
+    val burned: Boolean = false
 )
 
 data class Contact(

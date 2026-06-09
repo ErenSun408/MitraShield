@@ -76,6 +76,15 @@ class P2PSessionManager @Inject constructor(
     private val _incomingMessages = MutableSharedFlow<String>(extraBufferCapacity = 32)
     val incomingMessages: SharedFlow<String> = _incomingMessages.asSharedFlow()
 
+    /**
+     * 本端阅后即焚模式（B 阶段）：开启后本端发出的消息均为焚毁消息，并经 BURN_MODE 帧通知对端。
+     * 是「活动会话」概念——断开/对端离线即清回 off（同会话密钥清除时机）。
+     */
+    private val _burnMode = MutableStateFlow(BurnMode(enabled = false, ttlSeconds = 0))
+    val burnMode: StateFlow<BurnMode> = _burnMode.asStateFlow()
+
+    data class BurnMode(val enabled: Boolean, val ttlSeconds: Int)
+
     /** 本机设备 SN：mock 期每进程随机一个（替死值，保证两机可区分）；M11 取安全卡真实 SN。 */
     private val localDeviceSn: String = "DEV-${generateRandomHex(4)}"
 
@@ -309,6 +318,7 @@ class P2PSessionManager @Inject constructor(
             _activeSession.value?.sessionKey?.fill(0)
             _activeSession.value = null
             _connectionState.value = ConnectionState.DISCONNECTED
+            _burnMode.value = BurnMode(enabled = false, ttlSeconds = 0) // 焚毁模式随会话清除
         }
     }
 
@@ -323,6 +333,7 @@ class P2PSessionManager @Inject constructor(
         serverSocket.value = null
         listenerKeyPair = null
         _connectionState.value = ConnectionState.DISCONNECTED
+        _burnMode.value = BurnMode(enabled = false, ttlSeconds = 0) // 焚毁模式随会话清除
     }
 
     /**
@@ -413,6 +424,10 @@ class P2PSessionManager @Inject constructor(
         private const val IDENTITY_TYPE = "IDENTITY"
         /** 撤回控制帧的 type 值（payload=目标消息 id）。 */
         private const val RECALL_TYPE = "RECALL"
+        /** 阅后即焚「开/关模式」广播帧（payload="on:30" / "off"），对端据此插系统行（B 阶段）。 */
+        const val BURN_MODE_TYPE = "BURN_MODE"
+        /** 阅后即焚「焚毁」控制帧（payload=目标消息 id）：读方倒计时到点 → 两端焚毁（B 阶段）。 */
+        const val BURN_TYPE = "BURN"
         /** TCP 连接超时（ms）：不可达/对方未监听时快速失败。 */
         private const val CONNECT_TIMEOUT_MS = 10_000
     }
@@ -462,13 +477,21 @@ data class MessageFrame(
     val id: String,
     val type: String,
     val payload: String,
-    val timestamp: Long
+    val timestamp: Long,
+    // 阅后即焚（B 阶段）：该消息是否为焚毁消息 + 读后倒计时时长（秒）。
+    // 可选字段——旧帧/普通消息不含，fromJson 用 optBoolean/optInt 退化为 false/0。
+    val burn: Boolean = false,
+    val burnTtl: Int = 0
 ) {
     fun toJson(): String = JSONObject().apply {
         put("id", id)
         put("type", type)
         put("payload", payload)
         put("ts", timestamp)
+        if (burn) {
+            put("burn", true)
+            put("ttl", burnTtl)
+        }
     }.toString()
 
     companion object {
@@ -477,7 +500,9 @@ data class MessageFrame(
                 id = getString("id"),
                 type = getString("type"),
                 payload = getString("payload"),
-                timestamp = getLong("ts")
+                timestamp = getLong("ts"),
+                burn = optBoolean("burn", false),
+                burnTtl = optInt("ttl", 0)
             )
         }
     }

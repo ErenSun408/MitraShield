@@ -85,6 +85,43 @@ class MockChatRepository @Inject constructor() {
         updateContactPreview(contactId)
     }
 
+    /**
+     * 插入一条居中系统行（阅后即焚开/关提示，B 阶段）。type=SYSTEM，content 即提示文案；
+     * 非「我方/对方」消息、不计未读。两端各自插入（本端开关时本地插，对端经 BURN_MODE 帧插）。
+     */
+    fun addSystemMessage(contactId: String, content: String) {
+        val msg = ChatMessage(
+            id = "sys_${System.currentTimeMillis()}_${(0..9999).random()}",
+            contactId = contactId,
+            content = content,
+            type = MessageType.SYSTEM,
+            isMine = false,
+            status = MessageStatus.RECEIVED
+        )
+        mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
+        updateContactPreview(contactId)
+    }
+
+    /**
+     * 焚毁阅后即焚消息（B 阶段）：保留占位但**抹掉原文**并标记 burned，渲染为焚毁墓碑。
+     * 与 markRecalled 同为「原地把真实消息变残骸」——保 id 与时间位置，供 BURN 帧按 id 双端引用。
+     */
+    fun markBurned(messageId: String, contactId: String) {
+        val list = mockMessages[contactId] ?: return
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx < 0) return
+        list[idx] = list[idx].copy(
+            content = "",
+            type = MessageType.TEXT,
+            fileName = null,
+            fileSize = null,
+            burnAfterRead = false,
+            burnTtl = 0,
+            burned = true
+        )
+        updateContactPreview(contactId)
+    }
+
     suspend fun clearMessages(contactId: String): Result<Unit> {
         delay(300)
         mockMessages[contactId]?.clear()
@@ -173,6 +210,8 @@ class MockChatRepository @Inject constructor() {
             lastMessage = when {
                 lastMessage == null -> ""
                 lastMessage.recalled -> "[消息已撤回]"
+                lastMessage.burned -> "🔥 [已焚毁]"
+                lastMessage.burnAfterRead -> "🔥 [阅后即焚]" // 焚毁消息预览不泄漏原文
                 else -> lastMessage.content
             },
             lastMessageTime = lastMessage?.timestamp ?: 0L
