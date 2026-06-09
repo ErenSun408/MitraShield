@@ -42,7 +42,9 @@ class MockChatRepository @Inject constructor() {
         content: String,
         type: MessageType = MessageType.TEXT,
         messageId: String? = null,
-        status: MessageStatus = MessageStatus.SENT
+        status: MessageStatus = MessageStatus.SENT,
+        burnAfterRead: Boolean = false,
+        burnTtl: Int = 0
     ): Result<ChatMessage> {
         delay(200)
         val msg = ChatMessage(
@@ -53,7 +55,10 @@ class MockChatRepository @Inject constructor() {
             type = type,
             isMine = true,
             // 离线/发送失败标 FAILED（UI 显「未送达」）；联网成功为 SENT。
-            status = status
+            status = status,
+            // 阅后即焚模式下发出的消息（B 阶段）：本端气泡也走焚毁样式。
+            burnAfterRead = burnAfterRead,
+            burnTtl = burnTtl
         )
         mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
         updateContactPreview(contactId)

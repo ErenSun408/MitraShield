@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -58,8 +59,13 @@ fun ChatDetailScreen(
     val activeContactId by chatViewModel.activeContactId.collectAsState()
     val connectedHere = connectionState == ConnectionState.CONNECTED && activeContactId == contactId
 
+    // 阅后即焚模式（B 阶段）：驱动火苗图标高亮；开/关只在本会话已连接时可用。
+    val burnMode by chatViewModel.burnMode.collectAsState()
+    val burnOnHere = burnMode.enabled && connectedHere
+
     var inputText by remember { mutableStateOf("") }
     var showBurnDialog by remember { mutableStateOf(false) }
+    var showBurnGateDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var showSearchBar by remember { mutableStateOf(false) }
     // 本地状态承载搜索词，避免经 ViewModel StateFlow 异步往返打断中文/IME 组合（见 M6.3 修复）。
@@ -124,8 +130,18 @@ fun ChatDetailScreen(
                             Icon(Icons.Default.Close, "关闭搜索")
                         }
                     } else {
-                        IconButton(onClick = { showBurnDialog = true }) {
-                            Icon(Icons.Default.LocalFireDepartment, "阅后即焚", tint = Warning)
+                        IconButton(onClick = {
+                            when {
+                                !connectedHere -> showBurnGateDialog = true   // 未连接：提示先建联
+                                burnMode.enabled -> chatViewModel.setBurnMode(false, 0) // 已开 → 直接关
+                                else -> showBurnDialog = true                  // 未开 → 选时长开启
+                            }
+                        }) {
+                            Icon(
+                                Icons.Default.LocalFireDepartment,
+                                if (burnOnHere) "关闭阅后即焚" else "阅后即焚",
+                                tint = if (burnOnHere) Warning else Color.White
+                            )
                         }
                         Box {
                             IconButton(onClick = { showMenu = true }) {
@@ -227,10 +243,12 @@ fun ChatDetailScreen(
             }
 
             items(displayMessages, key = { it.id }) { msg ->
-                if (msg.recalled) {
-                    RecalledTombstone(isMine = msg.isMine)
-                } else {
-                    ChatBubble(
+                when {
+                    // 居中系统行：阅后即焚开/关提示（B 阶段）。
+                    msg.type == MessageType.SYSTEM -> SystemLine(msg.content)
+                    // 撤回墓碑（M10.5）：复用 SystemLine 居中渲染。
+                    msg.recalled -> SystemLine(if (msg.isMine) "你撤回了一条消息" else "对方撤回了一条消息")
+                    else -> ChatBubble(
                         msg = msg,
                         onDelete = { chatViewModel.deleteMessage(msg.id) },
                         onRecall = { chatViewModel.recallMessage(msg.id) }
@@ -249,25 +267,42 @@ fun ChatDetailScreen(
     }
 
     if (showBurnDialog) {
+        // 时长选项（秒）：与 P2PSessionManager.formatTtl 对应。
+        val options = listOf("5秒" to 5, "30秒" to 30, "1分钟" to 60, "5分钟" to 300)
         AlertDialog(
             onDismissRequest = { showBurnDialog = false },
             icon = { Icon(Icons.Default.LocalFireDepartment, null, tint = Warning) },
-            title = { Text("阅后即焚") },
+            title = { Text("开启阅后即焚") },
             text = {
                 Column {
-                    Text("开启后，对方查看消息后将自动销毁")
+                    Text("选择焚毁倒计时。开启后你发出的消息，对方读到后将在所选时长后于双方设备一并焚毁。")
                     Spacer(Modifier.height(12.dp))
-                    listOf("5秒", "30秒", "1分钟", "5分钟").forEach { time ->
+                    options.forEach { (label, sec) ->
                         OutlinedButton(
-                            onClick = { showBurnDialog = false },
+                            onClick = {
+                                chatViewModel.setBurnMode(true, sec)
+                                showBurnDialog = false
+                            },
                             modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                        ) { Text(time) }
+                        ) { Text(label) }
                     }
                 }
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { showBurnDialog = false }) { Text("关闭") }
+                TextButton(onClick = { showBurnDialog = false }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
+
+    if (showBurnGateDialog) {
+        AlertDialog(
+            onDismissRequest = { showBurnGateDialog = false },
+            icon = { Icon(Icons.Default.LocalFireDepartment, null, tint = Warning) },
+            title = { Text("阅后即焚") },
+            text = { Text("需先与对方建立加密连接后才能开启阅后即焚。", color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = { showBurnGateDialog = false }) { Text("知道了", color = Primary) }
             }
         )
     }
@@ -295,14 +330,18 @@ fun ChatDetailScreen(
     }
 }
 
-/** 已撤回墓碑（M10.5）：居中灰色系统行，替代原气泡；撤回方/对端文案不同。 */
+/**
+ * 居中灰色系统行：撤回墓碑、阅后即焚墓碑、开/关阅后即焚提示共用同一外观（B 阶段抽出）。
+ * 只共享渲染，不改各自的数据语义（recalled/burned 仍是消息标记，SYSTEM 是独立事件行）。
+ */
 @Composable
-private fun RecalledTombstone(isMine: Boolean) {
+private fun SystemLine(text: String) {
     Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
         Text(
-            text = if (isMine) "你撤回了一条消息" else "对方撤回了一条消息",
+            text = text,
             fontSize = 11.sp,
-            color = TextSecondary
+            color = TextSecondary,
+            textAlign = TextAlign.Center
         )
     }
 }

@@ -213,16 +213,44 @@ class P2PSessionManager @Inject constructor(
         val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT }
             ?: return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
         val messageId = generateMessageId()
+        // 阅后即焚模式（B 阶段）：开启态下仅文字消息打焚毁标记（文件等暂不焚）。
+        val burning = _burnMode.value.enabled && type == MessageType.TEXT
+        val ttl = if (burning) _burnMode.value.ttlSeconds else 0
         try {
-            writeFrame(session, messageId, type.name, content) // 帧带稳定 id（可能抛 IOException）
-            chatRepo.sendMessage(contactId, content, type, messageId, MessageStatus.SENT)
+            writeFrame(session, messageId, type.name, content, burning, ttl) // 帧带稳定 id（可能抛 IOException）
+            chatRepo.sendMessage(contactId, content, type, messageId, MessageStatus.SENT, burning, ttl)
             Result.success(Unit)
         } catch (e: Exception) {
             // 写 socket 失败（连接已断）：本地入库标 FAILED，让气泡显「未送达」。
-            chatRepo.sendMessage(contactId, content, type, messageId, MessageStatus.FAILED)
+            chatRepo.sendMessage(contactId, content, type, messageId, MessageStatus.FAILED, burning, ttl)
             Result.failure(e)
         }
     }
+
+    /**
+     * 开/关阅后即焚模式（B 阶段，仅在活动会话内有效）：发 BURN_MODE 帧通知对端 → 对端插系统行；
+     * 本端同步更新 [burnMode] 状态、本地插一条系统行。payload="on:<秒>" / "off"。
+     */
+    suspend fun setBurnMode(enabled: Boolean, ttlSeconds: Int): Result<Unit> = withContext(Dispatchers.IO) {
+        val session = _activeSession.value
+            ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
+        val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT }
+            ?: return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
+        try {
+            writeFrame(session, generateMessageId(), BURN_MODE_TYPE, if (enabled) "on:$ttlSeconds" else "off")
+            _burnMode.value = BurnMode(enabled, if (enabled) ttlSeconds else 0)
+            val text = if (enabled) "🔥 你开启了阅后即焚（${formatTtl(ttlSeconds)}）" else "🔥 你关闭了阅后即焚"
+            chatRepo.addSystemMessage(contactId, text)
+            _incomingMessages.emit(contactId)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** 焚毁 TTL 秒数 → 人类可读（5→5秒，60→1分钟）。 */
+    private fun formatTtl(seconds: Int): String =
+        if (seconds < 60) "${seconds}秒" else "${seconds / 60}分钟"
 
     /**
      * 撤回自己发的消息（M10.5）：发 RECALL 控制帧（payload=目标消息 id）→ 对端按 id 删；本地也删。
@@ -283,6 +311,18 @@ class P2PSessionManager @Inject constructor(
                 chatRepo.markRecalled(plaintext, contactId)
                 _incomingMessages.emit(contactId)
             }
+            BURN_MODE_TYPE -> {
+                // 对端开/关阅后即焚（B 阶段）：plaintext="on:<秒>" / "off"，插一条「对方…」系统行。
+                val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
+                val text = if (plaintext.startsWith("on")) {
+                    val ttl = plaintext.substringAfter(':', "").toIntOrNull() ?: 0
+                    "🔥 对方开启了阅后即焚（${formatTtl(ttl)}）"
+                } else {
+                    "🔥 对方关闭了阅后即焚"
+                }
+                chatRepo.addSystemMessage(contactId, text)
+                _incomingMessages.emit(contactId)
+            }
             else -> {
                 val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
                 val type = runCatching { MessageType.valueOf(frame.type) }.getOrDefault(MessageType.TEXT)
@@ -293,8 +333,11 @@ class P2PSessionManager @Inject constructor(
     }
 
     /** AES-GCM 加密 content → MessageFrame(带 id) → 写 socket（一帧一行）。写失败抛 IOException。 */
-    private fun writeFrame(session: P2PSession, id: String, type: String, content: String) {
-        val frame = MessageFrame(id, type, encryptMessage(session, content), System.currentTimeMillis())
+    private fun writeFrame(
+        session: P2PSession, id: String, type: String, content: String,
+        burn: Boolean = false, burnTtl: Int = 0
+    ) {
+        val frame = MessageFrame(id, type, encryptMessage(session, content), System.currentTimeMillis(), burn, burnTtl)
         session.writer.println(frame.toJson())
         if (session.writer.checkError()) throw IOException("发送失败：socket 写入错误")
     }

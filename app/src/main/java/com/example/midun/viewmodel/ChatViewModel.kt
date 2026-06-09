@@ -127,6 +127,18 @@ class ChatViewModel @Inject constructor(
         _contacts.value = chatRepo.getContacts()
     }
 
+    /**
+     * 开/关阅后即焚模式（B 阶段）：转发 P2PSessionManager.setBurnMode（发帧通知对端 + 插系统行）。
+     * 系统行插入后由 manager 经 incomingMessages 信号触发当前会话重载，故此处无需手动 reload。
+     * onError 用于无连接/发送失败时反馈（仅活动会话内可用）。
+     */
+    fun setBurnMode(enabled: Boolean, ttlSeconds: Int, onError: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            p2pManager.setBurnMode(enabled, ttlSeconds)
+                .onFailure { onError("操作失败：${it.message ?: "需先与对方建立连接"}") }
+        }
+    }
+
     /** 删除：仅删本机视图（不通知对端）。 */
     fun deleteMessage(messageId: String) {
         val contactId = _currentContactId.value ?: return
