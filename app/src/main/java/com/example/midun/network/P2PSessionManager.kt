@@ -11,6 +11,7 @@ import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStreamReader
 import java.io.PrintWriter
+import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
@@ -100,7 +101,7 @@ class P2PSessionManager @Inject constructor(
         ConnectionInfo(
             version = 1,
             deviceSn = localDeviceSn,
-            ipv6 = getLocalIPv6Address(),
+            ipv6 = getLocalReachableAddress(), // 可能是 WiFi 局域网 IPv4 或公网 IPv6（字段名沿用 ipv6）
             sessionId = generateRandomHex(8),
             tempPublicKey = Base64.encodeToString(keyPair.public.encoded, Base64.NO_WRAP),
             expiresAt = System.currentTimeMillis() + 120_000
@@ -325,32 +326,79 @@ class P2PSessionManager @Inject constructor(
     }
 
     /**
-     * 取本机最适合 P2P 直连的 IPv6：**优先全局单播(2000::/3)**，排除回环/链路本地(fe80::)/
-     * 站点本地(fec0::，已废弃不可路由)/多播/通配。都没有则回退 ::1（明确表示「本机无可用 IPv6」，
-     * 而非塞一个不可路由地址误导对端连接）。
+     * 取本机最适合 P2P 直连的地址。优先级（M10.6 真机验收强化，偏离 v4 纯 IPv6）：
+     * 1. **同 WiFi/有线局域网私网 IPv4**（`wlan*`/`eth*` 接口上的 192.168/10/172.16 段）——两机连同一
+     *    路由器时恒可达，绕开「国内运营商不路由 subscriber 间公网 IPv6」这堵墙，用于验证握手/加密/收发。
+     * 2. **公网全局单播 IPv6**（2000::/3）——v4 设计的跨网络路径（运营商允许时才通）。
+     * 3. 回退 `::1`（明确表示「本机无可用直连地址」，而非塞不可路由地址误导对端）。
+     *
+     * 按接口名区分 WiFi 私网 IPv4 与蜂窝 CGNAT IPv4：蜂窝(`rmnet*`/`ccmni*`)的 10.x 是运营商 NAT 后地址，
+     * 对端不可达，故只认 WiFi/有线接口上的私网 IPv4。
      */
-    private fun getLocalIPv6Address(): String {
-        val candidates = mutableListOf<Inet6Address>()
-        NetworkInterface.getNetworkInterfaces()?.toList()?.forEach { iface ->
-            iface.inetAddresses?.toList()?.forEach { addr ->
-                if (addr is Inet6Address &&
-                    !addr.isLoopbackAddress &&
-                    !addr.isLinkLocalAddress &&
-                    !addr.isSiteLocalAddress &&
-                    !addr.isMulticastAddress &&
-                    !addr.isAnyLocalAddress
-                ) {
-                    candidates += addr
-                }
-            }
-        }
-        val best = candidates.firstOrNull(::isGlobalUnicast) ?: candidates.firstOrNull()
-        return best?.hostAddress?.let(::stripZoneId) ?: "::1"
+    private fun getLocalReachableAddress(): String {
+        val s = scanAddresses()
+        return s.wifiV4 ?: s.globalV6 ?: "::1"
     }
+
+    /** 接口名是否为 WiFi/有线（其私网 IPv4 在同局域网内对端可达）。 */
+    private fun isLanInterface(name: String): Boolean =
+        name.startsWith("wlan") || name.startsWith("eth") || name.startsWith("ap")
 
     /** 全局单播 IPv6 = 2000::/3（首字节高 3 位为 001，即 0x20..0x3F）。 */
     private fun isGlobalUnicast(addr: Inet6Address): Boolean =
         (addr.address.firstOrNull()?.toInt() ?: 0) and 0xE0 == 0x20
+
+    private data class AddressScan(val wifiV4: String?, val globalV6: String?, val all: List<String>)
+
+    /** 单次枚举所有接口，挑出首个 WiFi 私网 IPv4、首个公网 IPv6，并收集全部地址供诊断。 */
+    private fun scanAddresses(): AddressScan {
+        var wifiV4: String? = null
+        var globalV6: String? = null
+        val all = mutableListOf<String>()
+        NetworkInterface.getNetworkInterfaces()?.toList()?.forEach { iface ->
+            val name = iface.name ?: ""
+            iface.inetAddresses?.toList()?.forEach { addr ->
+                val host = stripZoneId(addr.hostAddress ?: "?")
+                all += "$name $host"
+                if (addr is Inet6Address && globalV6 == null &&
+                    !addr.isLoopbackAddress && !addr.isLinkLocalAddress &&
+                    !addr.isSiteLocalAddress && !addr.isMulticastAddress &&
+                    !addr.isAnyLocalAddress && isGlobalUnicast(addr)
+                ) {
+                    globalV6 = host
+                }
+                if (addr is Inet4Address && wifiV4 == null &&
+                    addr.isSiteLocalAddress && isLanInterface(name)
+                ) {
+                    wifiV4 = host
+                }
+            }
+        }
+        return AddressScan(wifiV4, globalV6, all)
+    }
+
+    /**
+     * 本机网络诊断快照（M10 真机排障）：UI 在出码/连接失败时显示，一眼定位用哪条路径、对端能否到达。
+     */
+    data class NetworkDiagnostics(
+        /** [getLocalReachableAddress] 选中、写进二维码/出站用的地址；`::1` = 本机无可用直连地址。 */
+        val selectedAddress: String,
+        /** 选中地址的类型描述（WiFi 局域网直连 / 公网 IPv6 / 无可用直连地址）。 */
+        val kind: String,
+        /** 全部接口地址（`iface 地址` 形式，含 IPv4/IPv6），供进一步人工排查。 */
+        val allAddresses: List<String>
+    )
+
+    /** 采集本机网络诊断信息（同步、轻量，可在主线程调用）。 */
+    fun networkDiagnostics(): NetworkDiagnostics {
+        val s = scanAddresses()
+        val (addr, kind) = when {
+            s.wifiV4 != null -> s.wifiV4!! to "WiFi 局域网直连（同路由器可达）"
+            s.globalV6 != null -> s.globalV6!! to "公网 IPv6（跨网络，运营商允许时才通）"
+            else -> "::1" to "无可用直连地址"
+        }
+        return NetworkDiagnostics(addr, kind, s.all)
+    }
 
     /** 去掉 IPv6 的 zone id（如 fe80::1%wlan0 → fe80::1），跨设备连接时 scope 无意义。 */
     private fun stripZoneId(address: String): String = address.substringBefore('%')

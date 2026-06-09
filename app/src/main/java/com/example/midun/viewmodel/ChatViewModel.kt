@@ -231,16 +231,32 @@ class ChatViewModel @Inject constructor(
                     _contacts.value = chatRepo.getContacts()
                     onConnected()
                 }
-                .onFailure { onError(friendlyConnectError(it)) }
+                .onFailure { onError(friendlyConnectError(it, info)) }
         }
     }
 
-    /** 把底层 socket 异常翻译成可读的中文连接失败提示（M10.6）。 */
-    private fun friendlyConnectError(e: Throwable): String = when (e) {
-        is java.net.SocketTimeoutException ->
-            "连接超时：对方可能不在线，或当前网络无法直达。建议双方改用移动数据（4G/5G）。"
-        else ->
-            "无法连接：网络不可达或对方未在等待。请确认对方已生成二维码，且双方均在移动数据（公网 IPv6）下。"
+    /** 网络诊断快照（真机排障用）：转发 P2PSessionManager 采集的本机 IPv6 信息。 */
+    fun networkDiagnostics(): P2PSessionManager.NetworkDiagnostics = p2pManager.networkDiagnostics()
+
+    /**
+     * 把底层 socket 异常翻译成可读的连接失败提示，并**附带真实诊断细节**（M10.6 排障强化）：
+     * 底层异常类名+message、目标 IPv6、本机出站 IPv6 及是否有公网全局地址。用于真机定位
+     * ENETUNREACH（本机/对方无可路由公网 IPv6）vs 超时（对方入站被防火墙拦）vs 拒绝。
+     */
+    private fun friendlyConnectError(e: Throwable, info: ConnectionInfo): String {
+        val diag = p2pManager.networkDiagnostics()
+        val cause = when (e) {
+            is java.net.SocketTimeoutException ->
+                "连接超时：10 秒内目标无响应。SYN 已发出但对方未回——多为对方入站被防火墙拦截，或对方未在监听。"
+            else ->
+                "连接失败：本机路由到不了目标地址。跨蜂窝网络的公网 IPv6 常被运营商挡死；请两台手机连同一 WiFi 再试。"
+        }
+        return buildString {
+            appendLine(cause)
+            appendLine("· 目标地址：${info.ipv6}")
+            appendLine("· 本机地址：${diag.selectedAddress}（${diag.kind}）")
+            append("· 底层异常：${e.javaClass.simpleName}: ${e.message ?: "无附加信息"}")
+        }
     }
 
     /** 停止当前连接/监听（离开扫码屏且未连上时调用，释放 ServerSocket）。 */

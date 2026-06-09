@@ -35,6 +35,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.midun.network.P2PSessionManager
 import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
@@ -61,6 +62,8 @@ fun QrCodeScreen(
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var qrContent by remember { mutableStateOf<String?>(null) }
     var qrError by remember { mutableStateOf<String?>(null) }
+    // 出码侧网络诊断（真机排障）：生成时采集本机 IPv6，直观暴露「本机有没有公网 IPv6」。
+    var diag by remember { mutableStateOf<P2PSessionManager.NetworkDiagnostics?>(null) }
 
     // 扫码状态（patch §M6 改动4）
     var scanned by remember { mutableStateOf(false) }
@@ -102,6 +105,7 @@ fun QrCodeScreen(
         if (isGenerating) {
             // M10.3：生成真实 ConnectionInfo（含本机 IPv6 + 临时 ECDH 公钥）并后台开始监听对端连入。
             val content = chatViewModel.prepareConnection()
+            diag = chatViewModel.networkDiagnostics() // 采集本机 IPv6 诊断（与二维码同一地址）
             val bitmap = runCatching {
                 withContext(Dispatchers.Default) {
                     val pngBytes = QRCode.ofSquares()
@@ -161,25 +165,6 @@ fun QrCodeScreen(
                         Spacer(Modifier.width(4.dp))
                         Text("识别二维码")
                     }
-                }
-            }
-
-            Spacer(Modifier.height(16.dp))
-
-            // 网络环境提示（v4 §9.1）：WiFi 下家用路由器常拦截入站 IPv6，建议移动数据。
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = Warning.copy(alpha = 0.12f))
-            ) {
-                Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.SignalCellularAlt, null, tint = Warning, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        "建议双方使用移动数据（4G/5G）：WiFi 下家用路由器常拦截入站连接，易失败。",
-                        fontSize = 12.sp,
-                        color = TextSecondary
-                    )
                 }
             }
 
@@ -271,6 +256,47 @@ fun QrCodeScreen(
                             color = TextSecondary,
                             textAlign = TextAlign.Center
                         )
+                    }
+
+                    // 本机出站地址诊断（真机排障）：二维码里写的就是这个地址。无可用直连地址时
+                    // 对端必然「网络不可达」，红字直接点出根因；WiFi 局域网/公网 IPv6 时绿字给出地址。
+                    diag?.let { d ->
+                        Spacer(Modifier.height(12.dp))
+                        val noRoute = d.selectedAddress == "::1"
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = (if (noRoute) Danger else Success).copy(alpha = 0.10f)
+                            )
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(
+                                    "本机出站地址：${d.selectedAddress}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (noRoute) Danger else Success
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    if (noRoute) {
+                                        "本机无可用直连地址 → 对方扫码必报「网络不可达」。请连 WiFi，或改用移动数据。"
+                                    } else {
+                                        "路径：${d.kind}。两台手机连同一 WiFi 时走局域网直连最稳。"
+                                    },
+                                    fontSize = 11.sp,
+                                    color = TextSecondary
+                                )
+                                if (d.allAddresses.isNotEmpty()) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        "全部地址：${d.allAddresses.joinToString("  ")}",
+                                        fontSize = 9.sp,
+                                        color = TextSecondary
+                                    )
+                                }
+                            }
+                        }
                     }
 
                     Spacer(Modifier.height(16.dp))
