@@ -46,6 +46,7 @@ import java.util.Locale
 fun ChatDetailScreen(
     contactId: String,
     onBack: () -> Unit,
+    onOpenProfile: () -> Unit = {},
     chatViewModel: ChatViewModel = hiltViewModel()
 ) {
     val contacts by chatViewModel.contacts.collectAsState()
@@ -103,7 +104,8 @@ fun ChatDetailScreen(
                             )
                         )
                     } else {
-                        Column {
+                        // 点标题进联系人资料页（改备注 / 删除联系人）。
+                        Column(modifier = Modifier.clickable { onOpenProfile() }) {
                             Text(contact?.remark ?: "聊天", fontSize = 16.sp)
                             Text(
                                 "ECDH加密 · 设备ID: ${contact?.deviceId ?: ""}",

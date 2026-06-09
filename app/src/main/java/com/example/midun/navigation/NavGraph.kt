@@ -73,7 +73,24 @@ fun NavGraph(navController: NavHostController) {
             arguments = listOf(navArgument("contactId") { type = NavType.StringType })
         ) { backStackEntry ->
             val contactId = backStackEntry.arguments?.getString("contactId") ?: ""
-            ChatDetailScreen(contactId = contactId, onBack = { navController.popBackStack() })
+            ChatDetailScreen(
+                contactId = contactId,
+                onBack = { navController.popBackStack() },
+                onOpenProfile = { navController.navigate(Screen.ContactProfile.createRoute(contactId)) }
+            )
+        }
+
+        composable(
+            route = Screen.ContactProfile.route,
+            arguments = listOf(navArgument("contactId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val contactId = backStackEntry.arguments?.getString("contactId") ?: ""
+            ContactProfileScreen(
+                contactId = contactId,
+                onBack = { navController.popBackStack() },
+                // 删除联系人后回列表：越过已失效的会话页，直接弹回 Main。
+                onContactDeleted = { navController.popBackStack(Screen.Main.route, inclusive = false) }
+            )
         }
 
         composable(Screen.QrCode.route) {

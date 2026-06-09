@@ -104,6 +104,13 @@ class MockChatRepository @Inject constructor() {
         mockContacts.add(contact)
     }
 
+    /** 修改联系人备注（用户在联系人资料页编辑）。由 ChatViewModel.updateRemark 调用。 */
+    fun updateRemark(contactId: String, remark: String) {
+        mockContacts.indexOfFirst { it.id == contactId }
+            .takeIf { it >= 0 }
+            ?.let { idx -> mockContacts[idx] = mockContacts[idx].copy(remark = remark) }
+    }
+
     /** 是否已存在该 deviceId 的联系人（P2PSessionManager 身份交换去重用）。 */
     fun findContactByDevice(deviceId: String): Contact? =
         mockContacts.firstOrNull { it.deviceId == deviceId }

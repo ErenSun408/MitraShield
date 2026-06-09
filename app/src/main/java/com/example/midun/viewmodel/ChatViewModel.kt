@@ -177,14 +177,22 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /** 修改联系人备注（联系人资料页编辑）。同步写入后重读列表，使会话/列表标题刷新。 */
+    fun updateRemark(contactId: String, remark: String) {
+        chatRepo.updateRemark(contactId, remark)
+        _contacts.value = chatRepo.getContacts()
+    }
+
     /**
-     * 删除联系人（连同消息）。接 M1.4 的 deleteContact。
-     * M6 patch UI 暂无入口，先预留供后续"删除联系人"动作接入。
+     * 删除联系人（连同消息）。接 M1.4 的 deleteContact，由联系人资料页调用。
+     * onComplete 在删除落定后回调导航：否则资料页立即 popBackStack 销毁本 VM scope 会打断
+     * repo.deleteContact 的 delay → 删除半途中断（同 M3.5 忘记密码 / clearAllMessages 坑）。
      */
-    fun deleteContact(contactId: String) {
+    fun deleteContact(contactId: String, onComplete: () -> Unit = {}) {
         viewModelScope.launch {
             chatRepo.deleteContact(contactId)
             _contacts.value = chatRepo.getContacts()
+            onComplete()
         }
     }
 
