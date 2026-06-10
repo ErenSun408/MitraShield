@@ -75,12 +75,19 @@ class RealUsbManager @Inject constructor(
                     IllegalStateException("打开 USB 失败（可能未授权，请在系统弹框中允许后重试）")
                 )
             }
-            diskName = buildExternalDiskName(helper, name)
+            val dn = buildExternalDiskName(helper, name).also { diskName = it }
 
-            val sn = runCatching { fsShell.SFDiskGetSN("") }.getOrNull() ?: ""
-            val notInitialized = probeDefaultPassword() // 默认密码能开 = 未初始化
+            // SFDiskGetSN 需盘已打开才能读。先试免密直读（部分卡可经 USB 句柄读硬件序列号）；读不到则在
+            // 默认密码探测打开盘时顺带读（盘临时打开）。默认密码能开 = 未初始化。已初始化卡此处读不到 SN
+            // （需密码开盘）→ 登录后由 authenticate 补读。
+            var sn = runCatching { fsShell.SFDiskGetSN(dn) }.getOrNull().orEmpty()
+            val canOpenDefault = fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) == 0
+            if (canOpenDefault) {
+                if (sn.isEmpty()) sn = readSn()
+                runCatching { fsShell.SFCloseDisk() }
+            }
             _deviceStatus.value = DeviceInfo(
-                isInitialized = !notInitialized,
+                isInitialized = !canOpenDefault,
                 deviceId = sn,
                 status = UsbDeviceStatus.CONNECTED
             )
@@ -91,14 +98,8 @@ class RealUsbManager @Inject constructor(
         }
     }
 
-    /** 探测：默认密码 123456 能否打开盘（探测后立即关盘）。true=能开（卡未初始化）。 */
-    private fun probeDefaultPassword(): Boolean {
-        val dn = diskName ?: return false
-        return if (fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) == 0) {
-            runCatching { fsShell.SFCloseDisk() }
-            true
-        } else false
-    }
+    /** 读真卡 SN（`SFDiskGetSN` 需盘已打开；打开后 driveName 参数被忽略，传 ""）。读不到回空串。 */
+    private fun readSn(): String = runCatching { fsShell.SFDiskGetSN("") }.getOrNull().orEmpty()
 
     /** 初始化：用默认密码打开 → `SFDiskSetPassword(sha256(新密码))` 改密码 → 状态 AUTHENTICATED（保持打开）。 */
     override suspend fun initDevice(password: String, bindDevice: Boolean): Result<Unit> =
@@ -114,10 +115,12 @@ class RealUsbManager @Inject constructor(
             }
             // 绑定（M11.6.6）：选中绑定则写卡内 0:/.bind = 本机 androidId。
             val boundId = if (bindDevice) androidId().also { writeBoundId(it) } else null
+            val sn = readSn() // 盘已打开，补读真实 SN
             val (total, free) = readCapacity()
             _deviceStatus.value = _deviceStatus.value.copy(
                 isInitialized = true,
                 status = UsbDeviceStatus.AUTHENTICATED,
+                deviceId = sn.ifEmpty { _deviceStatus.value.deviceId },
                 boundPhoneId = boundId,
                 totalBytes = total,
                 freeBytes = free
@@ -141,9 +144,11 @@ class RealUsbManager @Inject constructor(
             runCatching { fsShell.SFCloseDisk() }
             return@withContext Result.failure(IllegalStateException("此卡已绑定其他设备，无法在本机登录"))
         }
+        val sn = readSn() // 盘已打开，补读真实 SN（已初始化卡在 connectUsb 阶段读不到）
         val (total, free) = readCapacity()
         _deviceStatus.value = _deviceStatus.value.copy(
             status = UsbDeviceStatus.AUTHENTICATED,
+            deviceId = sn.ifEmpty { _deviceStatus.value.deviceId },
             totalBytes = total,
             freeBytes = free,
             boundPhoneId = boundId
