@@ -69,6 +69,8 @@ class MockUsbManager @Inject constructor(
         }
     }
 
+    override fun verifyPassword(password: String): Boolean = password == storedPassword
+
     override fun logout() {
         _deviceStatus.value = _deviceStatus.value.copy(status = UsbDeviceStatus.CONNECTED)
     }

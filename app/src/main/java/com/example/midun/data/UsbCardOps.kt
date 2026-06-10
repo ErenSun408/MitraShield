@@ -20,6 +20,12 @@ interface UsbCardOps {
     /** 密码认证（登录）。真卡 = `SFOpenDiskEx(diskName, sha256(password))`，打开盘即认证。 */
     suspend fun authenticate(password: String): Result<Unit>
 
+    /**
+     * 校验密码（**不重开盘**）。登录后对敏感操作（改密钥/绑定/一键清理/恢复出厂）二次确认用。
+     * 真卡 = 比对会话内存里的 `sha256(登录密码)`（再调 `SFOpenDiskEx` 会因盘已开而失败误判）；Mock = 比对存的密码。
+     */
+    fun verifyPassword(password: String): Boolean
+
     /** 退出登录（不拔卡）。真卡 = 关盘但保留 USB 句柄，状态退回 CONNECTED。 */
     fun logout()
 

@@ -47,6 +47,9 @@ class RealUsbManager @Inject constructor(
     /** USB Open 成功后拼好的「外部设备」diskName，供 SFOpenDiskEx 复用。 */
     private var diskName: String? = null
 
+    /** 本次会话登录密码的 sha256（认证/初始化成功时记，登出/拔卡清）。供 [verifyPassword] 不重开盘校验。 */
+    private var sessionPwdHash: String? = null
+
     private val _deviceStatus = MutableStateFlow(DeviceInfo())
     override val deviceStatus: StateFlow<DeviceInfo> = _deviceStatus.asStateFlow()
 
@@ -113,6 +116,7 @@ class RealUsbManager @Inject constructor(
                 runCatching { fsShell.SFCloseDisk() }
                 return@withContext Result.failure(IllegalStateException("设置密码失败，错误码=$ret"))
             }
+            sessionPwdHash = sha256(password)
             // 绑定（M11.6.6）：选中绑定则写卡内 0:/.bind = 本机 androidId。
             val boundId = if (bindDevice) androidId().also { writeBoundId(it) } else null
             val sn = readSn() // 盘已打开，补读真实 SN
@@ -144,6 +148,7 @@ class RealUsbManager @Inject constructor(
             runCatching { fsShell.SFCloseDisk() }
             return@withContext Result.failure(IllegalStateException("此卡已绑定其他设备，无法在本机登录"))
         }
+        sessionPwdHash = sha256(password)
         val sn = readSn() // 盘已打开，补读真实 SN（已初始化卡在 connectUsb 阶段读不到）
         val (total, free) = readCapacity()
         _deviceStatus.value = _deviceStatus.value.copy(
@@ -156,6 +161,10 @@ class RealUsbManager @Inject constructor(
         Result.success(Unit)
     }
 
+    /** 不重开盘校验密码（登录后敏感操作二次确认）：比对会话 sha256(登录密码)。 */
+    override fun verifyPassword(password: String): Boolean =
+        sessionPwdHash != null && sha256(password) == sessionPwdHash
+
     /** 读隐藏区容量（M11.6.1）：`SFGetCapacity(root, long[2])` → [总字节, 空闲字节]；需盘已打开。失败回 0,0。 */
     private fun readCapacity(): Pair<Long, Long> {
         val out = LongArray(2)
@@ -165,6 +174,7 @@ class RealUsbManager @Inject constructor(
     /** 退出登录：关盘但保留 USB 句柄，状态退回 CONNECTED。 */
     override fun logout() {
         runCatching { fsShell.SFCloseDisk() }
+        sessionPwdHash = null
         _deviceStatus.value = _deviceStatus.value.copy(status = UsbDeviceStatus.CONNECTED)
     }
 
@@ -174,6 +184,7 @@ class RealUsbManager @Inject constructor(
         runCatching { usbHelper?.Close() }
         usbHelper = null
         diskName = null
+        sessionPwdHash = null
         _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
         Result.success(Unit)
     }

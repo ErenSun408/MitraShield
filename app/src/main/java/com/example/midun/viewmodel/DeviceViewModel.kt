@@ -69,12 +69,10 @@ class DeviceViewModel @Inject constructor(
      */
     fun wipeUserData(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            cardManager.authenticate(password)
-                .onSuccess {
-                    cardManager.wipeUserData()
-                    onSuccess()
-                }
-                .onFailure { onError("密码错误") }
+            if (cardManager.verifyPassword(password)) {
+                cardManager.wipeUserData()
+                onSuccess()
+            } else onError("密码错误")
         }
     }
 
@@ -85,12 +83,10 @@ class DeviceViewModel @Inject constructor(
      */
     fun factoryReset(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            cardManager.authenticate(password)
-                .onSuccess {
-                    cardManager.wipeAll()
-                    onSuccess()
-                }
-                .onFailure { onError("密码错误") }
+            if (cardManager.verifyPassword(password)) {
+                cardManager.wipeAll()
+                onSuccess()
+            } else onError("密码错误")
         }
     }
 
@@ -100,12 +96,10 @@ class DeviceViewModel @Inject constructor(
      */
     fun updateBinding(password: String, bind: Boolean, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            cardManager.authenticate(password)
-                .onSuccess {
-                    cardManager.updateBinding(bind)
-                    onSuccess()
-                }
-                .onFailure { onError("密码错误") }
+            if (cardManager.verifyPassword(password)) {
+                cardManager.updateBinding(bind)
+                onSuccess()
+            } else onError("密码错误")
         }
     }
 
@@ -115,12 +109,10 @@ class DeviceViewModel @Inject constructor(
      */
     fun updateKey(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            cardManager.authenticate(password)
-                .onSuccess {
-                    cardManager.updateKey()
-                    onSuccess()
-                }
-                .onFailure { onError("密码错误") }
+            if (cardManager.verifyPassword(password)) {
+                cardManager.updateKey()
+                onSuccess()
+            } else onError("密码错误")
         }
     }
 

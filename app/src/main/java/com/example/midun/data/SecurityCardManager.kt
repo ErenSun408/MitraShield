@@ -56,6 +56,7 @@ class SecurityCardManager @Inject constructor(
         active().initDevice(password, bindDevice)
 
     override suspend fun authenticate(password: String) = active().authenticate(password)
+    override fun verifyPassword(password: String) = active().verifyPassword(password)
     override fun logout() = active().logout()
 
     /**
