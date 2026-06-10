@@ -335,6 +335,7 @@ fun FileDetailScreen(
     }
     // 文件夹整体导出：选目标目录 → 建同名子目录写入全部文件（M11.5.6）。
     val exportProgress by fileViewModel.exportProgress.collectAsState()
+    val fileExportResult by fileViewModel.fileExportResult.collectAsState()
     val folderExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
         if (treeUri != null && folder != null) fileViewModel.exportFolderToTree(folder.id, folder.name, treeUri)
     }
@@ -575,6 +576,24 @@ fun FileDetailScreen(
     }
 
     exportProgress?.let { FolderExportDialog(it) { fileViewModel.clearExportProgress() } }
+
+    fileExportResult?.let { r ->
+        AlertDialog(
+            onDismissRequest = { fileViewModel.clearFileExportResult() },
+            icon = {
+                Icon(
+                    if (r.success) Icons.Default.CheckCircle else Icons.Default.Error,
+                    null,
+                    tint = if (r.success) Success else Danger
+                )
+            },
+            title = { Text(if (r.success) "导出成功" else "导出失败") },
+            text = { Text(r.message, color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = { fileViewModel.clearFileExportResult() }) { Text("确定", color = Primary) }
+            }
+        )
+    }
 }
 
 @Composable

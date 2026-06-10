@@ -38,6 +38,9 @@ data class ImportProgress(val fileName: String, val written: Long, val total: Lo
     val fraction: Float get() = if (total > 0) (written.toFloat() / total).coerceIn(0f, 1f) else 0f
 }
 
+/** 单文件导出结果（弹窗提示）。 */
+data class ExportResult(val success: Boolean, val message: String)
+
 /**
  * 文件夹导出进度（M11.5.6）。按文件个数计数；[finished] 后 UI 显示 [message] 结果、可关闭。
  */
@@ -75,6 +78,10 @@ class FileViewModel @Inject constructor(
     /** 非空表示文件夹导出进行中/已完成（finished=true 显示结果）；由 [clearExportProgress] 关闭。 */
     private val _exportProgress = MutableStateFlow<ExportProgress?>(null)
     val exportProgress: StateFlow<ExportProgress?> = _exportProgress.asStateFlow()
+
+    /** 单文件导出结果，非空时 UI 弹窗提示；由 [clearFileExportResult] 关闭。 */
+    private val _fileExportResult = MutableStateFlow<ExportResult?>(null)
+    val fileExportResult: StateFlow<ExportResult?> = _fileExportResult.asStateFlow()
 
     init {
         loadFolders()
@@ -258,11 +265,15 @@ class FileViewModel @Inject constructor(
                 } ?: throw IOException("无法写入目标位置")
             }.onSuccess {
                 operationLog.record(OperationType.FILE_EXPORT, "导出「$fileName」")
-                _operationResult.emit(OperationResult.Success("已导出「$fileName」"))
+                _fileExportResult.value = ExportResult(true, "已导出「$fileName」到所选位置")
             }.onFailure {
-                _operationResult.emit(OperationResult.Error(it.message ?: "导出失败"))
+                _fileExportResult.value = ExportResult(false, it.message ?: "导出失败")
             }
         }
+    }
+
+    fun clearFileExportResult() {
+        _fileExportResult.value = null
     }
 
     /**
