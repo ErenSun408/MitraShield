@@ -53,7 +53,27 @@ fun FilesScreen(
         fileViewModel.loadFolders()
     }
 
+    // 结果反馈走底部 Snackbar（重命名/删除文件夹、文件夹导出完成）；确认弹窗保持模态。
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(Unit) {
+        fileViewModel.operationResult.collect { r ->
+            snackbarHostState.showSnackbar(
+                when (r) {
+                    is FileViewModel.OperationResult.Success -> r.message
+                    is FileViewModel.OperationResult.Error -> r.message
+                }
+            )
+        }
+    }
+    LaunchedEffect(exportProgress?.finished) {
+        exportProgress?.takeIf { it.finished }?.let {
+            snackbarHostState.showSnackbar(it.message)
+            fileViewModel.clearExportProgress()
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = onCreateFolder,
@@ -112,32 +132,25 @@ fun FilesScreen(
         )
     }
 
-    exportProgress?.let { FolderExportDialog(it) { fileViewModel.clearExportProgress() } }
+    // 仅「进行中」显进度弹窗；完成态由上面的 LaunchedEffect 转 Snackbar。
+    exportProgress?.takeIf { !it.finished }?.let { FolderExportDialog(it) }
 }
 
-/** 文件夹导出进度/结果对话框（M11.5.6）。进行中显进度条+计数（不可关），完成显结果（可关）。 */
+/** 文件夹导出进度对话框（M11.5.6）。仅进行中显示，显进度条+计数（不可关）；完成态走 Snackbar。 */
 @Composable
-private fun FolderExportDialog(progress: ExportProgress, onDismiss: () -> Unit) {
+private fun FolderExportDialog(progress: ExportProgress) {
     AlertDialog(
-        onDismissRequest = { if (progress.finished) onDismiss() },
+        onDismissRequest = { }, // 进行中不可关
         icon = { Icon(Icons.Default.FolderZip, null, tint = Primary) },
-        title = { Text(if (progress.finished) "导出完成" else "正在导出文件夹") },
+        title = { Text("正在导出文件夹") },
         text = {
             Column {
-                if (progress.finished) {
-                    Text(progress.message, color = TextSecondary)
-                } else {
-                    LinearProgressIndicator(progress = { progress.fraction }, modifier = Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(6.dp))
-                    Text("已导出 ${progress.done}/${progress.total}", fontSize = 12.sp, color = TextSecondary)
-                }
+                LinearProgressIndicator(progress = { progress.fraction }, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(6.dp))
+                Text("已导出 ${progress.done}/${progress.total}", fontSize = 12.sp, color = TextSecondary)
             }
         },
-        confirmButton = {
-            if (progress.finished) {
-                TextButton(onClick = onDismiss) { Text("确定", color = Primary) }
-            }
-        }
+        confirmButton = {}
     )
 }
 
@@ -355,7 +368,33 @@ fun FileDetailScreen(
         fileViewModel.loadFiles(folderId)
     }
 
+    // 结果类反馈统一走底部 Snackbar（自动消失、不挡操作），替代原全屏确认弹窗。进度/确认弹窗保持模态。
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(Unit) {
+        fileViewModel.operationResult.collect { r ->
+            snackbarHostState.showSnackbar(
+                when (r) {
+                    is FileViewModel.OperationResult.Success -> r.message
+                    is FileViewModel.OperationResult.Error -> r.message
+                }
+            )
+        }
+    }
+    LaunchedEffect(fileExportResult) {
+        fileExportResult?.let {
+            snackbarHostState.showSnackbar(it.message)
+            fileViewModel.clearFileExportResult()
+        }
+    }
+    LaunchedEffect(exportProgress?.finished) {
+        exportProgress?.takeIf { it.finished }?.let {
+            snackbarHostState.showSnackbar(it.message)
+            fileViewModel.clearExportProgress()
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -575,25 +614,8 @@ fun FileDetailScreen(
         )
     }
 
-    exportProgress?.let { FolderExportDialog(it) { fileViewModel.clearExportProgress() } }
-
-    fileExportResult?.let { r ->
-        AlertDialog(
-            onDismissRequest = { fileViewModel.clearFileExportResult() },
-            icon = {
-                Icon(
-                    if (r.success) Icons.Default.CheckCircle else Icons.Default.Error,
-                    null,
-                    tint = if (r.success) Success else Danger
-                )
-            },
-            title = { Text(if (r.success) "导出成功" else "导出失败") },
-            text = { Text(r.message, color = TextSecondary) },
-            confirmButton = {
-                TextButton(onClick = { fileViewModel.clearFileExportResult() }) { Text("确定", color = Primary) }
-            }
-        )
-    }
+    // 仅「进行中」显进度弹窗；完成态由上面的 LaunchedEffect 转 Snackbar。
+    exportProgress?.takeIf { !it.finished }?.let { FolderExportDialog(it) }
 }
 
 @Composable
