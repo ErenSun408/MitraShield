@@ -5,6 +5,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- M11.1：FSShell SDK 底层用 libusb 操作 usbfs，部分严格系统需此权限访问 /dev/bus/usb（非必需项）。 -->
+    <uses-permission android:name="android.permission.HARDWARE_TEST" />
     <uses-feature
         android:name="android.hardware.usb.host"
         android:required="false" />
