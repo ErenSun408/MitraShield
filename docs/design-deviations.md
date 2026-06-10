@@ -859,4 +859,21 @@ M11.5 较大，按子子阶段拆分逐个提交（[[feedback-commit-per-substag
 - 「导出文件夹」（列表项）与「导出全部文件」（详情页菜单）两入口统一走此路径，共用 `ExportProgress` StateFlow + `FolderExportDialog`（进行中进度条+计数、完成显结果）。删除原 `exportMessage`/`folderExportMessage` 占位提示对话框。
 - 新增 `androidx.documentfile:documentfile:1.0.1`（catalog + build.gradle）。`createFile` 用 `application/octet-stream`（避免 SAF 按 mime 改名；文件名已带扩展名）。**多选文件导出未做**（单文件 5.2 + 整文件夹 5.6 已覆盖需求）。compileDebugKotlin 干净；**真卡读取段未真机验**。
 
+### M11.6 — 真卡收尾：容量 / SN / 锁定清理 / 持久化 / wipe / 绑定（子拆分逐个提交）
+
+**M11.6.1 真实容量**（`de66b55`）`DeviceInfo` 加 `totalBytes/freeBytes`；`RealUsbManager` 认证/初始化成功后 `SFGetCapacity("0:/", long[2])`→[总,空闲] 填入；新增 `util/formatStorage`（GB/MB/KB 自动）。首页「存储容量/已用空间」、设置「存储使用」真值化（已用=总-空闲），模拟模式 0→显占位。**容量认证时读一次、导入/删除后不实时刷新**（后续细化）。
+
+**M11.6.2 真 SN → P2P deviceSn + 二维码弱标识**（`e93ae40`）`P2PSessionManager` 注入 `SecurityCardManager`，`currentDeviceSn()` 真卡模式取 `SFDiskGetSN`（全球唯一公开标识）、否则回退随机 `DEV-xxxx`。二维码 `ConnectionInfo.deviceSn` + IDENTITY 帧据此 → 扫码联系人按真 SN 标识（M11 审计的「弱来源标识」，非密码学签名）。无 DI 环（数据层无人注入 P2PSessionManager）。
+
+**M11.6.3 内存清除-on-锁定**（`295e19a`）补 M11.5.4/5.5 留的安全加固：聊天/日志仓库响应 `RealUsbManager.deviceStatus` 离开 AUTHENTICATED → 清内存明文（已写穿到卡、重认证重载）。`wasAuthed` 标志门控，避免模拟模式初始 DISCONNECTED 误清种子。`SFCloseDisk` 本就由 M11.3 logout/closeDevice 完成。
+
+**M11.6.4 自动锁定持久化**（`9cfb535`）新增 `data/SettingsStore.kt`（Jetpack DataStore，依赖早已预置），自动锁定时长改存**手机本地**、重启不丢。**偏离计划「写卡」**：时长是非敏感 UI 偏好、需在认证前/时生效，存卡会「读设置需认证、认证需设置」时序倒挂 → 落手机本地，卡只放隐私数据。
+
+**M11.6.5 真卡 wipe**（`02b7b08`，用户定「试 SFFormat 强擦」）`RealUsbManager.wipeAll = SFFormat("0:/")`（静态强制格式化隐藏区）+ 关盘 + 状态退回未初始化，失败诚实提示用 PC 串口工具；`wipeUserData = RealFileSystem.clear()`（保留密码/登录）。`SecurityCardManager` 在真卡 wipe 成功后补清共享聊天/日志仓库（注入两仓库，无 DI 环）。**SFFormat 语义全未知**（是否需开盘 / 能否忘记密码免密执行 / 格式化后密码是否回出厂默认）→ **真机必验**。
+- **重要发现**：真卡「忘记密码→整卡擦除」原设计在 App 内本不可行（擦卡/改密码都需先开盘=需密码；SDK 无 App 层免密格式化接口，按审计属 PC 串口工具范围）。用户选择「试 SFFormat 看能否免密强擦」，结果待真机验证。
+
+**M11.6.6 设备绑定**（`d7ea22e`，用户定「写 .bind 且强制校验」）`updateBinding` 改 `suspend`（卡 IO）：bind 写卡内 `0:/.bind`=本机 androidId、unbind 删之；`initDevice(bindDevice)` 同写。`authenticate` 开盘后读 `.bind`，存在且 != 本机 → **拒登 + 关盘**（绑定 A 机的卡在 B 机登不了——安全设计；解绑须在原机或 PC 串口工具）。无 `.bind`=未绑定放行。`UsbCardOps`/`SecurityCardManager`/`MockUsbManager` 的 `updateBinding` 同步改 suspend。**真机必验**（绑定读写 + 锁死行为）。
+
+- M11.6 全部 compileDebugKotlin + assembleDebug 干净、Hilt 图无环；**真卡相关全未真机验证**（容量/SN/SFFormat/绑定锁死攒到真机阶段）。剩 M11.7（混淆 SDK keep + 正式签名 + 多机型验收）+ M11.5.3 真实文件传输（真机阶段连写带验）。
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
