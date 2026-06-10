@@ -758,4 +758,24 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **验证** `:app:assembleDebug` BUILD SUCCESSFUL（仅 AutoMirrored 图标弃用告警，与全项目既有写法一致）。
 - **Commit** `d974a29`
 
+## M10.8 — 阅后即焚（联网双端：模式制 + 读触发焚毁）
+
+> **实质扩展，非 v4 既有语义**：v4 doc + patch 只把「阅后即焚」当作 M0 起就存在的**单条消息标记**——`ChatMessage.burnAfterRead` 字段从一开始就在、火焰图标 + 时长弹框是 M0 占位 UI，但**从未接任何焚毁逻辑**（见本文 M6 节「遗留 阅后即焚仍不生效」「UI 占位未联网络语义」三处）。v4 §9 网络层也不要求焚毁。本里程碑把它实现为一套**完整的双端联网焚毁机制**，语义远超 v4 的「单条标记」，故整节记为偏离。
+>
+> **设计定案由用户拍板**（2026-06-09）：①焚毁是**会话级模式开关**，不是单条勾选；②开/关模式 = 双端各插一条**居中系统行**（复用撤回墓碑的居中渲染，非顶栏 banner）；③时长用**选择器**（5 / 30 / 60 / 300 秒）；④接收方收到焚毁消息**先遮罩「🔥 点击查看」、点按才揭示**→启动倒计时→归零时**两端**变焚毁墓碑「🔥 阅后即焚消息已焚毁」；⑤仅文字消息焚。
+
+**架构关键**
+- **`burned` / `recalled` 是消息原地标记**（变残骸但保 id 与时间位置，撤回墓碑承重「双删引用」故不能搬走）；只有**开/关模式那两行**是新增 `MessageType.SYSTEM`（独立插入的事件行）。渲染统一到 `SystemLine`，但底层模型一个是标记、一个是独立消息。
+- **焚毁状态全在 `P2PSessionManager` 单例**：`burnMode`（BurnMode(enabled, ttlSeconds)）与 `burnTimers`（messageId → 焚毁截止 epoch ms）都挂单例 scope——倒计时**必须活过会话页导航**（读过即注定焚，离开会话也照焚）。
+- **协议帧**（org.json，`optBoolean/optInt` 解析 → 向后兼容旧端）：`BURN_MODE`（开关广播，仿 IDENTITY）/ `TEXT` 帧带可选 `burn`+`ttl` / `BURN`（读方到点令双端焚，仿 RECALL，payload=目标 messageId）。
+- **离线退化**（同撤回）：无活动会话时本端照常焚毁、对端收不到 BURN 帧。
+
+**改动（按子阶段）**
+- **B.1 数据 + 协议地基**（`6647d9a`）：`ChatMessage` 加 `MessageType.SYSTEM` + `burnTtl` + `burned`；`MessageFrame` 加 `burn`+`ttl`（`optBoolean/optInt` 兼容）；`MockChatRepository` 加 `addSystemMessage` / `markBurned` + 预览串带 🔥 标。
+- **B.2 开关 + 双端系统行**（`77b02bc`）：`P2PSessionManager.setBurnMode` + `BurnMode` 状态 + `BURN_MODE` 帧收发（开/关广播 → 双端插系统行）；`ChatViewModel.burnMode` 透传 + 火苗图标随真实模式高亮；ChatDetailScreen 火苗真开关 + 时长选择器 + 未连接 gate（仅本会话已连接可开）。
+- **B.3 揭示 + 倒计时 + 双端焚毁**（`cb80c9d`）：`P2PSessionManager` 加 `burnTimers` 状态 + `revealBurnMessage`（登记倒计时，重复点开忽略）+ `burnMessage`（发 BURN 帧 + 本端 `markBurned`）+ `BURN` 帧接收焚毁；`MockChatRepository.receiveMessage` 透传 `burnAfterRead/burnTtl`；`ChatViewModel` 暴露 `burnTimers` + 转发 `revealBurnMessage`；ChatDetailScreen 接收方遮罩「点击查看」→点按揭示、`BurnStatusLabel` 每秒倒计时、焚毁消息火焰色描边、归零变焚毁墓碑。
+- **验证**：`:app:compileDebugKotlin` 通过（B.3 提交前编译干净）。**双端焚毁联动须两台同 WiFi 真机验**（模拟器单机只能看 UI 遮罩/揭示，看不到对端 BURN 帧落地）；与 M10.3–M10.6 同属真机待验范围。
+- **未做 / 后续**：仅文字消息焚（文件/图片焚毁未做，绑文件传输真实化的 M11）；A 侧改备注、阅后即焚之外的联网项不在本节。
+- **Commit** B.1 `6647d9a` / B.2 `77b02bc` / B.3 `cb80c9d`
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
