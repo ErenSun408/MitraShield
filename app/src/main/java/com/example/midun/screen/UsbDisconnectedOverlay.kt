@@ -19,7 +19,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.ui.theme.*
+import com.example.midun.viewmodel.RealUsbTestViewModel
 import kotlinx.coroutines.delay
 
 /**
@@ -177,6 +179,11 @@ fun BoxScope.DevControlPanel(
 ) {
     var expanded by remember { mutableStateOf(false) }
 
+    // M11.2 临时真机验证入口：触发 RealUsbManager.openDevice，结果灌进对话框。M11.3 接入后删。
+    val testVm: RealUsbTestViewModel = hiltViewModel()
+    val testResult by testVm.result.collectAsState()
+    val testing by testVm.testing.collectAsState()
+
     Box(
         modifier = Modifier
             .align(Alignment.TopStart)
@@ -238,6 +245,31 @@ fun BoxScope.DevControlPanel(
                     onSimInitInsert()
                 }
             )
+            // M11.2 真机验证：直接调真实 SDK 打开这张卡（临时入口，M11.3 接入后删）。
+            DropdownMenuItem(
+                text = { Text("测试打开真卡 (M11.2)") },
+                leadingIcon = {
+                    Icon(Icons.Default.Memory, contentDescription = null, tint = Warning)
+                },
+                onClick = {
+                    expanded = false
+                    testVm.testOpen()
+                }
+            )
         }
+    }
+
+    // 真卡打开测试结果对话框（M11.2 临时）。
+    if (testResult != null) {
+        AlertDialog(
+            onDismissRequest = { testVm.clearResult() },
+            title = { Text("真卡打开测试 (M11.2)") },
+            text = { Text(testResult ?: "") },
+            confirmButton = {
+                TextButton(onClick = { testVm.clearResult() }, enabled = !testing) {
+                    Text(if (testing) "测试中…" else "关闭")
+                }
+            }
+        )
     }
 }
