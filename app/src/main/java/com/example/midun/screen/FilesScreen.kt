@@ -353,6 +353,7 @@ fun FileDetailScreen(
         if (treeUri != null && folder != null) fileViewModel.exportFolderToTree(folder.id, folder.name, treeUri)
     }
     var fileToDelete by remember { mutableStateOf<FileItem?>(null) }
+    var previewFile by remember { mutableStateOf<FileItem?>(null) }
     var showDeleteAllFilesDialog by remember { mutableStateOf(false) }
     val onExportAllFiles = {
         showMenu = false
@@ -507,7 +508,8 @@ fun FileDetailScreen(
                             fileToExport = file
                             exportLauncher.launch(file.name)
                         },
-                        onDelete = { fileToDelete = file }
+                        onDelete = { fileToDelete = file },
+                        onPreview = { previewFile = file }
                     )
                 }
             }
@@ -616,6 +618,8 @@ fun FileDetailScreen(
 
     // 仅「进行中」显进度弹窗；完成态由上面的 LaunchedEffect 转 Snackbar。
     exportProgress?.takeIf { !it.finished }?.let { FolderExportDialog(it) }
+
+    previewFile?.let { FilePreviewDialog(file = it, onClose = { previewFile = null }) }
 }
 
 @Composable
@@ -624,8 +628,10 @@ private fun FileItemCard(
     copyPolicy: CopyPolicy,
     onRename: (String) -> Unit,
     onExportFile: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onPreview: () -> Unit
 ) {
+    val previewable = file.type == FileType.IMAGE || file.type == FileType.VIDEO
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameText by remember(file.id, file.name) { mutableStateOf(file.name) }
@@ -639,7 +645,10 @@ private fun FileItemCard(
         FileType.OTHER -> Pair(Icons.Default.InsertDriveFile, TextSecondary)
     }
 
-    Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(10.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth().let { if (previewable) it.clickable(onClick = onPreview) else it },
+        shape = RoundedCornerShape(10.dp)
+    ) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(iconData.second.copy(0.1f)),
