@@ -164,7 +164,9 @@ class MockChatRepository @Inject constructor() {
         contactId: String,
         content: String,
         type: MessageType,
-        messageId: String? = null
+        messageId: String? = null,
+        burnAfterRead: Boolean = false,
+        burnTtl: Int = 0
     ): ChatMessage {
         val msg = ChatMessage(
             // 用发送方的稳定 id（供撤回引用）；缺省才自生成。
@@ -173,7 +175,10 @@ class MockChatRepository @Inject constructor() {
             content = content,
             type = type,
             isMine = false,
-            status = MessageStatus.RECEIVED
+            status = MessageStatus.RECEIVED,
+            // 焚毁消息（B 阶段）：接收端先遮罩，点开后按 burnTtl 倒计时焚毁。
+            burnAfterRead = burnAfterRead,
+            burnTtl = burnTtl
         )
         mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
         val idx = mockContacts.indexOfFirst { it.id == contactId }

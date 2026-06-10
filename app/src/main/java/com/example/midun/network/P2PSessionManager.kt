@@ -29,6 +29,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -84,6 +85,13 @@ class P2PSessionManager @Inject constructor(
     val burnMode: StateFlow<BurnMode> = _burnMode.asStateFlow()
 
     data class BurnMode(val enabled: Boolean, val ttlSeconds: Int)
+
+    /**
+     * 进行中的焚毁倒计时（B 阶段）：messageId → 焚毁截止时刻(epoch ms)。接收方点开焚毁消息后写入，
+     * 供 UI 显示剩余秒数；倒计时跑在单例 scope（活过会话页导航——读过即注定焚毁）。
+     */
+    private val _burnTimers = MutableStateFlow<Map<String, Long>>(emptyMap())
+    val burnTimers: StateFlow<Map<String, Long>> = _burnTimers.asStateFlow()
 
     /** 本机设备 SN：mock 期每进程随机一个（替死值，保证两机可区分）；M11 取安全卡真实 SN。 */
     private val localDeviceSn: String = "DEV-${generateRandomHex(4)}"
@@ -248,6 +256,34 @@ class P2PSessionManager @Inject constructor(
         }
     }
 
+    /**
+     * 接收方点开焚毁消息（B 阶段）：登记倒计时（ttl 秒），到点触发双端焚毁。重复点开忽略（已在倒计时）。
+     * 定时器跑在单例 scope，故离开会话页也照常焚毁。contactId 透传给 [burnMessage] 以便无活动会话时仍能本地焚。
+     */
+    fun revealBurnMessage(messageId: String, contactId: String, ttlSeconds: Int) {
+        if (_burnTimers.value.containsKey(messageId)) return
+        _burnTimers.value = _burnTimers.value + (messageId to System.currentTimeMillis() + ttlSeconds * 1000L)
+        scope.launch {
+            delay(ttlSeconds * 1000L)
+            runCatching { burnMessage(messageId, contactId) }
+            _burnTimers.value = _burnTimers.value - messageId
+        }
+    }
+
+    /**
+     * 焚毁一条阅后即焚消息（B 阶段）：若该联系人为当前活动会话，发 BURN 帧令对端按 id 焚毁；
+     * 本端无论是否在线都标记 burned（焚毁墓碑）。对端收到 BURN 帧由 handleIncoming 焚毁。
+     */
+    suspend fun burnMessage(messageId: String, contactId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        val session = _activeSession.value
+        if (session != null && session.contactId == contactId) {
+            runCatching { writeFrame(session, generateMessageId(), BURN_TYPE, messageId) }
+        }
+        chatRepo.markBurned(messageId, contactId)
+        _incomingMessages.emit(contactId)
+        Result.success(Unit)
+    }
+
     /** 焚毁 TTL 秒数 → 人类可读（5→5秒，60→1分钟）。 */
     private fun formatTtl(seconds: Int): String =
         if (seconds < 60) "${seconds}秒" else "${seconds / 60}分钟"
@@ -323,10 +359,17 @@ class P2PSessionManager @Inject constructor(
                 chatRepo.addSystemMessage(contactId, text)
                 _incomingMessages.emit(contactId)
             }
+            BURN_TYPE -> {
+                // 对端焚毁（B 阶段）：plaintext = 目标消息 id，本地焚毁对应消息为焚毁墓碑。
+                val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
+                chatRepo.markBurned(plaintext, contactId)
+                _incomingMessages.emit(contactId)
+            }
             else -> {
                 val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
                 val type = runCatching { MessageType.valueOf(frame.type) }.getOrDefault(MessageType.TEXT)
-                chatRepo.receiveMessage(contactId, plaintext, type, frame.id) // 用发送方的稳定 id 入库
+                // 焚毁消息带 burn/ttl 入库，接收端先遮罩、点开后倒计时焚毁（B 阶段）。
+                chatRepo.receiveMessage(contactId, plaintext, type, frame.id, frame.burn, frame.burnTtl)
                 _incomingMessages.emit(contactId)
             }
         }

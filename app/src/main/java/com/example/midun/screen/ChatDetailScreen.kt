@@ -1,6 +1,7 @@
 package com.example.midun.screen
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -41,6 +42,7 @@ import com.example.midun.viewmodel.ChatViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,6 +64,8 @@ fun ChatDetailScreen(
     // 阅后即焚模式（B 阶段）：驱动火苗图标高亮；开/关只在本会话已连接时可用。
     val burnMode by chatViewModel.burnMode.collectAsState()
     val burnOnHere = burnMode.enabled && connectedHere
+    // 进行中的焚毁倒计时：messageId → 截止时刻，气泡据此显示剩余秒数（B 阶段）。
+    val burnTimers by chatViewModel.burnTimers.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
     var showBurnDialog by remember { mutableStateOf(false) }
@@ -248,8 +252,12 @@ fun ChatDetailScreen(
                     msg.type == MessageType.SYSTEM -> SystemLine(msg.content)
                     // 撤回墓碑（M10.5）：复用 SystemLine 居中渲染。
                     msg.recalled -> SystemLine(if (msg.isMine) "你撤回了一条消息" else "对方撤回了一条消息")
+                    // 焚毁墓碑（B 阶段）：复用 SystemLine。
+                    msg.burned -> SystemLine("🔥 阅后即焚消息已焚毁")
                     else -> ChatBubble(
                         msg = msg,
+                        burnDeadline = burnTimers[msg.id],
+                        onReveal = { chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl) },
                         onDelete = { chatViewModel.deleteMessage(msg.id) },
                         onRecall = { chatViewModel.recallMessage(msg.id) }
                     )
@@ -346,14 +354,55 @@ private fun SystemLine(text: String) {
     }
 }
 
+/**
+ * 焚毁消息的状态标签（B 阶段）：已点开（burnDeadline 非空）显示每秒刷新的剩余倒计时；
+ * 未点开时——发送方显示「对方读后焚毁」、接收方（理论上已被遮罩，不会走到此分支）显示静态提示。
+ */
+@Composable
+private fun BurnStatusLabel(isMine: Boolean, burnDeadline: Long?, contentColor: Color) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Default.LocalFireDepartment, null, tint = Warning, modifier = Modifier.size(12.dp))
+        Spacer(Modifier.width(2.dp))
+        if (burnDeadline != null) {
+            var remaining by remember(burnDeadline) {
+                mutableStateOf(((burnDeadline - System.currentTimeMillis()) / 1000).coerceAtLeast(0))
+            }
+            LaunchedEffect(burnDeadline) {
+                while (remaining > 0) {
+                    delay(500)
+                    remaining = ((burnDeadline - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
+                }
+            }
+            Text("${remaining}秒后焚毁", fontSize = 10.sp, color = contentColor.copy(alpha = 0.85f))
+        } else {
+            Text(
+                if (isMine) "阅后即焚 · 对方读后焚毁" else "阅后即焚",
+                fontSize = 10.sp,
+                color = contentColor.copy(alpha = 0.85f)
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ChatBubble(msg: ChatMessage, onDelete: () -> Unit, onRecall: () -> Unit) {
+private fun ChatBubble(
+    msg: ChatMessage,
+    burnDeadline: Long?,
+    onReveal: () -> Unit,
+    onDelete: () -> Unit,
+    onRecall: () -> Unit
+) {
     var showMenu by remember { mutableStateOf(false) }
     val isFile = msg.type == MessageType.FILE
     val isImage = msg.type == MessageType.IMAGE
     val isVideo = msg.type == MessageType.VIDEO
     val isAudio = msg.type == MessageType.AUDIO
+
+    // 焚毁消息（B 阶段）：接收方未点开 → 遮罩；点开后 burnDeadline 非空 → 倒计时显示。
+    val isBurn = msg.burnAfterRead
+    val revealed = burnDeadline != null
+    val masked = isBurn && !msg.isMine && !revealed
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -380,10 +429,24 @@ private fun ChatBubble(msg: ChatMessage, onDelete: () -> Unit, onRecall: () -> U
                     colors = CardDefaults.cardColors(
                         containerColor = if (msg.isMine) ChatBubbleMine else ChatBubbleOther
                     ),
-                    modifier = Modifier.combinedClickable(onClick = {}, onLongClick = { showMenu = true })
+                    // 焚毁消息加火焰色描边以示特殊（B 阶段）。
+                    border = if (isBurn) BorderStroke(1.dp, Warning) else null,
+                    // 遮罩态点击揭示并启动倒计时；其余点击无操作，长按弹菜单。
+                    modifier = Modifier.combinedClickable(
+                        onClick = { if (masked) onReveal() },
+                        onLongClick = { showMenu = true }
+                    )
                 ) {
                     val contentColor = if (msg.isMine) Color.White else TextPrimary
                     Column(modifier = Modifier.padding(12.dp)) {
+                        if (masked) {
+                            // 遮罩：接收方点开前不显示原文（B 阶段）。
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.LocalFireDepartment, null, tint = Warning, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("点击查看", color = contentColor, fontSize = 14.sp)
+                            }
+                        } else {
                         when {
                             isFile || isVideo -> Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
@@ -417,6 +480,12 @@ private fun ChatBubble(msg: ChatMessage, onDelete: () -> Unit, onRecall: () -> U
                                 Text(msg.content.ifBlank { "语音消息" }, color = contentColor, fontSize = 14.sp)
                             }
                             else -> Text(msg.content, color = contentColor, fontSize = 14.sp)
+                        }
+                        // 焚毁状态标签：发送方/已揭示接收方显示（遮罩态不显示，B 阶段）。
+                        if (isBurn) {
+                            Spacer(Modifier.height(4.dp))
+                            BurnStatusLabel(isMine = msg.isMine, burnDeadline = burnDeadline, contentColor = contentColor)
+                        }
                         }
                     }
                 }

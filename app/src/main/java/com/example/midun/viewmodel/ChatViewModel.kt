@@ -52,6 +52,9 @@ class ChatViewModel @Inject constructor(
     // 会话详情据此高亮火苗图标、决定发出的消息是否为焚毁消息。收发行为接线在 B.2/B.3。
     val burnMode: StateFlow<P2PSessionManager.BurnMode> = p2pManager.burnMode
 
+    // 进行中的焚毁倒计时（B 阶段）：messageId → 焚毁截止时刻；会话气泡据此显示剩余秒数。
+    val burnTimers: StateFlow<Map<String, Long>> = p2pManager.burnTimers
+
     // 联系人搜索（patch §M6 改动1）
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
@@ -257,6 +260,14 @@ class ChatViewModel @Inject constructor(
                 }
                 .onFailure { onError(friendlyConnectError(it, info)) }
         }
+    }
+
+    /**
+     * 接收方点开焚毁消息（B 阶段）：转发 P2PSessionManager.revealBurnMessage，登记倒计时；
+     * 到点由 manager 自动双端焚毁并经 incomingMessages 刷新会话（变焚毁墓碑）。
+     */
+    fun revealBurnMessage(messageId: String, contactId: String, ttlSeconds: Int) {
+        p2pManager.revealBurnMessage(messageId, contactId, ttlSeconds)
     }
 
     /** 网络诊断快照（真机排障用）：转发 P2PSessionManager 采集的本机 IPv6 信息。 */
