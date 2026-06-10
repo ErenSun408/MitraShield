@@ -89,6 +89,9 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     // M11.5.6：文件夹导出到用户选定目录（OpenDocumentTree + DocumentFile 建子目录/逐个写文件）
     implementation(libs.androidx.documentfile)
+    // 文件预览（视频）：ExoPlayer + 自定义 DataSource 从安全卡流式解密播放（图片走内存 decode）
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.ui)
 
     // Hilt 依赖注入
     implementation(libs.hilt.android)

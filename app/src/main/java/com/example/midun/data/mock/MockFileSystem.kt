@@ -92,6 +92,9 @@ class MockFileSystem @Inject constructor() : FileSystemOps {
         }
     }
 
+    override suspend fun readFileBytes(fileId: String): Result<ByteArray> =
+        Result.failure(UnsupportedOperationException("模拟模式无真实文件内容，无法预览"))
+
     override suspend fun deleteFile(fileId: String): Result<Unit> {
         delay(200)
         mockFiles.removeAll { it.id == fileId }

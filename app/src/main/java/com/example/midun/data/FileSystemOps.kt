@@ -45,6 +45,9 @@ interface FileSystemOps {
      */
     suspend fun exportFile(fileId: String, fileName: String, output: OutputStream): Result<Long>
 
+    /** 读取文件全部字节（图片预览用，内存解密）。真卡读隐藏区明文；Mock 无真实内容 → 失败。 */
+    suspend fun readFileBytes(fileId: String): Result<ByteArray>
+
     suspend fun deleteFile(fileId: String): Result<Unit>
     suspend fun deleteAllFilesInFolder(folderId: String): Result<Unit>
     suspend fun deleteFolder(folderId: String): Result<Unit>

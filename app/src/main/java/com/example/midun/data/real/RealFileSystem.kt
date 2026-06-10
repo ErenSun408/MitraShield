@@ -4,6 +4,7 @@ import com.example.midun.data.FileSystemOps
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import javax.inject.Inject
@@ -106,6 +107,19 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
         // fileId 即隐藏区完整路径；readFile 读出解密后明文（卡内加密存储 → SFRead 已解密）。
         readFile(fileId, output)
     }
+
+    override suspend fun readFileBytes(fileId: String): Result<ByteArray> = withContext(Dispatchers.IO) {
+        val out = ByteArrayOutputStream()
+        readFile(fileId, out).map { out.toByteArray() }
+    }
+
+    // —— 视频预览随机读原语（供自定义 media3 DataSource 流式解密，不落整文件）。句柄 SFOpen 返回。 ——
+    fun streamOpen(path: String): Int = synchronized(fsShell) { LibJniFSShell.SFOpen(path) }
+    fun streamSize(handle: Int): Long = synchronized(fsShell) { LibJniFSShell.SFGetSize(handle) }
+    fun streamSeek(handle: Int, pos: Long): Long = synchronized(fsShell) { LibJniFSShell.SFSeek64(handle, pos, 0) }
+    fun streamRead(handle: Int, buf: ByteArray, off: Int, len: Int): Int =
+        synchronized(fsShell) { LibJniFSShell.SFRead(handle, buf, off, len) }
+    fun streamClose(handle: Int) { synchronized(fsShell) { LibJniFSShell.SFClose(handle) } }
 
     override suspend fun deleteFile(fileId: String): Result<Unit> = withContext(Dispatchers.IO) {
         if (synchronized(fsShell) { LibJniFSShell.SFDelete(fileId) }) Result.success(Unit)

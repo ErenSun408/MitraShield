@@ -40,6 +40,8 @@ class FileRepository @Inject constructor(
     override suspend fun exportFile(fileId: String, fileName: String, output: OutputStream) =
         active().exportFile(fileId, fileName, output)
 
+    override suspend fun readFileBytes(fileId: String) = active().readFileBytes(fileId)
+
     override suspend fun deleteFile(fileId: String) = active().deleteFile(fileId)
     override suspend fun deleteAllFilesInFolder(folderId: String) = active().deleteAllFilesInFolder(folderId)
     override suspend fun deleteFolder(folderId: String) = active().deleteFolder(folderId)
