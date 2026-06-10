@@ -106,7 +106,7 @@ class MockUsbManager @Inject constructor(
      * mock 期仅写状态、不真校验：authenticate 仍只用密码，不会因 boundPhoneId 不匹配而拒登。
      * 真 SDK 接入后需在 authenticate 处补 boundPhoneId 校验。
      */
-    override fun updateBinding(bind: Boolean) {
+    override suspend fun updateBinding(bind: Boolean) {
         val deviceId = if (bind) {
             Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
         } else null

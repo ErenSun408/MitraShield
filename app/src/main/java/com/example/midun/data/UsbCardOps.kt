@@ -29,8 +29,8 @@ interface UsbCardOps {
     /** 一键清理用户数据（清文件 + 聊天，保留登录态/密码/绑定）。 */
     suspend fun wipeUserData(): Result<Unit>
 
-    /** 切换设备绑定（bind=true 写本机 ID，false 解绑）。 */
-    fun updateBinding(bind: Boolean)
+    /** 切换设备绑定（bind=true 写本机 ID，false 解绑）。真卡写卡内 `0:/.bind` → `suspend`（IO）。 */
+    suspend fun updateBinding(bind: Boolean)
 
     /** 密钥更新（轮换）。 */
     suspend fun updateKey(): Result<Unit>

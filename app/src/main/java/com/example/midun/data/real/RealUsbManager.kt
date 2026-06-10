@@ -8,6 +8,7 @@ import com.example.midun.data.UsbCardOps
 import com.example.midun.data.model.DeviceInfo
 import com.example.midun.data.model.UsbDeviceStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -111,33 +112,43 @@ class RealUsbManager @Inject constructor(
                 runCatching { fsShell.SFCloseDisk() }
                 return@withContext Result.failure(IllegalStateException("设置密码失败，错误码=$ret"))
             }
-            // 绑定写卡内文件依赖 RealFileSystem（M11.4），此处先只记内存绑定标记。
+            // 绑定（M11.6.6）：选中绑定则写卡内 0:/.bind = 本机 androidId。
+            val boundId = if (bindDevice) androidId().also { writeBoundId(it) } else null
             val (total, free) = readCapacity()
             _deviceStatus.value = _deviceStatus.value.copy(
                 isInitialized = true,
                 status = UsbDeviceStatus.AUTHENTICATED,
-                boundPhoneId = if (bindDevice) androidId() else null,
+                boundPhoneId = boundId,
                 totalBytes = total,
                 freeBytes = free
             )
             Result.success(Unit)
         }
 
-    /** 认证（登录）：`SFOpenDiskEx(diskName, sha256(password))`，打开盘即认证成功。 */
+    /**
+     * 认证（登录）：`SFOpenDiskEx(diskName, sha256(password))`，打开盘即认证成功。
+     * **绑定强制校验（M11.6.6）**：开盘后读卡内 `0:/.bind`，若存在且 != 本机 androidId → 拒登并关盘
+     * （换手机/重装会被锁——安全设计，解绑需在原绑定机上做或用 PC 串口工具）。无 `.bind` = 未绑定，放行。
+     */
     override suspend fun authenticate(password: String): Result<Unit> = withContext(Dispatchers.IO) {
         val dn = diskName ?: return@withContext Result.failure(IllegalStateException("USB 未连接"))
         val ret = fsShell.SFOpenDiskEx(dn, sha256(password))
-        if (ret == 0) {
-            val (total, free) = readCapacity()
-            _deviceStatus.value = _deviceStatus.value.copy(
-                status = UsbDeviceStatus.AUTHENTICATED,
-                totalBytes = total,
-                freeBytes = free
-            )
-            Result.success(Unit)
-        } else {
-            Result.failure(IllegalStateException("密码错误或打开失败，错误码=$ret"))
+        if (ret != 0) {
+            return@withContext Result.failure(IllegalStateException("密码错误或打开失败，错误码=$ret"))
         }
+        val boundId = readBoundId()
+        if (boundId != null && boundId != androidId()) {
+            runCatching { fsShell.SFCloseDisk() }
+            return@withContext Result.failure(IllegalStateException("此卡已绑定其他设备，无法在本机登录"))
+        }
+        val (total, free) = readCapacity()
+        _deviceStatus.value = _deviceStatus.value.copy(
+            status = UsbDeviceStatus.AUTHENTICATED,
+            totalBytes = total,
+            freeBytes = free,
+            boundPhoneId = boundId
+        )
+        Result.success(Unit)
     }
 
     /** 读隐藏区容量（M11.6.1）：`SFGetCapacity(root, long[2])` → [总字节, 空闲字节]；需盘已打开。失败回 0,0。 */
@@ -188,9 +199,29 @@ class RealUsbManager @Inject constructor(
      */
     override suspend fun wipeUserData(): Result<Unit> = realFileSystem.clear()
 
-    /** 绑定：写卡内 `0:/.bind` 文件（依赖 RealFileSystem，M11.4）。当前仅改内存状态。 */
-    override fun updateBinding(bind: Boolean) {
-        _deviceStatus.value = _deviceStatus.value.copy(boundPhoneId = if (bind) androidId() else null)
+    /** 切换绑定（M11.6.6）：bind=true 写卡内 `0:/.bind`=本机 androidId；false 删 `.bind` 解绑。需盘已打开。 */
+    override suspend fun updateBinding(bind: Boolean): Unit = withContext(Dispatchers.IO) {
+        if (bind) {
+            val id = androidId()
+            writeBoundId(id)
+            _deviceStatus.value = _deviceStatus.value.copy(boundPhoneId = id)
+        } else {
+            realFileSystem.deleteFile(BIND_PATH)
+            _deviceStatus.value = _deviceStatus.value.copy(boundPhoneId = null)
+        }
+    }
+
+    /** 写卡内绑定文件 `0:/.bind` = [id]（本机 androidId）。 */
+    private fun writeBoundId(id: String) {
+        realFileSystem.writeFile(BIND_PATH, id.toByteArray(Charsets.UTF_8).inputStream())
+    }
+
+    /** 读卡内绑定 androidId；无 `.bind`（未绑定）回 null。需盘已打开。 */
+    private fun readBoundId(): String? {
+        val out = ByteArrayOutputStream()
+        return if (realFileSystem.readFile(BIND_PATH, out).isSuccess) {
+            out.toString(Charsets.UTF_8.name()).trim().ifEmpty { null }
+        } else null
     }
 
     /** 密钥更新：FSShell **无 App 可调的密钥轮换接口**（《密钥管理》只有改密码）→ 诚实降级，不做。 */
@@ -228,5 +259,6 @@ class RealUsbManager @Inject constructor(
     private companion object {
         const val DEFAULT_PASSWORD = "123456"
         const val ROOT = "0:/"
+        const val BIND_PATH = "0:/.bind"
     }
 }

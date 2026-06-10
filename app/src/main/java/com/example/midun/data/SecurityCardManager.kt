@@ -70,7 +70,7 @@ class SecurityCardManager @Inject constructor(
         chatRepo.clear()
         operationLog.clear()
     }
-    override fun updateBinding(bind: Boolean) = active().updateBinding(bind)
+    override suspend fun updateBinding(bind: Boolean) = active().updateBinding(bind)
     override suspend fun updateKey() = active().updateKey()
 
     // —— 模式切换 ——
