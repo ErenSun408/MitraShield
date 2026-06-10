@@ -823,4 +823,13 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **诚实降级 / 延后**：`updateKey` SDK **无密钥轮换接口**→ 真卡返回 NotImplemented（需求「密钥更新」做不了真轮换，只有改密码）；`updateBinding`（写卡内 `.bind`）、`wipeAll/wipeUserData`（SFFormat / 遍历删）依赖文件系统 → 占位，M11.4/5/6。
 - **Commit** `5ca6ae7`。assembleDebug 干净；**真卡 init + login 闭环待真机验证**（卡是否有硬件失败次数锁定一并确认）。
 
+### M11.4 — RealFileSystem：隐藏区文件系统 + 文件层 facade 路由
+- **文件层 facade**（沿用 M11.3 同构设计）：新增 `data/FileSystemOps.kt`（10 个 FileViewModel 所需方法的接口）+ `data/real/RealFileSystem.kt`（真卡实现）+ `data/FileRepository.kt`（门面，按 `SecurityCardManager.useRealCard` 路由 mock/real，**与认证层共用同一开关**）；`MockFileSystem` 加 `: FileSystemOps`（仅 override、零逻辑改）；`FileViewModel` 改注入 `FileRepository`。
+- **读方法提升为 `suspend`**（偏离原同步签名）：真卡读列表 / 大小是阻塞原生 IO（`SFGetFileList`/`SFGetSize`），不能在主线程同步调用 → `getFolders`/`getFilesInFolder`/`getTotalFileCount` 连同 Mock 一并改 `suspend`；`FileViewModel.loadFolders/loadFiles` 改 `viewModelScope.launch`。Mock 实现里只是直接返回，无行为变化。
+- **id = 隐藏区完整路径**（偏离 Mock 的 `folder_x`/`file_x` 合成 id）：文件夹 id = `0:/工作文件`、文件 id = `0:/工作文件/a.pdf`、`parentId` = 文件夹路径。上层只当不透明字符串用，无需改 UI。
+- **元数据落卡**：原生 FS 不存「拷贝策略」等 App 概念 → 落到隐藏区**侧车文件** `0:/.midun_meta.json`（JSON：文件夹路径 → CopyPolicy.ordinal，懒加载缓存 + 改动即写）。`type` 按扩展名推断、`size` 用 `SFOpen+SFGetSize+SFClose` 读、`source` 默认 import。侧车以 `.` 开头 → 列表自动跳过、不进 UI。
+- **API 性质（javap 核实）**：`SFNewDir/SFRemoveDir/SFCreate/SFOpen/SFClose/SFDelete/SFRename/SFGetSize/SFRead/SFWrite` 是**静态**（`LibJniFSShell.X`）、`GetFileList(path, ArrayList)`/`SFGetFileList` 是实例方法；句柄 `>0` 有效；读 / 写返回字节数（`<0` 失败、`0` EOF）；列表项 `0=`(目录)/`1=`(文件) 前缀、`;` 分隔，用官方 `GetFileList` 包装（UTF-16LE 解析）。隐藏区单例盘所有原生序列在 `fsShell` 上 `synchronized`（对齐官方 Demo）。
+- **64KB 分块原语**：`writeFile(path, InputStream)`/`readFile(path, OutputStream)` 已建，但 M11.4 不接 UI——`importFile` 当前只 `SFCreate` 空文件条目；**真实字节流式导入 / 导出（选取器 `GetContent` + 进度 + 100MB 限制）= M11.5** 复用这两个原语。
+- **Commit** `55d8c7a`。compileDebugKotlin 干净；**未做真机验证**（真卡文件 IO 攒到 M11.5/6 联调），中文文件名直传 String 的编码兼容性留真机确认。
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
