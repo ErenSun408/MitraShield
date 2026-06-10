@@ -9,10 +9,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import android.os.Build
+import android.provider.Settings
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -21,14 +24,22 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.AuthViewModel
+import com.example.midun.viewmodel.DeviceViewModel
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InitScreen(
     onInitComplete: () -> Unit,
-    authViewModel: AuthViewModel = hiltViewModel()
+    authViewModel: AuthViewModel = hiltViewModel(),
+    deviceViewModel: DeviceViewModel = hiltViewModel()
 ) {
+    val context = LocalContext.current
+    val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
+    // 真实本机标识（绑定用的就是 ANDROID_ID）+ 机型；安全卡 SN 来自已连接的卡（真卡=SFDiskGetSN）。
+    val phoneId = remember { Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "未知" }
+    val phoneModel = remember { "${Build.MANUFACTURER} ${Build.MODEL}" }
+
     var step by remember { mutableIntStateOf(0) }
     // 0=检测设备 1=设置密码 2=绑定设备 3=初始化中 4=完成
     var password by remember { mutableStateOf("") }
@@ -190,17 +201,17 @@ fun InitScreen(
                         Column(Modifier.padding(16.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("设备ID：", color = TextSecondary, fontSize = 14.sp)
-                                Text("MI-X8F2K9A3", fontWeight = FontWeight.Medium)
+                                Text(phoneId, fontWeight = FontWeight.Medium)
                             }
                             Spacer(Modifier.height(8.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("设备型号：", color = TextSecondary, fontSize = 14.sp)
-                                Text("Xiaomi 15 Pro", fontWeight = FontWeight.Medium)
+                                Text(phoneModel, fontWeight = FontWeight.Medium)
                             }
                             Spacer(Modifier.height(8.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("安全卡SN：", color = TextSecondary, fontSize = 14.sp)
-                                Text("SC-2026051300001", fontWeight = FontWeight.Medium)
+                                Text(deviceStatus.deviceId.ifEmpty { "未知" }, fontWeight = FontWeight.Medium)
                             }
                         }
                     }

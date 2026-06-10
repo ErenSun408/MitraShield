@@ -9,10 +9,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import android.provider.Settings
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -39,6 +41,11 @@ fun LoginScreen(
     val loginState by authViewModel.loginState.collectAsState()
     val isLoading = loginState is AuthViewModel.LoginState.Loading
     val error = loginState as? AuthViewModel.LoginState.Error
+
+    val context = LocalContext.current
+    val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
+    // 真实数据：安全卡 SN（真卡=SFDiskGetSN）+ 本机 ANDROID_ID（绑定标识），替换原写死占位。
+    val phoneId = remember { Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "未知" }
 
     LaunchedEffect(loginState) {
         if (loginState is AuthViewModel.LoginState.Success) onLoginSuccess()
@@ -166,12 +173,14 @@ fun LoginScreen(
 
                 Spacer(Modifier.height(16.dp))
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Info, null, tint = TextSecondary, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("设备ID: MI-X8F2K9A3", fontSize = 11.sp, color = TextSecondary)
-                    Spacer(Modifier.width(12.dp))
-                    Text("SN: SC-2026051300001", fontSize = 11.sp, color = TextSecondary)
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Info, null, tint = TextSecondary, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("安全卡SN: ${deviceStatus.deviceId.ifEmpty { "未知" }}", fontSize = 11.sp, color = TextSecondary)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text("本机ID: $phoneId", fontSize = 11.sp, color = TextSecondary)
                 }
             }
         }
