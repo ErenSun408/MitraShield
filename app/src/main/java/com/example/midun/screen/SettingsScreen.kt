@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.ui.theme.*
+import com.example.midun.util.formatStorage
 import com.example.midun.viewmodel.DeviceViewModel
 
 /**
@@ -102,8 +103,13 @@ fun SettingsScreen(
                     "绑定状态",
                     if (deviceStatus.boundPhoneId != null) "已绑定本机" else "未绑定"
                 )
-                // M10 真 SDK 接入后从安全卡读取实际容量；mock 期占位。
-                SettingsInfoItem("存储使用", "-- / 32 GB")
+                // 真卡容量（M11.6.1，SFGetCapacity）；模拟模式 totalBytes=0 → 显占位。
+                val total = deviceStatus.totalBytes
+                val used = (total - deviceStatus.freeBytes).coerceAtLeast(0L)
+                SettingsInfoItem(
+                    "存储使用",
+                    if (total > 0) "${formatStorage(used)} / ${formatStorage(total)}" else "-- / --"
+                )
             }
         }
 

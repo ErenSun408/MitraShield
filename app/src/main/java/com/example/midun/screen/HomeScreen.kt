@@ -28,6 +28,7 @@ import com.example.midun.data.model.OperationType
 import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
+import com.example.midun.util.formatStorage
 import com.example.midun.viewmodel.DeviceViewModel
 import com.example.midun.viewmodel.FileViewModel
 import com.example.midun.viewmodel.OperationLogViewModel
@@ -106,9 +107,11 @@ fun HomeScreen(
                 Divider(color = Color.White.copy(0.15f))
                 Spacer(Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    // 容量/已用空间 mock 期无数据源，占位（对齐 M7 设备信息策略）；M11 接 FSShell SDK 读真实卡容量。
-                    StatusItem("存储容量", "-- / 32 GB")
-                    StatusItem("已用空间", "--")
+                    // 真卡容量（M11.6.1，SFGetCapacity）；模拟模式 totalBytes=0 → 显占位。
+                    val total = device.totalBytes
+                    val used = (device.totalBytes - device.freeBytes).coerceAtLeast(0L)
+                    StatusItem("存储容量", if (total > 0) formatStorage(total) else "--")
+                    StatusItem("已用空间", if (total > 0) formatStorage(used) else "--")
                     StatusItem("文件数量", "${fileCount}个")
                 }
             }

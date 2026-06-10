@@ -111,10 +111,13 @@ class RealUsbManager @Inject constructor(
                 return@withContext Result.failure(IllegalStateException("设置密码失败，错误码=$ret"))
             }
             // 绑定写卡内文件依赖 RealFileSystem（M11.4），此处先只记内存绑定标记。
+            val (total, free) = readCapacity()
             _deviceStatus.value = _deviceStatus.value.copy(
                 isInitialized = true,
                 status = UsbDeviceStatus.AUTHENTICATED,
-                boundPhoneId = if (bindDevice) androidId() else null
+                boundPhoneId = if (bindDevice) androidId() else null,
+                totalBytes = total,
+                freeBytes = free
             )
             Result.success(Unit)
         }
@@ -124,11 +127,22 @@ class RealUsbManager @Inject constructor(
         val dn = diskName ?: return@withContext Result.failure(IllegalStateException("USB 未连接"))
         val ret = fsShell.SFOpenDiskEx(dn, sha256(password))
         if (ret == 0) {
-            _deviceStatus.value = _deviceStatus.value.copy(status = UsbDeviceStatus.AUTHENTICATED)
+            val (total, free) = readCapacity()
+            _deviceStatus.value = _deviceStatus.value.copy(
+                status = UsbDeviceStatus.AUTHENTICATED,
+                totalBytes = total,
+                freeBytes = free
+            )
             Result.success(Unit)
         } else {
             Result.failure(IllegalStateException("密码错误或打开失败，错误码=$ret"))
         }
+    }
+
+    /** 读隐藏区容量（M11.6.1）：`SFGetCapacity(root, long[2])` → [总字节, 空闲字节]；需盘已打开。失败回 0,0。 */
+    private fun readCapacity(): Pair<Long, Long> {
+        val out = LongArray(2)
+        return if (fsShell.SFGetCapacity("0:/", out) == 0) out[0] to out[1] else 0L to 0L
     }
 
     /** 退出登录：关盘但保留 USB 句柄，状态退回 CONNECTED。 */
