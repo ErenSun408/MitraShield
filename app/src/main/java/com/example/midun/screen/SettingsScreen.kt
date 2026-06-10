@@ -25,6 +25,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.midun.BuildConfig
 import com.example.midun.ui.theme.*
 import com.example.midun.util.formatStorage
 import com.example.midun.viewmodel.DeviceViewModel
@@ -206,7 +207,7 @@ fun SettingsScreen(
         Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             TextButton(onClick = { showAboutDialog = true }) {
                 Text(
-                    "关于密盾 v1.0.0",
+                    "关于密盾 v${BuildConfig.VERSION_NAME}",
                     fontSize = 12.sp,
                     color = TextSecondary
                 )
@@ -591,7 +592,7 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
             icon = { Icon(Icons.Default.Security, null, tint = Primary) },
-            title = { Text("密盾 v1.0.0") },
+            title = { Text("密盾 v${BuildConfig.VERSION_NAME}") },
             text = {
                 Column {
                     Text("USB安全卡管理系统")

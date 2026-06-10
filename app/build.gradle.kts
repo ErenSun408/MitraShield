@@ -48,6 +48,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true // 供「关于」页读 BuildConfig.VERSION_NAME，避免硬编码版本号
     }
     lint {
         // AGP 8.7 + Kotlin 2.1.21 兼容性绕过：NonNullableMutableLiveDataDetector
