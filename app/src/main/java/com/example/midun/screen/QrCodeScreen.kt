@@ -6,6 +6,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
+import android.widget.Toast
 import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
@@ -54,6 +56,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import qrcode.QRCode
+
+/** 从相册图片 [uri] 解码二维码，识别到调 [onResult]，否则调 [onNone]。MLKit 静态图扫码。 */
+private fun decodeQrFromImage(context: Context, uri: Uri, onResult: (String) -> Unit, onNone: () -> Unit) {
+    runCatching {
+        val image = InputImage.fromFilePath(context, uri)
+        BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+        ).process(image)
+            .addOnSuccessListener { barcodes ->
+                val raw = barcodes.firstOrNull()?.rawValue
+                if (raw != null) onResult(raw) else onNone()
+            }
+            .addOnFailureListener { onNone() }
+    }.onFailure { onNone() }
+}
 
 /** 把二维码 [bitmap] 写入 cache 经 FileProvider 内容 URI，调系统分享（image/png）。 */
 private fun shareQrImage(context: Context, bitmap: Bitmap) {
@@ -495,6 +512,15 @@ private fun ScanTab(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted -> hasCameraPermission = granted }
 
+    // 相册选图扫码：选一张图 → MLKit 解码二维码 → 走与相机扫码同一条 onQrDetected 路径。
+    val albumLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let {
+            decodeQrFromImage(context, it, onQrDetected) {
+                Toast.makeText(context, "未在图片中识别到二维码", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // 首次进入识别 Tab、未授权 → 自动弹一次系统权限框。被拒后改为手动点按钮重试。
     LaunchedEffect(Unit) {
         if (!hasCameraPermission) {
@@ -536,9 +562,8 @@ private fun ScanTab(
 
     Spacer(Modifier.height(16.dp))
 
-    // M0 占位：相册选图扫码非 patch 规定，留待后续实现（与 M6.7 "分享" 同样保留）。
     OutlinedButton(
-        onClick = {},
+        onClick = { albumLauncher.launch("image/*") },
         modifier = Modifier.fillMaxWidth()
     ) {
         Icon(Icons.Default.Image, null)
