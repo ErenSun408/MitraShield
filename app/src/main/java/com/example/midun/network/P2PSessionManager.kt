@@ -1,6 +1,7 @@
 package com.example.midun.network
 
 import android.util.Base64
+import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.mock.MockChatRepository
 import com.example.midun.data.mock.MockOperationLog
 import com.example.midun.data.model.Contact
@@ -55,7 +56,8 @@ import org.json.JSONObject
 @Singleton
 class P2PSessionManager @Inject constructor(
     private val chatRepo: MockChatRepository,
-    private val operationLog: MockOperationLog
+    private val operationLog: MockOperationLog,
+    private val cardManager: SecurityCardManager
 ) {
 
     /** 接收循环 / 身份发送的常驻协程作用域（单例，独占 socket，跨屏存活）。 */
@@ -93,8 +95,19 @@ class P2PSessionManager @Inject constructor(
     private val _burnTimers = MutableStateFlow<Map<String, Long>>(emptyMap())
     val burnTimers: StateFlow<Map<String, Long>> = _burnTimers.asStateFlow()
 
-    /** 本机设备 SN：mock 期每进程随机一个（替死值，保证两机可区分）；M11 取安全卡真实 SN。 */
-    private val localDeviceSn: String = "DEV-${generateRandomHex(4)}"
+    /** 模拟模式 / 真 SN 不可用时的回退 SN：每进程随机一个，保证两机可区分。 */
+    private val fallbackSn: String = "DEV-${generateRandomHex(4)}"
+
+    /**
+     * 本机设备 SN（M11.6.2）：真卡模式下取安全卡真实 SN（`SFDiskGetSN`，全球唯一公开标识）→ 二维码据此
+     * 做「弱来源标识」；模拟模式 / 未认证 / 读取失败回退 [fallbackSn]。每次取用即读，避免认证前后过期。
+     */
+    private fun currentDeviceSn(): String {
+        if (cardManager.useRealCard.value) {
+            cardManager.realSerialNumber()?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+        return fallbackSn
+    }
 
     /** A 侧临时密钥对：generateConnectionInfo 生成、startListening 握手时消费。 */
     private var listenerKeyPair: KeyPair? = null
@@ -117,7 +130,7 @@ class P2PSessionManager @Inject constructor(
         listenerKeyPair = keyPair
         ConnectionInfo(
             version = 1,
-            deviceSn = localDeviceSn,
+            deviceSn = currentDeviceSn(),
             ipv6 = getLocalReachableAddress(), // 可能是 WiFi 局域网 IPv4 或公网 IPv6（字段名沿用 ipv6）
             sessionId = generateRandomHex(8),
             // 压缩公钥（33 字节，需求规格）→ Base64，替换原 X.509(SPKI ~91 字节)，二维码更小。
@@ -311,7 +324,7 @@ class P2PSessionManager @Inject constructor(
     /** 握手完成后：启动接收循环 + 主动发送本机身份帧（供对端建联系人/绑定会话）。 */
     private fun onSessionEstablished(session: P2PSession) {
         startReceiveLoop(session)
-        scope.launch { runCatching { writeFrame(session, generateMessageId(), IDENTITY_TYPE, localDeviceSn) } }
+        scope.launch { runCatching { writeFrame(session, generateMessageId(), IDENTITY_TYPE, currentDeviceSn()) } }
     }
 
     /** 后台读 socket：逐行解析 MessageFrame → 解密 → 分发（身份帧 / 普通消息）。对端关闭则归位状态。 */
