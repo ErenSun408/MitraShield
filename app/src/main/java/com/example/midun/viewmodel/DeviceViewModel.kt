@@ -55,10 +55,11 @@ class DeviceViewModel @Inject constructor(
      * 关键：必须等 wipeAll 跑完再导航——若先导航 popUpTo(0) 销毁本 VM，viewModelScope
      * 会被取消，wipeAll 卡在 delay 处擦除不完整。
      */
-    fun wipeAndReset(onComplete: () -> Unit) {
+    fun wipeAndReset(onComplete: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
             cardManager.wipeAll()
-            onComplete()
+                .onSuccess { onComplete() }
+                .onFailure { onError(it.message ?: "恢复出厂失败") }
         }
     }
 
@@ -83,10 +84,13 @@ class DeviceViewModel @Inject constructor(
      */
     fun factoryReset(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            if (cardManager.verifyPassword(password)) {
-                cardManager.wipeAll()
-                onSuccess()
-            } else onError("密码错误")
+            if (!cardManager.verifyPassword(password)) {
+                onError("密码错误")
+                return@launch
+            }
+            cardManager.wipeAll()
+                .onSuccess { onSuccess() }
+                .onFailure { onError(it.message ?: "恢复出厂失败") }
         }
     }
 

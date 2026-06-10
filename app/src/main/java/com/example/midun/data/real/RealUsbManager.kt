@@ -192,21 +192,33 @@ class RealUsbManager @Inject constructor(
     // —— 以下依赖后续子阶段，先占位 ——
 
     /**
-     * 恢复出厂 / 忘记密码（M11.6.5，用户定「试 SFFormat 强擦」）：`SFFormat("0:/")` 强制格式化隐藏区，
-     * 抹掉所有数据（文件/聊天/日志侧车/绑定）。**未知项（须真机验）**：SFFormat 是否需先打开盘、是否能在
-     * 忘记密码（未认证）时免密执行、格式化后密码是否回出厂默认 123456。失败则诚实提示用 PC 串口工具重置。
-     * 成功后关盘、状态退回未初始化（走 Init 向导）。聊天/日志内存由门面 / deauth 监听清。
+     * 恢复出厂（M11.6.5 修订）。**`SFFormat` 在本 SDK 的 .so 中未实现**（真机实测调用即 `UnsatisfiedLinkError`
+     * 崩进程）→ 弃用。改为「清空所有数据 + 把密码重置回出厂默认明文 `123456`」：之后 connectUsb 探测默认密码
+     * 能开 = 视为未初始化，走 Init 向导，效果等同恢复出厂。
+     *
+     * **需盘已打开（= 已登录）**：清文件/改密码都要开盘。**忘记密码（盘未打开、无密码）无法在 App 内重置**
+     * → 诚实失败，指向 PC 串口管理工具（SDK 无 App 层免密擦除接口，原审计结论）。
      */
     override suspend fun wipeAll(): Result<Unit> = withContext(Dispatchers.IO) {
-        val ret = LibJniFSShell.SFFormat(ROOT)
-        if (ret != 0) {
+        if (_deviceStatus.value.status != UsbDeviceStatus.AUTHENTICATED) {
             return@withContext Result.failure(
-                IllegalStateException("格式化失败（SDK 可能不支持免密格式化），错误码=$ret；可用 PC 串口管理工具重置")
+                IllegalStateException("真卡恢复出厂需先登录；忘记密码无法在 App 内重置，请用 PC 串口管理工具")
             )
         }
-        runCatching { fsShell.SFCloseDisk() }
-        _deviceStatus.value = DeviceInfo(isInitialized = false, status = UsbDeviceStatus.CONNECTED)
-        Result.success(Unit)
+        runCatching {
+            realFileSystem.clear() // 删所有文件夹/文件/元数据
+            // clear() 不含这些隐藏侧车，单独删（聊天 / 日志 / 绑定）。
+            listOf(CHAT_SIDECAR, OPLOG_SIDECAR, BIND_PATH).forEach { runCatching { realFileSystem.deleteFile(it) } }
+            val ret = fsShell.SFDiskSetPassword(DEFAULT_PASSWORD) // 重置为出厂默认明文 123456
+            if (ret != 0) throw IllegalStateException("重置密码失败，错误码=$ret")
+            runCatching { fsShell.SFCloseDisk() }
+            sessionPwdHash = null
+            _deviceStatus.value = DeviceInfo(
+                isInitialized = false,
+                status = UsbDeviceStatus.CONNECTED,
+                deviceId = _deviceStatus.value.deviceId
+            )
+        }
     }
 
     /**
@@ -274,7 +286,8 @@ class RealUsbManager @Inject constructor(
 
     private companion object {
         const val DEFAULT_PASSWORD = "123456"
-        const val ROOT = "0:/"
         const val BIND_PATH = "0:/.bind"
+        const val CHAT_SIDECAR = "0:/.midun_chat.json"
+        const val OPLOG_SIDECAR = "0:/.midun_oplog.json"
     }
 }

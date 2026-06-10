@@ -37,6 +37,7 @@ fun LoginScreen(
     var showPassword by remember { mutableStateOf(false) }
     var showForgotDialog by remember { mutableStateOf(false) }
     var wiping by remember { mutableStateOf(false) }
+    var wipeError by remember { mutableStateOf<String?>(null) }
 
     val loginState by authViewModel.loginState.collectAsState()
     val isLoading = loginState is AuthViewModel.LoginState.Loading
@@ -203,12 +204,18 @@ fun LoginScreen(
                         Text("正在清除安全卡内所有数据...", color = TextSecondary)
                     }
                 } else {
-                    Text(
-                        "忘记密码只能通过恢复出厂设置解决。\n\n" +
-                            "此操作将永久删除安全卡内所有文件、聊天记录和密码，且无法恢复。\n\n" +
-                            "确认后需要重新初始化安全卡。",
-                        color = TextSecondary
-                    )
+                    Column {
+                        wipeError?.let {
+                            Text(it, color = Danger, fontSize = 13.sp)
+                            Spacer(Modifier.height(12.dp))
+                        }
+                        Text(
+                            "忘记密码只能通过恢复出厂设置解决。\n\n" +
+                                "此操作将永久删除安全卡内所有文件、聊天记录和密码，且无法恢复。\n\n" +
+                                "确认后需要重新初始化安全卡。",
+                            color = TextSecondary
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -216,7 +223,11 @@ fun LoginScreen(
                     Button(
                         onClick = {
                             wiping = true
-                            deviceViewModel.wipeAndReset(onComplete = onForgotPassword)
+                            wipeError = null
+                            deviceViewModel.wipeAndReset(
+                                onComplete = onForgotPassword,
+                                onError = { wiping = false; wipeError = it }
+                            )
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Danger)
                     ) { Text("我已了解，清除所有数据") }
