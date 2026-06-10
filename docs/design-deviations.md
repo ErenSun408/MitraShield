@@ -796,4 +796,31 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 
 - **Commit** 压缩公钥 `beba969` / 文案 `eb4d5a8`
 
+## M11 — 真 FSShell SDK 接入
+
+> **大前提**：v4「里程碑 10」是项目最初期设想（RealXxx 同接口**编译期替换** Mock + 只给 armeabi-v7a + Manifest extractNativeLibs），**与后期实际架构多处不符**。本里程碑以当前实现为准重定路线，并据真实 SDK 文档（深圳数组科技 FSShell，`E:\AndroidStudioProjects\SDK`）审计。SDK 与硬件均已到位（2026-06-10）。
+
+### SDK 审计核心结论（决定后续所有偏离）
+- **FSShell = 加密存储 + 认证 SDK，不是通信加密 SDK**：全部密钥能力（《密钥管理》）只服务卡内存储加密，**不提供 P2P 通信密钥 / ECDH 接口**；「安全层」二次开发只能自定义「卡内落盘加解密算法」+「隐藏区密码管理」，且 Android JNI 未暴露、官方「不对普通开发者提供详细技术支持」。
+- **由此推翻 M10.2 / M10.9 的前瞻假设**：那两节写过「M11 把软件 ECDH 换成 FSShell 硬件密钥」——**SDK 做不到、也无必要**。M10 的软件 ECDH+AES-GCM **就是 P2P 通信加密的最终形态**；M11 只把 `P2PSessionManager.deviceSn` 从随机值换成真实 `SFDiskGetSN`（M11.6）。
+- **二维码签名校验**：SDK 无设备身份密钥 / 密码学签名能力 → 用户定用 `SFDiskGetSN` 真 SN 做「弱来源标识」（M11.6），非密码学（接续 M10.9 的「钉 M11」结论）。
+
+### M11.1 — SDK 集成（偏离 v4 的 ABI / 打包方式）
+- v4 只给 armeabi-v7a + Manifest `extractNativeLibs` → 实际用 **SZU113 / android_4.0**（arm64-v8a + v7a 全有），gradle `fileTree libs` + `ndk.abiFilters` + **`packaging.jniLibs.useLegacyPackaging=true`**（AGP 现代写法替代 Manifest extractNativeLibs，解 Android 11+ 未对齐 so 崩），Manifest 加 `HARDWARE_TEST`。~15 MB 二进制 vendored 进仓库（SDK 无 maven 坐标）。
+- **Commit** `38b08fd`
+
+### M11.2 — RealUsbManager 骨架 + 临时验证（已并入 M11.3）
+- 建 `data/real/RealUsbManager.kt`：`USBStorageHelper`（GetList / Open / 外部设备 diskName）+ `SFOpenDiskEx`。类全名 / 签名经 `javap` 反编译核实（`USBStorageHelper` 在 `seczure.device.usb` 包、`BusNum/DevAddr` 是 String、`FileHandle` 是 int）。
+- **关键发现**：真 SDK「打开盘」=「密码认证」是同一个 `SFOpenDiskEx` 调用（区别于 Mock 分离的 simulateInsert / authenticate）。
+- 临时 DevControlPanel 入口真机实测「打开成功 + 读出 SN」→ **M11 头号风险（SDK 真机能否跑：arm64 ABI / USB 权限 / OTG）消除**。
+- **Commit** `42b73a6`（骨架）/ `ef99446`（临时入口，M11.3 已删）
+
+### M11.3 — facade 运行时切换 + 认证闭环（偏离 v4「编译期替换」）
+- **接入策略**（用户 2026-06-10 定）：**不照 v4 编译期替换**——项目仍在开发、大量 UI 靠 mock 模拟卡状态、模拟器无卡，故用 **facade 运行时切换**保留 mock 开发流。新增 `data/UsbCardOps.kt`（8 业务方法接口）+ `data/SecurityCardManager.kt`（持 mock+real + `useRealCard` 开关，按开关路由方法 / 设备状态 / USB 插拔，默认模拟模式）；`MockUsbManager` 加 `: UsbCardOps`（仅 override、零逻辑改）；`AuthViewModel`/`DeviceViewModel` 改注入 facade；DevControlPanel 换「模拟 / 真卡」开关（切换重走 Splash 路由）。
+- **认证闭环**：`connectUsb`（USBStorageHelper.Open + 外部设备 diskName）→ `initDevice`（`SFDiskSetPassword(sha256(新密码))`）→ `authenticate`（`SFOpenDiskEx(diskName, sha256(密码))`），**打开盘 = 认证合一**，复用现有 DISCONNECTED→CONNECTED→AUTHENTICATED 状态机。
+- **SHA256**（需求要求「密码哈希后传卡」）：App 层 `sha256(明文)` 当密码传卡。**巧妙副作用**：探测默认密码用**明文 `123456`**、用户密码走 `sha256(...)`，两空间天然隔离 → 即便用户密码字面是 `123456` 也不会误判初始化态（6 字符明文 ≠ 64 位 hex）。
+- **初始化探测**：试 `SFOpenDiskEx("123456")` 能开 = 未初始化（走 Init）、开不了 = 已初始化（走 Login），**免卡内文件**。⚠️ 真机风险：若卡有硬件失败次数锁定，该探测在已初始化卡上耗一次尝试 → 有锁定则 M11.4 改卡内标记文件。
+- **诚实降级 / 延后**：`updateKey` SDK **无密钥轮换接口**→ 真卡返回 NotImplemented（需求「密钥更新」做不了真轮换，只有改密码）；`updateBinding`（写卡内 `.bind`）、`wipeAll/wipeUserData`（SFFormat / 遍历删）依赖文件系统 → 占位，M11.4/5/6。
+- **Commit** `5ca6ae7`。assembleDebug 干净；**真卡 init + login 闭环待真机验证**（卡是否有硬件失败次数锁定一并确认）。
+
 <!-- 后续里程碑的偏离继续在下面追加 -->

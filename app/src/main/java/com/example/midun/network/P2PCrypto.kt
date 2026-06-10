@@ -28,7 +28,9 @@ import javax.crypto.spec.SecretKeySpec
  * - AES-256-GCM 加解密（替换 v4 §9.3 的 `mockEncrypt = Base64` 假加密）
  *
  * 偏离 v4：v4 把 ECDH/加密留给 FSShell（`// TODO 调用FSShell` + Base64 mock）；本类用标准库
- * 提前实现真加密，M10 端到端真加密（密钥来自软件）；M11 再把软件 ECDH 换成 FSShell 安全卡硬件密钥。
+ * 提前实现真加密，M10 端到端真加密（密钥来自软件）。**M11 审计确认 FSShell SDK 不提供通信密钥/
+ * ECDH 接口（安全层只管卡内存储加密、Android JNI 未暴露），故软件 ECDH+AES-GCM 即为最终形态**；
+ * M11 仅把 P2P deviceSn 换成真实卡 SN（SFDiskGetSN），不动加密本身。
  *
  * Base64 不在本类做——本类只收发 `ByteArray`，故能脱离 Android `android.util.Base64`（JVM 单测里
  * 是抛异常的桩）独立测试；Base64 包装在 [P2PSessionManager] 的传输边界用 `android.util.Base64`。

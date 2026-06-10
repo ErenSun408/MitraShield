@@ -2,7 +2,7 @@
 
 > 把甲方原始需求文档《USB安全卡产品需求以及功能说明》逐条对照**当前代码实际实现**的追溯记录。
 >
-> - **基准代码**：`main` @ `eb4d5a8`（M10.9 二维码规格对齐完成）。
+> - **基准代码**：`main` @ `5ca6ae7`（M11.3 真卡认证闭环完成）。
 > - **生成日期**：2026-06-10。
 > - **前提**：本项目按基于该需求的 **v4 设计文档**实现，当前处于 **Mock 阶段（M0–M10.8）**。真实安全卡 SDK（FSShell）、真实加密存储、真实文件传输统一规划在 **M11**。因此"加密/认证/存储落在安全卡"的需求，当前多为软件模拟——这是设计内的阶段安排，本表对照**原始需求**如实标注，与 [`design-deviations.md`](./design-deviations.md)（对照 v4 设计文档的偏离）互补。
 
@@ -22,10 +22,10 @@
 | 需求 | 状态 | 核查说明 | 落点 |
 |---|---|---|---|
 | 未插卡打开 APP 提示操作异常 | ✅ | `UsbDisconnectedOverlay` 全屏遮罩 + 倒计时退出 | `MainActivity` / `UsbDisconnectedOverlay.kt` |
-| 上电初始化：输入密码 / 确认 / 生成根密钥 | 🟡 | `InitScreen` + `initDevice` 五步向导完整；"生成根密钥"为 mock（`storedPassword = password`），无真实 RK | `MockUsbManager.initDevice` |
-| 提示绑定设备 / 可解绑 | 🟡 | `initDevice(bindDevice)` 写 `boundPhoneId = ANDROID_ID`，设置页可切换绑定 | `MockUsbManager` / `SettingsScreen` |
-| 登录：密码 **SHA256 hash** 传卡校验 | 🔶 | `authenticate` 为**明文 `password == storedPassword` 比较，无 SHA256**。需求明确要求 SHA256 哈希传输 → 留 M11 真 SDK | `MockUsbManager.authenticate` |
-| 校验设备绑定关系一致才放行 | 🔶 | `updateBinding` 仅写 `boundPhoneId` 状态，`authenticate` **不校验**绑定（代码注释自承 M11 补） | `MockUsbManager` |
+| 上电初始化：输入密码 / 确认 / 生成根密钥 | ✅(真卡) | **真卡(M11.3)** `RealUsbManager.initDevice` = `SFDiskSetPassword(sha256(密码))` 把默认 123456 改成用户密码（根密钥出厂烧录、非 App 生成）；模拟仍 `MockUsbManager.initDevice` | `RealUsbManager` |
+| 提示绑定设备 / 可解绑 | 🔶 | facade 已接，但**真卡绑定写卡内 `.bind` 文件依赖 RealFileSystem → 延后 M11.4**；当前仅内存状态 | `RealUsbManager`(占位) |
+| 登录：密码 **SHA256 hash** 传卡校验 | ✅(真卡) | **真卡(M11.3)** `authenticate` = `SFOpenDiskEx(diskName, sha256(密码))`，密码 SHA256 后才传卡；模拟仍明文比较 | `RealUsbManager.authenticate` |
+| 校验设备绑定关系一致才放行 | 🔶 | 同绑定项，校验逻辑随 `.bind` 文件落地（M11.4）补 | `RealUsbManager`(占位) |
 
 ## 2. 设备管理 / 一键清理 / 出厂
 
@@ -33,7 +33,7 @@
 |---|---|---|---|
 | 一键清理（清文件 + 聊天，不可恢复） | ✅ | `wipeUserData` 清 file+chat+log，保留登录态；走密码确认 | `MockUsbManager.wipeUserData` |
 | 恢复出厂 / 一键还原（擦根密钥 + 全清） | ✅ | `wipeAll` 整卡擦除 | `MockUsbManager.wipeAll` |
-| 密钥更新 | 🟡 | `updateKey` 仅 `delay` 占位，无真实密钥轮换 | `MockUsbManager.updateKey` |
+| 密钥更新 | 🔴 | **SDK 无密钥轮换接口**（《密钥管理》只有 `SFDiskSetPassword` 改密码、非轮换数据密钥）→ M11.3 真卡返回 NotImplemented，诚实降级；真轮换需安全层（不对开发者开放） | `RealUsbManager.updateKey` |
 | 串口管理（一键还原 / 密码重置 / 审计日志） | ❌ | 未实现。属硬件侧 / PC 串口工具，不在 APP 范围，但需求有列 | — |
 
 ## 3. 隐私文件夹
