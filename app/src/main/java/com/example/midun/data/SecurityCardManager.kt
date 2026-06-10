@@ -1,5 +1,7 @@
 package com.example.midun.data
 
+import com.example.midun.data.mock.MockChatRepository
+import com.example.midun.data.mock.MockOperationLog
 import com.example.midun.data.mock.MockUsbManager
 import com.example.midun.data.model.DeviceInfo
 import com.example.midun.data.real.RealUsbManager
@@ -30,7 +32,10 @@ import kotlinx.coroutines.launch
 class SecurityCardManager @Inject constructor(
     /** 暴露给 DevControlPanel 调 DEV 专属 simulate*（真卡无对应概念）。 */
     val mock: MockUsbManager,
-    private val real: RealUsbManager
+    private val real: RealUsbManager,
+    // 真卡 wipe 时清共享聊天/日志仓库（真卡的文件清在 RealUsbManager；mock 的三者由 MockUsbManager 自清）。
+    private val chatRepo: MockChatRepository,
+    private val operationLog: MockOperationLog
 ) : UsbCardOps {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -52,8 +57,19 @@ class SecurityCardManager @Inject constructor(
 
     override suspend fun authenticate(password: String) = active().authenticate(password)
     override fun logout() = active().logout()
-    override suspend fun wipeAll() = active().wipeAll()
-    override suspend fun wipeUserData() = active().wipeUserData()
+
+    /**
+     * 恢复出厂 / 一键清理（M11.6.5）：mock 模式下 [MockUsbManager] 已自清文件+聊天+日志；真卡模式 [RealUsbManager]
+     * 清卡内文件（wipeUserData）或 SFFormat 强擦（wipeAll），此处补清共享聊天/日志仓库（写穿空到卡 / 内存）。
+     */
+    override suspend fun wipeAll() = active().wipeAll().also { if (_useRealCard.value && it.isSuccess) clearRepos() }
+    override suspend fun wipeUserData() =
+        active().wipeUserData().also { if (_useRealCard.value && it.isSuccess) clearRepos() }
+
+    private fun clearRepos() {
+        chatRepo.clear()
+        operationLog.clear()
+    }
     override fun updateBinding(bind: Boolean) = active().updateBinding(bind)
     override suspend fun updateKey() = active().updateKey()
 

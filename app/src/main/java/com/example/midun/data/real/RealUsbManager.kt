@@ -37,7 +37,8 @@ import seczure.fsudisk.fsshell.LibJniFSShell
  */
 @Singleton
 class RealUsbManager @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val realFileSystem: RealFileSystem
 ) : UsbCardOps {
 
     private val fsShell: LibJniFSShell = FSShellInstance.getLibFSShellInstance()
@@ -163,13 +164,29 @@ class RealUsbManager @Inject constructor(
 
     // —— 以下依赖后续子阶段，先占位 ——
 
-    /** 恢复出厂：SFFormat + 重置密码 + 清绑定（依赖文件遍历，M11.5/6）。 */
-    override suspend fun wipeAll(): Result<Unit> =
-        Result.failure(NotImplementedError("恢复出厂待 M11.5/6（SFFormat + 重置）"))
+    /**
+     * 恢复出厂 / 忘记密码（M11.6.5，用户定「试 SFFormat 强擦」）：`SFFormat("0:/")` 强制格式化隐藏区，
+     * 抹掉所有数据（文件/聊天/日志侧车/绑定）。**未知项（须真机验）**：SFFormat 是否需先打开盘、是否能在
+     * 忘记密码（未认证）时免密执行、格式化后密码是否回出厂默认 123456。失败则诚实提示用 PC 串口工具重置。
+     * 成功后关盘、状态退回未初始化（走 Init 向导）。聊天/日志内存由门面 / deauth 监听清。
+     */
+    override suspend fun wipeAll(): Result<Unit> = withContext(Dispatchers.IO) {
+        val ret = LibJniFSShell.SFFormat(ROOT)
+        if (ret != 0) {
+            return@withContext Result.failure(
+                IllegalStateException("格式化失败（SDK 可能不支持免密格式化），错误码=$ret；可用 PC 串口管理工具重置")
+            )
+        }
+        runCatching { fsShell.SFCloseDisk() }
+        _deviceStatus.value = DeviceInfo(isInitialized = false, status = UsbDeviceStatus.CONNECTED)
+        Result.success(Unit)
+    }
 
-    /** 一键清理：遍历删用户文件（依赖 RealFileSystem，M11.5）。 */
-    override suspend fun wipeUserData(): Result<Unit> =
-        Result.failure(NotImplementedError("一键清理待 M11.5（遍历 SFDelete）"))
+    /**
+     * 一键清理（M11.6.5）：保留密码/登录态，仅清隐藏区用户文件（[RealFileSystem.clear]：删所有文件夹/文件/
+     * 元数据侧车）。聊天/日志由门面统一清（写穿空到卡）。保持 AUTHENTICATED。
+     */
+    override suspend fun wipeUserData(): Result<Unit> = realFileSystem.clear()
 
     /** 绑定：写卡内 `0:/.bind` 文件（依赖 RealFileSystem，M11.4）。当前仅改内存状态。 */
     override fun updateBinding(bind: Boolean) {
@@ -210,5 +227,6 @@ class RealUsbManager @Inject constructor(
 
     private companion object {
         const val DEFAULT_PASSWORD = "123456"
+        const val ROOT = "0:/"
     }
 }
