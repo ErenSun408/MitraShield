@@ -4,22 +4,22 @@ import android.hardware.usb.UsbDevice
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.SecurityCardManager
+import com.example.midun.data.SettingsStore
 import com.example.midun.data.model.UsbDeviceStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 @HiltViewModel
 class DeviceViewModel @Inject constructor(
-    private val cardManager: SecurityCardManager
+    private val cardManager: SecurityCardManager,
+    private val settingsStore: SettingsStore
 ) : ViewModel() {
 
     val deviceStatus = cardManager.deviceStatus
@@ -147,19 +147,18 @@ class DeviceViewModel @Inject constructor(
 
     private var inactivityJob: Job? = null
 
-    // 自动锁定超时（M7.5）：UI 可设；mock 期不持久化、重启回 DEFAULT_TIMEOUT_MIN。
-    // M10 接 SharedPreferences/DataStore 时只需把读写换掉、保留这条 StateFlow 接口。
-    private val _inactivityTimeoutMinutes = MutableStateFlow(DEFAULT_TIMEOUT_MIN)
-    val inactivityTimeoutMinutes: StateFlow<Int> = _inactivityTimeoutMinutes.asStateFlow()
+    // 自动锁定超时（M7.5 + M11.6.4 持久化）：经 [SettingsStore]（DataStore）存手机本地，重启不丢。
+    val inactivityTimeoutMinutes: StateFlow<Int> = settingsStore.inactivityTimeoutMinutes
+        .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsStore.DEFAULT_TIMEOUT_MIN)
 
     fun setInactivityTimeoutMinutes(minutes: Int) {
-        _inactivityTimeoutMinutes.value = minutes
+        viewModelScope.launch { settingsStore.setInactivityTimeout(minutes) }
     }
 
     private fun resetInactivityTimer() {
         inactivityJob?.cancel()
         inactivityJob = viewModelScope.launch {
-            delay(_inactivityTimeoutMinutes.value * 60_000L)
+            delay(inactivityTimeoutMinutes.value * 60_000L)
             cardManager.logout()
         }
     }
@@ -170,9 +169,5 @@ class DeviceViewModel @Inject constructor(
 
     fun onAppForeground() {
         inactivityJob?.cancel()
-    }
-
-    private companion object {
-        const val DEFAULT_TIMEOUT_MIN = 5
     }
 }
