@@ -120,7 +120,8 @@ class P2PSessionManager @Inject constructor(
             deviceSn = localDeviceSn,
             ipv6 = getLocalReachableAddress(), // 可能是 WiFi 局域网 IPv4 或公网 IPv6（字段名沿用 ipv6）
             sessionId = generateRandomHex(8),
-            tempPublicKey = Base64.encodeToString(keyPair.public.encoded, Base64.NO_WRAP),
+            // 压缩公钥（33 字节，需求规格）→ Base64，替换原 X.509(SPKI ~91 字节)，二维码更小。
+            tempPublicKey = Base64.encodeToString(P2PCrypto.compressPublicKey(keyPair.public), Base64.NO_WRAP),
             expiresAt = System.currentTimeMillis() + 120_000
         )
     }
@@ -197,7 +198,8 @@ class P2PSessionManager @Inject constructor(
         val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
         val writer = PrintWriter(socket.getOutputStream(), true)
         val myKeyPair = P2PCrypto.generateEcKeyPair()
-        writer.println(Base64.encodeToString(myKeyPair.public.encoded, Base64.NO_WRAP))
+        // 自己的临时公钥也走压缩编码（33 字节），与二维码 tpk 一致。
+        writer.println(Base64.encodeToString(P2PCrypto.compressPublicKey(myKeyPair.public), Base64.NO_WRAP))
         val peerPubBytes = Base64.decode(peerTempPublicKey, Base64.NO_WRAP)
         val sessionKey = P2PCrypto.deriveSharedKey(myKeyPair.private, peerPubBytes)
         return P2PSession(socket, contactId = UNKNOWN_CONTACT, sessionKey = sessionKey, reader = reader, writer = writer)
