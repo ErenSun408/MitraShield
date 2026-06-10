@@ -854,4 +854,9 @@ M11.5 较大，按子子阶段拆分逐个提交（[[feedback-commit-per-substag
 - **内存清除-on-锁定的安全加固未做**（认证后明文聊天/日志留在内存）→ 归 M11.6「自动锁定持久化」一并处理。
 - 全部 compileDebugKotlin 干净、Hilt 图无环；**未做真机验证**（真卡 JSON IO 攒到真机阶段）。
 
+**M11.5.6 文件夹导出到指定目录**（`f9aee03`）
+- 语义（用户 2026-06-10 定）：导出文件夹 = `OpenDocumentTree` 选目标目录 → `DocumentFile` 在其下建**同名子目录** → 文件夹内下一级文件**原样（不压缩、保留文件名）逐个流式写入**（复用 5.2 `exportFile`）。否决了「打包 ZIP」与「多选导出」两方案。
+- 「导出文件夹」（列表项）与「导出全部文件」（详情页菜单）两入口统一走此路径，共用 `ExportProgress` StateFlow + `FolderExportDialog`（进行中进度条+计数、完成显结果）。删除原 `exportMessage`/`folderExportMessage` 占位提示对话框。
+- 新增 `androidx.documentfile:documentfile:1.0.1`（catalog + build.gradle）。`createFile` 用 `application/octet-stream`（避免 SAF 按 mime 改名；文件名已带扩展名）。**多选文件导出未做**（单文件 5.2 + 整文件夹 5.6 已覆盖需求）。compileDebugKotlin 干净；**真卡读取段未真机验**。
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
