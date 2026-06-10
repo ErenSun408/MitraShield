@@ -2,6 +2,7 @@ package com.example.midun.data.mock
 
 import android.content.Context
 import android.provider.Settings
+import com.example.midun.data.UsbCardOps
 import com.example.midun.data.model.DeviceInfo
 import com.example.midun.data.model.UsbDeviceStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -18,9 +19,9 @@ class MockUsbManager @Inject constructor(
     private val fileSystem: MockFileSystem,
     private val chatRepository: MockChatRepository,
     private val operationLog: MockOperationLog
-) {
+) : UsbCardOps {
     private val _deviceStatus = MutableStateFlow(DeviceInfo())
-    val deviceStatus: StateFlow<DeviceInfo> = _deviceStatus.asStateFlow()
+    override val deviceStatus: StateFlow<DeviceInfo> = _deviceStatus.asStateFlow()
 
     private var storedPassword: String? = null
 
@@ -46,7 +47,7 @@ class MockUsbManager @Inject constructor(
         )
     }
 
-    suspend fun initDevice(password: String, bindDevice: Boolean): Result<Unit> {
+    override suspend fun initDevice(password: String, bindDevice: Boolean): Result<Unit> {
         delay(1500)
         val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
         storedPassword = password
@@ -58,7 +59,7 @@ class MockUsbManager @Inject constructor(
         return Result.success(Unit)
     }
 
-    suspend fun authenticate(password: String): Result<Unit> {
+    override suspend fun authenticate(password: String): Result<Unit> {
         delay(800)
         return if (password == storedPassword) {
             _deviceStatus.value = _deviceStatus.value.copy(status = UsbDeviceStatus.AUTHENTICATED)
@@ -68,11 +69,11 @@ class MockUsbManager @Inject constructor(
         }
     }
 
-    fun logout() {
+    override fun logout() {
         _deviceStatus.value = _deviceStatus.value.copy(status = UsbDeviceStatus.CONNECTED)
     }
 
-    suspend fun wipeAll(): Result<Unit> {
+    override suspend fun wipeAll(): Result<Unit> {
         delay(2000)
         storedPassword = null
         // 整卡擦除：连同卡内文件、聊天与操作日志一并清空，使"恢复出厂/忘记密码"名副其实。
@@ -92,7 +93,7 @@ class MockUsbManager @Inject constructor(
      * 与 [wipeAll]（恢复出厂）的关键区别——后者额外清 storedPassword、isInitialized、boundPhoneId
      * 并把 status 退回 CONNECTED，本方法只动数据层。
      */
-    suspend fun wipeUserData(): Result<Unit> {
+    override suspend fun wipeUserData(): Result<Unit> {
         delay(1500)
         fileSystem.clear()
         chatRepository.clear()
@@ -105,7 +106,7 @@ class MockUsbManager @Inject constructor(
      * mock 期仅写状态、不真校验：authenticate 仍只用密码，不会因 boundPhoneId 不匹配而拒登。
      * 真 SDK 接入后需在 authenticate 处补 boundPhoneId 校验。
      */
-    fun updateBinding(bind: Boolean) {
+    override fun updateBinding(bind: Boolean) {
         val deviceId = if (bind) {
             Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
         } else null
@@ -116,7 +117,7 @@ class MockUsbManager @Inject constructor(
      * 密钥更新（M7.4 patch §M7 改动3）：mock 期无实际密钥状态可轮换，仅 delay 模拟工作时长。
      * 真 SDK 接入后调安全卡密钥更新接口；历史文件由旧密钥派生的会话密钥保留，仍可解密。
      */
-    suspend fun updateKey(): Result<Unit> {
+    override suspend fun updateKey(): Result<Unit> {
         delay(1000)
         return Result.success(Unit)
     }

@@ -94,6 +94,7 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
                 val isConnected = deviceStatus.status != UsbDeviceStatus.DISCONNECTED
+                val useRealCard by deviceViewModel.useRealCard.collectAsState()
 
                 Box(modifier = Modifier.fillMaxSize()) {
                     NavGraph(navController = navController)
@@ -108,6 +109,7 @@ class MainActivity : ComponentActivity() {
                     // re-routing through Splash (real routing path). Remove with SDK in M10.
                     DevControlPanel(
                         isConnected = isConnected,
+                        useRealCard = useRealCard,
                         onToggle = { deviceViewModel.debugToggleUsb() },
                         onSimUninitInsert = {
                             deviceViewModel.debugSimulateFirstInsert()
@@ -117,6 +119,13 @@ class MainActivity : ComponentActivity() {
                         },
                         onSimInitInsert = {
                             deviceViewModel.debugSimulateInitializedInsert()
+                            navController.navigate(Screen.Splash.route) {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        },
+                        onSetRealCard = { real ->
+                            deviceViewModel.setUseRealCard(real)
+                            // 切换后重走 Splash 路由，按真卡/模拟的设备状态落到 Init/Login。
                             navController.navigate(Screen.Splash.route) {
                                 popUpTo(0) { inclusive = true }
                             }

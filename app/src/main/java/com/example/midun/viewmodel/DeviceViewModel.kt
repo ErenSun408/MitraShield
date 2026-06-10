@@ -3,7 +3,7 @@ package com.example.midun.viewmodel
 import android.hardware.usb.UsbDevice
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.midun.data.mock.MockUsbManager
+import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.model.UsbDeviceStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -19,10 +19,15 @@ import kotlinx.coroutines.launch
 
 @HiltViewModel
 class DeviceViewModel @Inject constructor(
-    private val mockUsbManager: MockUsbManager
+    private val cardManager: SecurityCardManager
 ) : ViewModel() {
 
-    val deviceStatus = mockUsbManager.deviceStatus
+    val deviceStatus = cardManager.deviceStatus
+
+    /** 真卡/模拟模式开关（M11.3）：DevControlPanel 切换；切到真卡即尝试连接已插入的卡。 */
+    val useRealCard = cardManager.useRealCard
+    fun setUseRealCard(useReal: Boolean) = cardManager.setUseRealCard(useReal)
+    fun realSerialNumber(): String? = cardManager.realSerialNumber()
 
     val isUsbConnected: StateFlow<Boolean> = deviceStatus.map {
         it.status != UsbDeviceStatus.DISCONNECTED
@@ -33,16 +38,16 @@ class DeviceViewModel @Inject constructor(
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     fun onUsbAttached(device: UsbDevice?) {
-        mockUsbManager.simulateInsert()
+        cardManager.onUsbAttached()
     }
 
     fun onUsbDetached() {
-        mockUsbManager.simulateRemove()
+        cardManager.onUsbDetached()
         clearSensitiveMemory()
     }
 
     fun logout() {
-        mockUsbManager.logout()
+        cardManager.logout()
     }
 
     /**
@@ -52,7 +57,7 @@ class DeviceViewModel @Inject constructor(
      */
     fun wipeAndReset(onComplete: () -> Unit) {
         viewModelScope.launch {
-            mockUsbManager.wipeAll()
+            cardManager.wipeAll()
             onComplete()
         }
     }
@@ -64,9 +69,9 @@ class DeviceViewModel @Inject constructor(
      */
     fun wipeUserData(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            mockUsbManager.authenticate(password)
+            cardManager.authenticate(password)
                 .onSuccess {
-                    mockUsbManager.wipeUserData()
+                    cardManager.wipeUserData()
                     onSuccess()
                 }
                 .onFailure { onError("密码错误") }
@@ -80,9 +85,9 @@ class DeviceViewModel @Inject constructor(
      */
     fun factoryReset(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            mockUsbManager.authenticate(password)
+            cardManager.authenticate(password)
                 .onSuccess {
-                    mockUsbManager.wipeAll()
+                    cardManager.wipeAll()
                     onSuccess()
                 }
                 .onFailure { onError("密码错误") }
@@ -95,9 +100,9 @@ class DeviceViewModel @Inject constructor(
      */
     fun updateBinding(password: String, bind: Boolean, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            mockUsbManager.authenticate(password)
+            cardManager.authenticate(password)
                 .onSuccess {
-                    mockUsbManager.updateBinding(bind)
+                    cardManager.updateBinding(bind)
                     onSuccess()
                 }
                 .onFailure { onError("密码错误") }
@@ -110,9 +115,9 @@ class DeviceViewModel @Inject constructor(
      */
     fun updateKey(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            mockUsbManager.authenticate(password)
+            cardManager.authenticate(password)
                 .onSuccess {
-                    mockUsbManager.updateKey()
+                    cardManager.updateKey()
                     onSuccess()
                 }
                 .onFailure { onError("密码错误") }
@@ -124,16 +129,16 @@ class DeviceViewModel @Inject constructor(
     }
 
     fun debugToggleUsb() {
-        if (isUsbConnected.value) mockUsbManager.simulateRemove()
-        else mockUsbManager.simulateInsert()
+        if (isUsbConnected.value) cardManager.simulateRemove()
+        else cardManager.simulateInsert()
     }
 
     fun debugSimulateFirstInsert() {
-        mockUsbManager.simulateFirstInsert()
+        cardManager.simulateFirstInsert()
     }
 
     fun debugSimulateInitializedInsert() {
-        mockUsbManager.simulateInsert()
+        cardManager.simulateInsert()
     }
 
     private var inactivityJob: Job? = null
@@ -151,7 +156,7 @@ class DeviceViewModel @Inject constructor(
         inactivityJob?.cancel()
         inactivityJob = viewModelScope.launch {
             delay(_inactivityTimeoutMinutes.value * 60_000L)
-            mockUsbManager.logout()
+            cardManager.logout()
         }
     }
 
