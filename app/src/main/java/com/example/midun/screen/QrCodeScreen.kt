@@ -528,7 +528,9 @@ private fun ScanTab(
             Icon(Icons.Default.Info, null, tint = Primary, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(
-                "识别成功后将验证来源、IPv6地址及签名，确认后建立加密连接",
+                // 诚实文案（M10.9）：当前仅解析连接信息后建立端到端加密连接；设备身份签名校验
+                // 需安全卡身份密钥作信任根，随真 SDK（M11）接入后启用，故此处不再承诺「签名校验」。
+                "识别后将解析连接信息并建立端到端加密连接（设备身份签名校验将随安全卡接入启用）",
                 fontSize = 12.sp,
                 color = TextSecondary
             )
