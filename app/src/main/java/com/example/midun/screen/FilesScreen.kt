@@ -304,6 +304,13 @@ fun FileDetailScreen(
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { fileViewModel.importFromUri(folderId, it) }
     }
+    // 系统保存选取器（CreateDocument）：选好位置即真实流式导出该文件（M11.5.2）。
+    var fileToExport by remember { mutableStateOf<FileItem?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
+        val f = fileToExport
+        if (uri != null && f != null) fileViewModel.exportFileToUri(f.id, f.name, uri)
+        fileToExport = null
+    }
     var fileToDelete by remember { mutableStateOf<FileItem?>(null) }
     var showDeleteAllFilesDialog by remember { mutableStateOf(false) }
     var exportMessage by remember { mutableStateOf<String?>(null) }
@@ -432,8 +439,8 @@ fun FileDetailScreen(
                         copyPolicy = effectiveCopyPolicy,
                         onRename = { newName -> fileViewModel.renameFile(file.id, newName, folderId) },
                         onExportFile = {
-                            fileViewModel.recordExport("导出「${file.name}」")
-                            exportMessage = "「${file.name}」已按${effectiveCopyPolicy.exportLabel()}策略触发导出"
+                            fileToExport = file
+                            exportLauncher.launch(file.name)
                         },
                         onDelete = { fileToDelete = file }
                     )

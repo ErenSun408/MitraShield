@@ -3,6 +3,7 @@ package com.example.midun.data
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import java.io.InputStream
+import java.io.OutputStream
 
 /**
  * 隐私文件夹文件系统的统一抽象（M11.4）。由 [com.example.midun.data.mock.MockFileSystem]（模拟）与
@@ -36,6 +37,13 @@ interface FileSystemOps {
         openStream: () -> InputStream,
         onProgress: (written: Long) -> Unit
     ): Result<FileItem>
+
+    /**
+     * 把文件字节导出到 [output]（M11.5.2）。真卡读隐藏区**解密后明文**（卡内本就加密存储，App 层无独立
+     * 密钥，故「加密拷贝」策略实际也是明文导出——诚实降级）；Mock 无真实字节，写占位说明。返回写出字节数，
+     * **不关闭 [output]**（调用方负责）。
+     */
+    suspend fun exportFile(fileId: String, fileName: String, output: OutputStream): Result<Long>
 
     suspend fun deleteFile(fileId: String): Result<Unit>
     suspend fun deleteAllFilesInFolder(folderId: String): Result<Unit>

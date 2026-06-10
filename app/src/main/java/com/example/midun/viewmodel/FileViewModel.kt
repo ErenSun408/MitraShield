@@ -229,7 +229,26 @@ class FileViewModel @Inject constructor(
         }
     }
 
-    /** 记录一次导出操作。导出本身仍是 FilesScreen 的 mock 占位（M5），此处仅落日志。 */
+    /**
+     * 把卡内文件 [fileId] 真实导出到系统选取器（`CreateDocument`）返回的 [uri]（M11.5.2）。
+     * 真卡读隐藏区明文流式写出；Mock 写占位说明。导出受 UI 拷贝策略门控（NO_COPY 不可见）。
+     */
+    fun exportFileToUri(fileId: String, fileName: String, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { out ->
+                    fileSystem.exportFile(fileId, fileName, out).getOrThrow()
+                } ?: throw IOException("无法写入目标位置")
+            }.onSuccess {
+                operationLog.record(OperationType.FILE_EXPORT, "导出「$fileName」")
+                _operationResult.emit(OperationResult.Success("已导出「$fileName」"))
+            }.onFailure {
+                _operationResult.emit(OperationResult.Error(it.message ?: "导出失败"))
+            }
+        }
+    }
+
+    /** 记录一次导出操作（文件夹/批量导出仍为占位，仅落日志——单文件已走 [exportFileToUri] 真实导出）。 */
     fun recordExport(description: String) {
         operationLog.record(OperationType.FILE_EXPORT, description)
     }

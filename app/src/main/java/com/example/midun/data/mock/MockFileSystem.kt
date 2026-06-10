@@ -79,6 +79,19 @@ class MockFileSystem @Inject constructor() : FileSystemOps {
         Result.success(file)
     }
 
+    override suspend fun exportFile(
+        fileId: String,
+        fileName: String,
+        output: java.io.OutputStream
+    ): Result<Long> = withContext(Dispatchers.IO) {
+        runCatching {
+            val bytes = "（模拟数据）$fileName\n当前为模拟模式，无真实文件内容。"
+                .toByteArray(Charsets.UTF_8)
+            output.write(bytes)
+            bytes.size.toLong()
+        }
+    }
+
     override suspend fun deleteFile(fileId: String): Result<Unit> {
         delay(200)
         mockFiles.removeAll { it.id == fileId }

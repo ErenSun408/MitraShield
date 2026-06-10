@@ -4,6 +4,7 @@ import com.example.midun.data.mock.MockFileSystem
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.real.RealFileSystem
 import java.io.InputStream
+import java.io.OutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -35,6 +36,9 @@ class FileRepository @Inject constructor(
         openStream: () -> InputStream,
         onProgress: (written: Long) -> Unit
     ) = active().importFile(folderId, fileName, size, openStream, onProgress)
+
+    override suspend fun exportFile(fileId: String, fileName: String, output: OutputStream) =
+        active().exportFile(fileId, fileName, output)
 
     override suspend fun deleteFile(fileId: String) = active().deleteFile(fileId)
     override suspend fun deleteAllFilesInFolder(folderId: String) = active().deleteAllFilesInFolder(folderId)

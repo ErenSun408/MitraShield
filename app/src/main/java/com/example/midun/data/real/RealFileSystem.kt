@@ -98,6 +98,15 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
         }
     }
 
+    override suspend fun exportFile(
+        fileId: String,
+        fileName: String,
+        output: OutputStream
+    ): Result<Long> = withContext(Dispatchers.IO) {
+        // fileId 即隐藏区完整路径；readFile 读出解密后明文（卡内加密存储 → SFRead 已解密）。
+        readFile(fileId, output)
+    }
+
     override suspend fun deleteFile(fileId: String): Result<Unit> = withContext(Dispatchers.IO) {
         if (synchronized(fsShell) { LibJniFSShell.SFDelete(fileId) }) Result.success(Unit)
         else Result.failure(IllegalStateException("删除文件失败"))
