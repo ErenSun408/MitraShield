@@ -86,6 +86,8 @@ dependencies {
     implementation(libs.androidx.navigation.compose)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.datastore.preferences)
+    // M11.5.6：文件夹导出到用户选定目录（OpenDocumentTree + DocumentFile 建子目录/逐个写文件）
+    implementation(libs.androidx.documentfile)
 
     // Hilt 依赖注入
     implementation(libs.hilt.android)

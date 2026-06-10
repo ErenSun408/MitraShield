@@ -3,6 +3,7 @@ package com.example.midun.viewmodel
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.FileRepository
@@ -37,6 +38,18 @@ data class ImportProgress(val fileName: String, val written: Long, val total: Lo
     val fraction: Float get() = if (total > 0) (written.toFloat() / total).coerceIn(0f, 1f) else 0f
 }
 
+/**
+ * 文件夹导出进度（M11.5.6）。按文件个数计数；[finished] 后 UI 显示 [message] 结果、可关闭。
+ */
+data class ExportProgress(
+    val done: Int,
+    val total: Int,
+    val finished: Boolean = false,
+    val message: String = ""
+) {
+    val fraction: Float get() = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
+}
+
 @HiltViewModel
 class FileViewModel @Inject constructor(
     private val fileSystem: FileRepository,
@@ -58,6 +71,10 @@ class FileViewModel @Inject constructor(
     /** 非空表示导入进行中，供 UI 显示进度对话框；导入结束（成功/失败）置空。 */
     private val _importProgress = MutableStateFlow<ImportProgress?>(null)
     val importProgress: StateFlow<ImportProgress?> = _importProgress.asStateFlow()
+
+    /** 非空表示文件夹导出进行中/已完成（finished=true 显示结果）；由 [clearExportProgress] 关闭。 */
+    private val _exportProgress = MutableStateFlow<ExportProgress?>(null)
+    val exportProgress: StateFlow<ExportProgress?> = _exportProgress.asStateFlow()
 
     init {
         loadFolders()
@@ -248,7 +265,50 @@ class FileViewModel @Inject constructor(
         }
     }
 
-    /** 记录一次导出操作（文件夹/批量导出仍为占位，仅落日志——单文件已走 [exportFileToUri] 真实导出）。 */
+    /**
+     * 把整个文件夹导出到用户经 `OpenDocumentTree` 选定的目录 [treeUri]（M11.5.6）：在该目录下建一个同名
+     * 子目录，再把文件夹内下一级所有文件原样（不压缩、保留文件名）逐个流式写入。按文件个数回报进度。
+     */
+    fun exportFolderToTree(folderId: String, folderName: String, treeUri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val tree = DocumentFile.fromTreeUri(context, treeUri)
+            if (tree == null || !tree.canWrite()) {
+                _operationResult.emit(OperationResult.Error("无法写入所选目录"))
+                return@launch
+            }
+            val files = fileSystem.getFilesInFolder(folderId)
+            if (files.isEmpty()) {
+                _operationResult.emit(OperationResult.Error("文件夹为空，无文件可导出"))
+                return@launch
+            }
+            // 在选定目录下建同名子目录；失败（如同名已存在受限）则退回直接写选定目录。
+            val dir = tree.createDirectory(folderName) ?: tree
+            _exportProgress.value = ExportProgress(0, files.size)
+            var ok = 0
+            files.forEachIndexed { i, f ->
+                runCatching {
+                    val target = dir.createFile("application/octet-stream", f.name)
+                        ?: throw IOException("创建文件失败：${f.name}")
+                    context.contentResolver.openOutputStream(target.uri)?.use { out ->
+                        fileSystem.exportFile(f.id, f.name, out).getOrThrow()
+                    } ?: throw IOException("打开输出失败：${f.name}")
+                }.onSuccess { ok++ }
+                _exportProgress.value = ExportProgress(i + 1, files.size)
+            }
+            operationLog.record(OperationType.FILE_EXPORT, "导出文件夹「$folderName」（$ok 个文件）")
+            _exportProgress.value = ExportProgress(
+                files.size, files.size, finished = true,
+                message = "已导出 $ok/${files.size} 个文件到「$folderName」"
+            )
+        }
+    }
+
+    /** 关闭文件夹导出进度/结果对话框。 */
+    fun clearExportProgress() {
+        _exportProgress.value = null
+    }
+
+    /** 记录一次导出操作（单文件已走 [exportFileToUri]、文件夹走 [exportFolderToTree] 真实导出；仅备用）。 */
     fun recordExport(description: String) {
         operationLog.record(OperationType.FILE_EXPORT, description)
     }

@@ -25,6 +25,7 @@ import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
 import com.example.midun.ui.theme.*
+import com.example.midun.viewmodel.ExportProgress
 import com.example.midun.viewmodel.FileViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -38,8 +39,15 @@ fun FilesScreen(
     fileViewModel: FileViewModel = hiltViewModel()
 ) {
     val uiState by fileViewModel.uiState.collectAsState()
+    val exportProgress by fileViewModel.exportProgress.collectAsState()
     var folderToDelete by remember { mutableStateOf<FileItem?>(null) }
-    var folderExportMessage by remember { mutableStateOf<String?>(null) }
+    // 文件夹导出：选目标目录（OpenDocumentTree）→ 在其下建同名子目录写入全部文件（M11.5.6）。
+    var pendingExportFolder by remember { mutableStateOf<FileItem?>(null) }
+    val folderExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
+        val f = pendingExportFolder
+        if (treeUri != null && f != null) fileViewModel.exportFolderToTree(f.id, f.name, treeUri)
+        pendingExportFolder = null
+    }
 
     LaunchedEffect(Unit) {
         fileViewModel.loadFolders()
@@ -82,8 +90,8 @@ fun FilesScreen(
                         onClick = { onFolderClick(folder.id) },
                         onRename = { newName -> fileViewModel.renameFolder(folder.id, newName) },
                         onExportFolder = {
-                            fileViewModel.recordExport("导出文件夹「${folder.name}」")
-                            folderExportMessage = "「${folder.name}」文件夹结构已按${folder.copyPolicy.exportLabel()}策略触发导出"
+                            pendingExportFolder = folder
+                            folderExportLauncher.launch(null)
                         },
                         onDelete = { folderToDelete = folder }
                     )
@@ -104,19 +112,33 @@ fun FilesScreen(
         )
     }
 
-    folderExportMessage?.let { message ->
-        AlertDialog(
-            onDismissRequest = { folderExportMessage = null },
-            icon = { Icon(Icons.Default.FolderZip, null, tint = Primary) },
-            title = { Text("文件夹导出已触发") },
-            text = { Text(message, color = TextSecondary) },
-            confirmButton = {
-                TextButton(onClick = { folderExportMessage = null }) {
-                    Text("确定", color = Primary)
+    exportProgress?.let { FolderExportDialog(it) { fileViewModel.clearExportProgress() } }
+}
+
+/** 文件夹导出进度/结果对话框（M11.5.6）。进行中显进度条+计数（不可关），完成显结果（可关）。 */
+@Composable
+private fun FolderExportDialog(progress: ExportProgress, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = { if (progress.finished) onDismiss() },
+        icon = { Icon(Icons.Default.FolderZip, null, tint = Primary) },
+        title = { Text(if (progress.finished) "导出完成" else "正在导出文件夹") },
+        text = {
+            Column {
+                if (progress.finished) {
+                    Text(progress.message, color = TextSecondary)
+                } else {
+                    LinearProgressIndicator(progress = { progress.fraction }, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    Text("已导出 ${progress.done}/${progress.total}", fontSize = 12.sp, color = TextSecondary)
                 }
             }
-        )
-    }
+        },
+        confirmButton = {
+            if (progress.finished) {
+                TextButton(onClick = onDismiss) { Text("确定", color = Primary) }
+            }
+        }
+    )
 }
 
 @Composable
@@ -311,13 +333,16 @@ fun FileDetailScreen(
         if (uri != null && f != null) fileViewModel.exportFileToUri(f.id, f.name, uri)
         fileToExport = null
     }
+    // 文件夹整体导出：选目标目录 → 建同名子目录写入全部文件（M11.5.6）。
+    val exportProgress by fileViewModel.exportProgress.collectAsState()
+    val folderExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
+        if (treeUri != null && folder != null) fileViewModel.exportFolderToTree(folder.id, folder.name, treeUri)
+    }
     var fileToDelete by remember { mutableStateOf<FileItem?>(null) }
     var showDeleteAllFilesDialog by remember { mutableStateOf(false) }
-    var exportMessage by remember { mutableStateOf<String?>(null) }
     val onExportAllFiles = {
-        fileViewModel.recordExport("导出「${folder?.name ?: "文件夹"}」全部文件（${files.size}个）")
-        exportMessage = "${files.size} 个文件已按${effectiveCopyPolicy.exportLabel()}策略触发导出"
         showMenu = false
+        folderExportLauncher.launch(null)
     }
     val onDeleteAllFiles = {
         showMenu = false
@@ -549,19 +574,7 @@ fun FileDetailScreen(
         )
     }
 
-    exportMessage?.let { message ->
-        AlertDialog(
-            onDismissRequest = { exportMessage = null },
-            icon = { Icon(Icons.Default.FileDownload, null, tint = Primary) },
-            title = { Text("导出已触发") },
-            text = { Text(message, color = TextSecondary) },
-            confirmButton = {
-                TextButton(onClick = { exportMessage = null }) {
-                    Text("确定", color = Primary)
-                }
-            }
-        )
-    }
+    exportProgress?.let { FolderExportDialog(it) { fileViewModel.clearExportProgress() } }
 }
 
 @Composable
