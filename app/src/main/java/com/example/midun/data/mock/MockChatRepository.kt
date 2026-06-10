@@ -4,12 +4,43 @@ import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
+import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.real.ChatSnapshot
+import com.example.midun.data.real.ChatStore
+import com.example.midun.data.real.RealUsbManager
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
+/**
+ * 聊天仓库（联系人 + 消息，内存版 + 真卡持久化）。
+ *
+ * **持久化（M11.5.5）**：经 [ChatStore] 落安全卡隐藏区。模拟模式下 store 非活动 → 保留内存种子数据
+ * 开发流；真卡模式下认证成功即从卡加载历史（替换内存种子）、每次变更写穿到卡。模式判据/依赖选型见 [ChatStore]。
+ */
 @Singleton
-class MockChatRepository @Inject constructor() {
+class MockChatRepository @Inject constructor(
+    private val store: ChatStore,
+    realUsbManager: RealUsbManager
+) {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    init {
+        // 真卡认证成功（盘已打开）→ 从卡加载聊天，替换内存种子。模拟模式永不触发（Real 永不认证）。
+        scope.launch {
+            realUsbManager.deviceStatus
+                .map { it.status == UsbDeviceStatus.AUTHENTICATED }
+                .distinctUntilChanged()
+                .collect { authed -> if (authed) store.load()?.let { applySnapshot(it) } }
+        }
+    }
 
     private val mockContacts = mutableListOf(
         Contact("c1", "DEVICE_ABC123", "张三", "好的，文件已收到", System.currentTimeMillis() - 3600000, isOnline = true),
@@ -62,6 +93,7 @@ class MockChatRepository @Inject constructor() {
         )
         mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
         updateContactPreview(contactId)
+        persist()
         return Result.success(msg)
     }
 
@@ -69,6 +101,7 @@ class MockChatRepository @Inject constructor() {
         delay(100)
         mockMessages[contactId]?.removeAll { it.id == messageId }
         updateContactPreview(contactId)
+        persist()
         return Result.success(Unit)
     }
 
@@ -88,6 +121,7 @@ class MockChatRepository @Inject constructor() {
             recalled = true
         )
         updateContactPreview(contactId)
+        persist()
     }
 
     /**
@@ -105,6 +139,7 @@ class MockChatRepository @Inject constructor() {
         )
         mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
         updateContactPreview(contactId)
+        persist()
     }
 
     /**
@@ -125,12 +160,14 @@ class MockChatRepository @Inject constructor() {
             burned = true
         )
         updateContactPreview(contactId)
+        persist()
     }
 
     suspend fun clearMessages(contactId: String): Result<Unit> {
         delay(300)
         mockMessages[contactId]?.clear()
         updateContactPreview(contactId)
+        persist()
         return Result.success(Unit)
     }
 
@@ -138,12 +175,14 @@ class MockChatRepository @Inject constructor() {
         delay(500)
         mockMessages.remove(contactId)
         mockContacts.removeAll { it.id == contactId }
+        persist()
         return Result.success(Unit)
     }
 
     /** 扫码建联：新增一个联系人。由 P2PSessionManager 建联系人时调用。 */
     fun addContact(contact: Contact) {
         mockContacts.add(contact)
+        persist()
     }
 
     /** 修改联系人备注（用户在联系人资料页编辑）。由 ChatViewModel.updateRemark 调用。 */
@@ -151,6 +190,7 @@ class MockChatRepository @Inject constructor() {
         mockContacts.indexOfFirst { it.id == contactId }
             .takeIf { it >= 0 }
             ?.let { idx -> mockContacts[idx] = mockContacts[idx].copy(remark = remark) }
+        persist()
     }
 
     /** 是否已存在该 deviceId 的联系人（P2PSessionManager 身份交换去重用）。 */
@@ -186,6 +226,7 @@ class MockChatRepository @Inject constructor() {
             mockContacts[idx] = mockContacts[idx].copy(unreadCount = mockContacts[idx].unreadCount + 1)
         }
         updateContactPreview(contactId)
+        persist()
         return msg
     }
 
@@ -194,6 +235,7 @@ class MockChatRepository @Inject constructor() {
         mockContacts.indexOfFirst { it.id == contactId }
             .takeIf { it >= 0 }
             ?.let { idx -> mockContacts[idx] = mockContacts[idx].copy(isPinned = !mockContacts[idx].isPinned) }
+        persist()
     }
 
     /** 进入会话时清除该联系人的未读计数。由 ChatViewModel.markRead 调用。 */
@@ -201,12 +243,27 @@ class MockChatRepository @Inject constructor() {
         mockContacts.indexOfFirst { it.id == contactId }
             .takeIf { it >= 0 }
             ?.let { idx -> mockContacts[idx] = mockContacts[idx].copy(unreadCount = 0) }
+        persist()
     }
 
     /** 整卡擦除时调用：清空所有联系人与消息。由 MockUsbManager.wipeAll() 统一触发。 */
     fun clear() {
         mockContacts.clear()
         mockMessages.clear()
+        persist()
+    }
+
+    /** 用卡内快照替换内存（真卡认证后加载）。 */
+    private fun applySnapshot(s: ChatSnapshot) {
+        mockContacts.clear()
+        mockContacts.addAll(s.contacts)
+        mockMessages.clear()
+        s.messages.forEach { (cid, list) -> mockMessages[cid] = list.toMutableList() }
+    }
+
+    /** 写穿到隐藏区（store 内部判活动态：模拟模式 no-op、真卡模式整表覆盖写）。 */
+    private fun persist() {
+        scope.launch { store.save(ChatSnapshot(mockContacts.toList(), mockMessages.mapValues { it.value.toList() })) }
     }
 
     private fun updateContactPreview(contactId: String) {
