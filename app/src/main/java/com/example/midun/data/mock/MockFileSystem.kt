@@ -1,5 +1,6 @@
 package com.example.midun.data.mock
 
+import com.example.midun.data.FileSystemOps
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
@@ -8,7 +9,7 @@ import javax.inject.Singleton
 import kotlinx.coroutines.delay
 
 @Singleton
-class MockFileSystem @Inject constructor() {
+class MockFileSystem @Inject constructor() : FileSystemOps {
 
     private val mockFolders = mutableListOf(
         FileItem("folder_1", "工作文件", FileType.FOLDER, copyPolicy = CopyPolicy.COPY_PLAIN),
@@ -24,15 +25,15 @@ class MockFileSystem @Inject constructor() {
         FileItem("file_5", "演示视频.mp4", FileType.VIDEO, 52428800L, parentId = "folder_3", source = "chat"),
     )
 
-    fun getFolders(): List<FileItem> = mockFolders.toList()
+    override suspend fun getFolders(): List<FileItem> = mockFolders.toList()
 
-    fun getFilesInFolder(folderId: String): List<FileItem> =
+    override suspend fun getFilesInFolder(folderId: String): List<FileItem> =
         mockFiles.filter { it.parentId == folderId }
 
     /** 安全卡内文件总数（跨所有文件夹）。供首页设备状态卡的「文件数量」统计使用。 */
-    fun getTotalFileCount(): Int = mockFiles.size
+    override suspend fun getTotalFileCount(): Int = mockFiles.size
 
-    suspend fun createFolder(name: String, policy: CopyPolicy): Result<FileItem> {
+    override suspend fun createFolder(name: String, policy: CopyPolicy): Result<FileItem> {
         delay(300)
         val folder = FileItem(
             id = "folder_${System.currentTimeMillis()}",
@@ -44,7 +45,7 @@ class MockFileSystem @Inject constructor() {
         return Result.success(folder)
     }
 
-    suspend fun importFile(folderId: String, fileName: String, fileSize: Long): Result<FileItem> {
+    override suspend fun importFile(folderId: String, fileName: String, fileSize: Long): Result<FileItem> {
         delay(500)
         val file = FileItem(
             id = "file_${System.currentTimeMillis()}",
@@ -57,26 +58,26 @@ class MockFileSystem @Inject constructor() {
         return Result.success(file)
     }
 
-    suspend fun deleteFile(fileId: String): Result<Unit> {
+    override suspend fun deleteFile(fileId: String): Result<Unit> {
         delay(200)
         mockFiles.removeAll { it.id == fileId }
         return Result.success(Unit)
     }
 
-    suspend fun deleteAllFilesInFolder(folderId: String): Result<Unit> {
+    override suspend fun deleteAllFilesInFolder(folderId: String): Result<Unit> {
         delay(300)
         mockFiles.removeAll { it.parentId == folderId }
         return Result.success(Unit)
     }
 
-    suspend fun deleteFolder(folderId: String): Result<Unit> {
+    override suspend fun deleteFolder(folderId: String): Result<Unit> {
         delay(300)
         mockFolders.removeAll { it.id == folderId }
         mockFiles.removeAll { it.parentId == folderId }
         return Result.success(Unit)
     }
 
-    suspend fun renameFolder(folderId: String, newName: String): Result<Unit> {
+    override suspend fun renameFolder(folderId: String, newName: String): Result<Unit> {
         delay(200)
         val index = mockFolders.indexOfFirst { it.id == folderId }
         if (index == -1) {
@@ -86,7 +87,7 @@ class MockFileSystem @Inject constructor() {
         return Result.success(Unit)
     }
 
-    suspend fun renameFile(fileId: String, newName: String): Result<Unit> {
+    override suspend fun renameFile(fileId: String, newName: String): Result<Unit> {
         delay(200)
         val index = mockFiles.indexOfFirst { it.id == fileId }
         if (index == -1) {

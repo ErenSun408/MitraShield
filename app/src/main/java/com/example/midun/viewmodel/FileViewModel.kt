@@ -2,7 +2,7 @@ package com.example.midun.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.midun.data.mock.MockFileSystem
+import com.example.midun.data.FileRepository
 import com.example.midun.data.mock.MockOperationLog
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
@@ -28,7 +28,7 @@ data class FileUiState(
 
 @HiltViewModel
 class FileViewModel @Inject constructor(
-    private val fileSystem: MockFileSystem,
+    private val fileSystem: FileRepository,
     private val operationLog: MockOperationLog
 ) : ViewModel() {
 
@@ -48,20 +48,17 @@ class FileViewModel @Inject constructor(
     }
 
     fun loadFolders() {
-        _uiState.update { state ->
-            state.copy(
-                folders = fileSystem.getFolders(),
-                totalFileCount = fileSystem.getTotalFileCount()
-            )
+        viewModelScope.launch {
+            val folders = fileSystem.getFolders()
+            val total = fileSystem.getTotalFileCount()
+            _uiState.update { it.copy(folders = folders, totalFileCount = total) }
         }
     }
 
     fun loadFiles(folderId: String) {
-        _uiState.update { state ->
-            state.copy(
-                currentFolderId = folderId,
-                currentFiles = fileSystem.getFilesInFolder(folderId)
-            )
+        viewModelScope.launch {
+            val files = fileSystem.getFilesInFolder(folderId)
+            _uiState.update { it.copy(currentFolderId = folderId, currentFiles = files) }
         }
     }
 
