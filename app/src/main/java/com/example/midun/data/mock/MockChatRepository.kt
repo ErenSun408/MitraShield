@@ -33,12 +33,22 @@ class MockChatRepository @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
-        // 真卡认证成功（盘已打开）→ 从卡加载聊天，替换内存种子。模拟模式永不触发（Real 永不认证）。
+        // 真卡认证成功（盘已打开）→ 从卡加载聊天，替换内存种子；锁定/拔卡（离开 AUTHENTICATED）→ 清内存明文。
+        // 模拟模式 Real 永不认证 → wasAuthed 恒 false，初始 false 不误清种子（M11.6.3 安全加固）。
         scope.launch {
+            var wasAuthed = false
             realUsbManager.deviceStatus
                 .map { it.status == UsbDeviceStatus.AUTHENTICATED }
                 .distinctUntilChanged()
-                .collect { authed -> if (authed) store.load()?.let { applySnapshot(it) } }
+                .collect { authed ->
+                    if (authed) {
+                        store.load()?.let { applySnapshot(it) }
+                        wasAuthed = true
+                    } else if (wasAuthed) {
+                        clearInMemory() // 已写穿到卡，重认证后重载
+                        wasAuthed = false
+                    }
+                }
         }
     }
 
@@ -251,6 +261,12 @@ class MockChatRepository @Inject constructor(
         mockContacts.clear()
         mockMessages.clear()
         persist()
+    }
+
+    /** 仅清内存（锁定/拔卡时；卡内数据已写穿，不再持久化，重认证后重载）。 */
+    private fun clearInMemory() {
+        mockContacts.clear()
+        mockMessages.clear()
     }
 
     /** 用卡内快照替换内存（真卡认证后加载）。 */

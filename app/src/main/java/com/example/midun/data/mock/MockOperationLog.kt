@@ -38,12 +38,22 @@ class MockOperationLog @Inject constructor(
     val logs: StateFlow<List<OperationLog>> = _logs.asStateFlow()
 
     init {
-        // 真卡认证成功（盘已打开）→ 从卡加载历史日志，替换内存。模拟模式永不触发（Real 永不认证）。
+        // 真卡认证成功（盘已打开）→ 从卡加载历史日志；锁定/拔卡（离开 AUTHENTICATED）→ 清内存明文。
+        // 模拟模式 Real 永不认证 → wasAuthed 恒 false，初始 false 不误清种子（M11.6.3 安全加固）。
         scope.launch {
+            var wasAuthed = false
             realUsbManager.deviceStatus
                 .map { it.status == UsbDeviceStatus.AUTHENTICATED }
                 .distinctUntilChanged()
-                .collect { authed -> if (authed) store.load()?.let { _logs.value = it } }
+                .collect { authed ->
+                    if (authed) {
+                        store.load()?.let { _logs.value = it }
+                        wasAuthed = true
+                    } else if (wasAuthed) {
+                        _logs.value = emptyList() // 已写穿到卡，重认证后重载
+                        wasAuthed = false
+                    }
+                }
         }
     }
 

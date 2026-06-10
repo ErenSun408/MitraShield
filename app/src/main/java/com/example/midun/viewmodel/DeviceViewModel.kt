@@ -124,7 +124,11 @@ class DeviceViewModel @Inject constructor(
         }
     }
 
-    // M10 hook: replace with SFCloseDisk() once the real FSShell SDK lands.
+    /**
+     * 拔卡敏感数据清理（M11.6.3）：真卡 `SFCloseDisk` 已由 `cardManager.onUsbDetached()`→`real.closeDevice()`
+     * 完成；内存明文（聊天/操作日志）清理由各仓库响应式监听 `deviceStatus` 离开 AUTHENTICATED 自动处理。
+     * 此处保留为额外的进程内敏感态清理挂钩（当前无新增项）。
+     */
     private fun clearSensitiveMemory() {
     }
 
