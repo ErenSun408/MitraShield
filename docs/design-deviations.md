@@ -832,4 +832,26 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
 - **64KB 分块原语**：`writeFile(path, InputStream)`/`readFile(path, OutputStream)` 已建，但 M11.4 不接 UI——`importFile` 当前只 `SFCreate` 空文件条目；**真实字节流式导入 / 导出（选取器 `GetContent` + 进度 + 100MB 限制）= M11.5** 复用这两个原语。
 - **Commit** `55d8c7a`。compileDebugKotlin 干净；**未做真机验证**（真卡文件 IO 攒到 M11.5/6 联调），中文文件名直传 String 的编码兼容性留真机确认。
 
+### M11.5 — 真实文件传输 + 落卡持久化（子拆分逐个提交）
+M11.5 较大，按子子阶段拆分逐个提交（[[feedback-commit-per-substage]]）。
+
+**M11.5.1 真实文件导入**（`ffbd730`）
+- `FileSystemOps.importFile` 改**流式签名**（`openStream: () -> InputStream` + `onProgress`，偏离原 `(folderId,fileName,fileSize)` 占位签名）：真卡 `RealFileSystem.writeFile` 64KB 分块落隐藏区；Mock 消费流驱动真实进度但仍只记内存元数据。
+- `FileViewModel.importFromUri` 经 `OpenableColumns` 取文件名/大小，**100MB 上限**双层校验（VM 预检 + Real 层流式累计中止 + 删半成品）；进度以 `ImportProgress` StateFlow 暴露。
+- `FilesScreen` 接 `GetContent` 系统选取器（「手机存储 / 普通U盘」两入口都开同一选取器——OTG U盘也在其中可见，偏离原「两条硬编码占位通路」）+ 不可取消的进度对话框。
+
+**M11.5.2 真实单文件导出**（`a9f5798`）
+- `FileSystemOps.exportFile(fileId, fileName, output)`：真卡 `readFile` 流式写出到 `CreateDocument` 选的位置；Mock 写占位说明。
+- **加密拷贝策略诚实降级**：卡内本就加密存储、`SFRead` 已解密、App 层无独立密钥 → `COPY_ENCRYPTED` 实际也导**明文**（无法在 App 侧产出独立加密副本）。文件夹/批量导出仍占位（多文件打包后续）。
+
+**M11.5.3 真实文件传输（P2P 收发文件落卡）= 延后到真机联调阶段**（用户 2026-06-10 决策）
+- 理由：现有传输是**文本行协议**（`BufferedReader.readLine`/`println`），二进制文件不能同流裸混（`BufferedReader` 预读缓冲会吞字节）；真实方案（长度前缀二进制分帧 + 分块 AES-GCM〈递增 nonce + AAD 防重排〉 + 流式落卡 + 文件单开 socket）是安全敏感的网络协议大改、**纯本地无法验证**（需两机两卡），先写易返工 → 连写带验留真机阶段。方案细节见记忆 [[project-midun-m11-5-filetransfer]]。
+
+**M11.5.4 / M11.5.5 落卡持久化**（`bd55faa` / `23fc8a4`）
+- 操作日志 → `0:/.midun_oplog.json`、聊天（联系人 + 消息）→ `0:/.midun_chat.json`，经新增 `data/real/OperationLogStore.kt` / `ChatStore.kt` 用 `RealFileSystem` 读写 JSON。
+- **活动判据 = `RealUsbManager` AUTHENTICATED**（真卡模式 + 盘已打开的精确代理）。**有意依赖 `RealUsbManager` 叶子而非 `SecurityCardManager`**——后者经 `MockUsbManager` 反向依赖 `MockOperationLog`/`MockChatRepository`，注入会成 Hilt DI 环。
+- `MockOperationLog`/`MockChatRepository` 注入对应 store + `RealUsbManager`：`init` 里 collect `deviceStatus` → 认证成功即从卡加载（替换内存种子）；每次变更 `scope.launch { store.save(...) }` 写穿。模拟模式 store 非活动 → no-op、保留内存种子开发流。
+- **内存清除-on-锁定的安全加固未做**（认证后明文聊天/日志留在内存）→ 归 M11.6「自动锁定持久化」一并处理。
+- 全部 compileDebugKotlin 干净、Hilt 图无环；**未做真机验证**（真卡 JSON IO 攒到真机阶段）。
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
