@@ -24,6 +24,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout"
             android:label="@string/app_name"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.MiDun"
