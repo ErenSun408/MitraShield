@@ -104,7 +104,7 @@ fun NavGraph(navController: NavHostController) {
             route = Screen.FileDetail.route,
             arguments = listOf(navArgument("folderId") { type = NavType.StringType })
         ) { backStackEntry ->
-            val folderId = backStackEntry.arguments?.getString("folderId") ?: ""
+            val folderId = Screen.FileDetail.decodeFolderId(backStackEntry.arguments?.getString("folderId") ?: "")
             FileDetailScreen(folderId = folderId, onBack = { navController.popBackStack() })
         }
 
