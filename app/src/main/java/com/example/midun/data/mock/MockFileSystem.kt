@@ -4,9 +4,12 @@ import com.example.midun.data.FileSystemOps
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
+import java.io.InputStream
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 @Singleton
 class MockFileSystem @Inject constructor() : FileSystemOps {
@@ -45,17 +48,35 @@ class MockFileSystem @Inject constructor() : FileSystemOps {
         return Result.success(folder)
     }
 
-    override suspend fun importFile(folderId: String, fileName: String, fileSize: Long): Result<FileItem> {
-        delay(500)
+    override suspend fun importFile(
+        folderId: String,
+        fileName: String,
+        size: Long,
+        openStream: () -> InputStream,
+        onProgress: (written: Long) -> Unit
+    ): Result<FileItem> = withContext(Dispatchers.IO) {
+        // Mock 无真实存储：消费流以驱动真实进度，但只记内存元数据。
+        runCatching {
+            openStream().use { input ->
+                val buf = ByteArray(64 * 1024)
+                var total = 0L
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    total += n
+                    onProgress(total)
+                }
+            }
+        }
         val file = FileItem(
             id = "file_${System.currentTimeMillis()}",
             name = fileName,
             type = guessFileType(fileName),
-            size = fileSize,
+            size = size,
             parentId = folderId
         )
         mockFiles.add(file)
-        return Result.success(file)
+        Result.success(file)
     }
 
     override suspend fun deleteFile(fileId: String): Result<Unit> {

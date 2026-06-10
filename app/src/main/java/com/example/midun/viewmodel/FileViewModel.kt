@@ -1,5 +1,8 @@
 package com.example.midun.viewmodel
 
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.FileRepository
@@ -8,7 +11,10 @@ import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.OperationType
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.IOException
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -26,10 +32,16 @@ data class FileUiState(
     val isLoading: Boolean = false
 )
 
+/** 文件导入进度（M11.5.1）。`total<=0` 表示来源未报大小，进度不确定。 */
+data class ImportProgress(val fileName: String, val written: Long, val total: Long) {
+    val fraction: Float get() = if (total > 0) (written.toFloat() / total).coerceIn(0f, 1f) else 0f
+}
+
 @HiltViewModel
 class FileViewModel @Inject constructor(
     private val fileSystem: FileRepository,
-    private val operationLog: MockOperationLog
+    private val operationLog: MockOperationLog,
+    @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     sealed class OperationResult {
@@ -42,6 +54,10 @@ class FileViewModel @Inject constructor(
 
     private val _operationResult = MutableSharedFlow<OperationResult>()
     val operationResult: SharedFlow<OperationResult> = _operationResult.asSharedFlow()
+
+    /** 非空表示导入进行中，供 UI 显示进度对话框；导入结束（成功/失败）置空。 */
+    private val _importProgress = MutableStateFlow<ImportProgress?>(null)
+    val importProgress: StateFlow<ImportProgress?> = _importProgress.asStateFlow()
 
     init {
         loadFolders()
@@ -77,21 +93,52 @@ class FileViewModel @Inject constructor(
         }
     }
 
-    fun importFile(folderId: String, fileName: String, fileSize: Long) {
-        viewModelScope.launch {
-            setLoading(true)
-            fileSystem.importFile(folderId, fileName, fileSize)
-                .onSuccess {
-                    loadFiles(folderId)
-                    operationLog.record(OperationType.FILE_IMPORT, "导入「$fileName」")
-                    _operationResult.emit(OperationResult.Success("文件导入成功"))
-                }
-                .onFailure {
-                    _operationResult.emit(OperationResult.Error(it.message ?: "导入失败"))
-                }
-            setLoading(false)
+    /**
+     * 从系统文件选取器（`GetContent`）返回的 [uri] 真实流式导入到 [folderId]（M11.5.1）。
+     * 经 `OpenableColumns` 取文件名/大小，先做 100MB 上限校验，再交 [fileSystem] 64KB 分块写入并回报进度。
+     */
+    fun importFromUri(folderId: String, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val meta = queryMeta(uri)
+            if (meta == null) {
+                _operationResult.emit(OperationResult.Error("无法读取所选文件"))
+                return@launch
+            }
+            val (name, size) = meta
+            if (size > MAX_IMPORT_BYTES) {
+                _operationResult.emit(OperationResult.Error("文件超过 100MB 上限，无法导入"))
+                return@launch
+            }
+            _importProgress.value = ImportProgress(name, 0L, size)
+            fileSystem.importFile(
+                folderId = folderId,
+                fileName = name,
+                size = size,
+                openStream = {
+                    context.contentResolver.openInputStream(uri) ?: throw IOException("打开文件失败")
+                },
+                onProgress = { written -> _importProgress.value = ImportProgress(name, written, size) }
+            ).onSuccess {
+                loadFiles(folderId)
+                operationLog.record(OperationType.FILE_IMPORT, "导入「$name」")
+                _operationResult.emit(OperationResult.Success("文件导入成功"))
+            }.onFailure {
+                _operationResult.emit(OperationResult.Error(it.message ?: "导入失败"))
+            }
+            _importProgress.value = null
         }
     }
+
+    /** 经 ContentResolver 查 [uri] 的显示名与大小；名缺失视为不可用。大小未知回 0（由下游兜底）。 */
+    private fun queryMeta(uri: Uri): Pair<String, Long>? =
+        context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+            if (!c.moveToFirst()) return null
+            val nameIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            val sizeIdx = c.getColumnIndex(OpenableColumns.SIZE)
+            val name = if (nameIdx >= 0) c.getString(nameIdx) else null
+            val size = if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else 0L
+            if (name.isNullOrBlank()) null else name to size
+        }
 
     fun deleteFile(fileId: String, folderId: String) {
         val fileName = _uiState.value.currentFiles.find { it.id == fileId }?.name ?: "文件"
@@ -189,5 +236,9 @@ class FileViewModel @Inject constructor(
 
     private fun setLoading(isLoading: Boolean) {
         _uiState.update { it.copy(isLoading = isLoading) }
+    }
+
+    private companion object {
+        const val MAX_IMPORT_BYTES = 100L * 1024 * 1024 // 100MB（需求上限，与 RealFileSystem 一致）
     }
 }

@@ -1,5 +1,7 @@
 package com.example.midun.screen
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -292,11 +294,16 @@ fun FileDetailScreen(
     fileViewModel: FileViewModel = hiltViewModel()
 ) {
     val uiState by fileViewModel.uiState.collectAsState()
+    val importProgress by fileViewModel.importProgress.collectAsState()
     val folder = uiState.folders.find { it.id == folderId }
     val files = if (uiState.currentFolderId == folderId) uiState.currentFiles else emptyList()
     val effectiveCopyPolicy = folder?.copyPolicy ?: CopyPolicy.NO_COPY
     var showMenu by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
+    // 系统文件选取器（GetContent）：选中即真实流式导入到本文件夹（M11.5.1）。
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri?.let { fileViewModel.importFromUri(folderId, it) }
+    }
     var fileToDelete by remember { mutableStateOf<FileItem?>(null) }
     var showDeleteAllFilesDialog by remember { mutableStateOf(false) }
     var exportMessage by remember { mutableStateOf<String?>(null) }
@@ -446,12 +453,8 @@ fun FileDetailScreen(
                     Spacer(Modifier.height(12.dp))
                     OutlinedButton(
                         onClick = {
-                            fileViewModel.importFile(
-                                folderId = folderId,
-                                fileName = "手机导入_${System.currentTimeMillis()}.pdf",
-                                fileSize = 2_048_000L
-                            )
                             showImportDialog = false
+                            importLauncher.launch("*/*")
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -462,12 +465,8 @@ fun FileDetailScreen(
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = {
-                            fileViewModel.importFile(
-                                folderId = folderId,
-                                fileName = "U盘导入_${System.currentTimeMillis()}.docx",
-                                fileSize = 512_000L
-                            )
                             showImportDialog = false
+                            importLauncher.launch("*/*")
                         },
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -475,12 +474,47 @@ fun FileDetailScreen(
                         Spacer(Modifier.width(8.dp))
                         Text("从普通U盘导入")
                     }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "在系统选取器中选择文件（手机存储或已挂载的U盘），单文件上限 100MB",
+                        fontSize = 11.sp,
+                        color = TextSecondary
+                    )
                 }
             },
             confirmButton = {},
             dismissButton = {
                 TextButton(onClick = { showImportDialog = false }) { Text("取消") }
             }
+        )
+    }
+
+    importProgress?.let { p ->
+        val mb = { bytes: Long -> "%.1f MB".format(bytes / 1024f / 1024f) }
+        AlertDialog(
+            onDismissRequest = { }, // 导入中不可取消关闭
+            icon = { Icon(Icons.Default.FileUpload, null, tint = Primary) },
+            title = { Text("正在导入") },
+            text = {
+                Column {
+                    Text(p.fileName, fontSize = 14.sp, maxLines = 1)
+                    Spacer(Modifier.height(12.dp))
+                    if (p.total > 0) {
+                        LinearProgressIndicator(progress = { p.fraction }, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "${mb(p.written)} / ${mb(p.total)}（${(p.fraction * 100).toInt()}%）",
+                            fontSize = 12.sp,
+                            color = TextSecondary
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(6.dp))
+                        Text("已写入 ${mb(p.written)}", fontSize = 12.sp, color = TextSecondary)
+                    }
+                }
+            },
+            confirmButton = {}
         )
     }
 

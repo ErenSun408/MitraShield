@@ -85,19 +85,17 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
     override suspend fun importFile(
         folderId: String,
         fileName: String,
-        fileSize: Long
+        size: Long,
+        openStream: () -> InputStream,
+        onProgress: (written: Long) -> Unit
     ): Result<FileItem> = withContext(Dispatchers.IO) {
         val path = "$folderId/$fileName"
-        // M11.4：仅建立空文件条目；真实字节导入（选取器 + 64KB 分块 + 100MB 限制）见 M11.5。
-        val handle = synchronized(fsShell) {
-            val h = LibJniFSShell.SFCreate(path)
-            if (h > 0) LibJniFSShell.SFClose(h)
-            h
+        // M11.5.1：真实字节流式导入——64KB 分块写入隐藏区，100MB 上限兜底。
+        val result = openStream().use { input -> writeFile(path, input, MAX_IMPORT_BYTES, onProgress) }
+        if (result.isFailure) synchronized(fsShell) { LibJniFSShell.SFDelete(path) } // 删半成品
+        result.map {
+            FileItem(id = path, name = fileName, type = guessFileType(fileName), size = it, parentId = folderId)
         }
-        if (handle <= 0) return@withContext Result.failure(fsError("创建文件失败", handle))
-        Result.success(
-            FileItem(id = path, name = fileName, type = guessFileType(fileName), parentId = folderId)
-        )
     }
 
     override suspend fun deleteFile(fileId: String): Result<Unit> = withContext(Dispatchers.IO) {
@@ -160,8 +158,16 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
 
     // —— 64KB 分块读写原语（M11.5 选取器导入/导出复用）——
 
-    /** 把 [input] 流式写入卡内 [path]，64KB 分块。返回写入字节数。 */
-    fun writeFile(path: String, input: InputStream): Result<Long> = synchronized(fsShell) {
+    /**
+     * 把 [input] 流式写入卡内 [path]，64KB 分块，[onProgress] 回报累计字节。超 [maxBytes] 则中止、删半成品
+     * 并失败（导入 100MB 上限兜底）。返回写入字节数。**不负责关闭 [input]**（调用方 `use`）。
+     */
+    fun writeFile(
+        path: String,
+        input: InputStream,
+        maxBytes: Long = Long.MAX_VALUE,
+        onProgress: (Long) -> Unit = {}
+    ): Result<Long> = synchronized(fsShell) {
         val handle = LibJniFSShell.SFCreate(path)
         if (handle <= 0) return Result.failure(fsError("创建文件失败", handle))
         var total = 0L
@@ -170,10 +176,15 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
             while (true) {
                 val n = input.read(buf)
                 if (n < 0) break
-                if (n > 0 && LibJniFSShell.SFWrite(handle, buf, 0, n) < 0) {
-                    return Result.failure(IllegalStateException("写入失败 @${total}"))
-                }
                 total += n
+                if (total > maxBytes) {
+                    // finally 负责关句柄；半成品由 importFile 失败兜底删除。
+                    return Result.failure(IllegalStateException("文件超过上限 ${maxBytes / (1024 * 1024)}MB"))
+                }
+                if (n > 0 && LibJniFSShell.SFWrite(handle, buf, 0, n) < 0) {
+                    return Result.failure(IllegalStateException("写入失败 @$total"))
+                }
+                onProgress(total)
             }
             Result.success(total)
         } finally {
@@ -289,5 +300,7 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
         const val ROOT = "0:/"
         const val META_PATH = "0:/.midun_meta.json"
         const val CHUNK = 64 * 1024
+        const val MAX_IMPORT_BYTES = 100L * 1024 * 1024 // 100MB 导入上限（需求）
+
     }
 }

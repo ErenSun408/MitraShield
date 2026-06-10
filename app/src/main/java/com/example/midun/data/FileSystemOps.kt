@@ -2,6 +2,7 @@ package com.example.midun.data
 
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
+import java.io.InputStream
 
 /**
  * 隐私文件夹文件系统的统一抽象（M11.4）。由 [com.example.midun.data.mock.MockFileSystem]（模拟）与
@@ -24,10 +25,17 @@ interface FileSystemOps {
     suspend fun createFolder(name: String, policy: CopyPolicy): Result<FileItem>
 
     /**
-     * 在文件夹内登记一个文件。**M11.4 只建立卡内文件条目（空文件）**——真实字节流式导入（选取器 +
-     * 64KB 分块 + 100MB 限制）是 M11.5；`fileSize` 仅用于 Mock 占位展示。
+     * 流式导入一个文件（M11.5.1）：从 [openStream] 取字节、64KB 分块写入目标文件夹，[onProgress] 回报已写
+     * 字节数。真卡实现落隐藏区（`writeFile`）；Mock 实现消费流更新进度但只记内存元数据。[size] 用于
+     * UI 显示与 100MB 上限校验（调用方先校验，真卡层再兜底）。文件名冲突等错误经 [Result] 返回。
      */
-    suspend fun importFile(folderId: String, fileName: String, fileSize: Long): Result<FileItem>
+    suspend fun importFile(
+        folderId: String,
+        fileName: String,
+        size: Long,
+        openStream: () -> InputStream,
+        onProgress: (written: Long) -> Unit
+    ): Result<FileItem>
 
     suspend fun deleteFile(fileId: String): Result<Unit>
     suspend fun deleteAllFilesInFolder(folderId: String): Result<Unit>
