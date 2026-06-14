@@ -104,7 +104,14 @@ class RealUsbManager @Inject constructor(
     /** 读真卡 SN（`SFDiskGetSN` 需盘已打开；打开后 driveName 参数被忽略，传 ""）。读不到回空串。 */
     private fun readSn(): String = runCatching { fsShell.SFDiskGetSN("") }.getOrNull().orEmpty()
 
-    /** 初始化：用默认密码打开 → `SFDiskSetPassword(sha256(新密码))` 改密码 → 状态 AUTHENTICATED（保持打开）。 */
+    /**
+     * 初始化：用默认密码打开 → `SFDiskSetPassword(sha256(新密码))` 改密码 → 读 SN/写绑定 → **关盘**，
+     * 状态退回 CONNECTED（已初始化）。
+     *
+     * **为何关盘**：改完密码后盘仍以「默认密码会话」处于打开态。产品流程是初始化完 → 登录页用新密码登录，
+     * 而登录 [authenticate] 走 `SFOpenDiskEx` 会对「已打开的盘」重复开盘 → 失败 →「刚设的密码报密码错误」
+     * （真机实测，须切模拟再切回真卡才好——切换会 [closeDevice] 关盘）。此处主动关盘，登录即可干净开盘。
+     */
     override suspend fun initDevice(password: String, bindDevice: Boolean): Result<Unit> =
         withContext(Dispatchers.IO) {
             val dn = diskName ?: return@withContext Result.failure(IllegalStateException("USB 未连接"))
@@ -116,18 +123,17 @@ class RealUsbManager @Inject constructor(
                 runCatching { fsShell.SFCloseDisk() }
                 return@withContext Result.failure(IllegalStateException("设置密码失败，错误码=$ret"))
             }
-            sessionPwdHash = sha256(password)
-            // 绑定（M11.6.6）：选中绑定则写卡内 0:/.bind = 本机 androidId。
+            // 绑定（M11.6.6）：选中绑定则写卡内 0:/.bind = 本机 androidId（需盘已打开）。
             val boundId = if (bindDevice) androidId().also { writeBoundId(it) } else null
             val sn = readSn() // 盘已打开，补读真实 SN
-            val (total, free) = readCapacity()
+            // 关盘，回到「已初始化、未认证」态 → 登录页用新密码 SFOpenDiskEx 重新干净开盘。
+            runCatching { fsShell.SFCloseDisk() }
+            sessionPwdHash = null
             _deviceStatus.value = _deviceStatus.value.copy(
                 isInitialized = true,
-                status = UsbDeviceStatus.AUTHENTICATED,
+                status = UsbDeviceStatus.CONNECTED,
                 deviceId = sn.ifEmpty { _deviceStatus.value.deviceId },
-                boundPhoneId = boundId,
-                totalBytes = total,
-                freeBytes = free
+                boundPhoneId = boundId
             )
             Result.success(Unit)
         }
