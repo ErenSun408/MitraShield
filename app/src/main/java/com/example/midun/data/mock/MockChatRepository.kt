@@ -5,8 +5,10 @@ import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.FileCachePaths
 import com.example.midun.data.real.ChatSnapshot
 import com.example.midun.data.real.ChatStore
+import com.example.midun.data.real.RealFileSystem
 import com.example.midun.data.real.RealUsbManager
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -27,6 +29,7 @@ import kotlinx.coroutines.launch
 @Singleton
 class MockChatRepository @Inject constructor(
     private val store: ChatStore,
+    private val realFileSystem: RealFileSystem,
     realUsbManager: RealUsbManager
 ) {
 
@@ -43,12 +46,29 @@ class MockChatRepository @Inject constructor(
                 .collect { authed ->
                     if (authed) {
                         store.load()?.let { applySnapshot(it) }
+                        sweepExpiredCache() // 7 天 TTL：清掉过期的文件预览缓存（认证后扫一遍，见 file-transfer 阶段3）
                         wasAuthed = true
                     } else if (wasAuthed) {
                         clearInMemory() // 已写穿到卡，重认证后重载
                         wasAuthed = false
                     }
                 }
+        }
+    }
+
+    /**
+     * 文件预览缓存 7 天 TTL（file-transfer 阶段3）：按消息 [ChatMessage.timestamp] 删超期的卡内暂存
+     * （`.recv_<id>` 接收暂存 + `.sent_<id>` 发送方副本）。安全 App 无常驻定时器 → 每次认证后扫一遍。
+     * **只删缓存前缀文件，绝不碰隐私文件夹**（已保存的永久副本不在此列，过期后仍可从文件夹预览）。
+     * streamDelete 对不存在的路径是 no-op，故文件夹来源发送（无 `.sent_` 文件）不受影响。
+     */
+    private fun sweepExpiredCache() {
+        val cutoff = System.currentTimeMillis() - CACHE_TTL_MS
+        mockMessages.values.flatten().forEach { m ->
+            if (m.type == MessageType.FILE && m.timestamp < cutoff) {
+                realFileSystem.streamDelete(FileCachePaths.recv(m.id))
+                realFileSystem.streamDelete(FileCachePaths.sent(m.id))
+            }
         }
     }
 
@@ -371,5 +391,10 @@ class MockChatRepository @Inject constructor(
             },
             lastMessageTime = lastMessage?.timestamp ?: 0L
         )
+    }
+
+    private companion object {
+        /** 文件预览缓存存活时长：7 天（用户定，file-transfer 阶段3）。 */
+        const val CACHE_TTL_MS = 7L * 24 * 60 * 60 * 1000
     }
 }

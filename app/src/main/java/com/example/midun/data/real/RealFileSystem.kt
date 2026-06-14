@@ -128,6 +128,11 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
         synchronized(fsShell) { LibJniFSShell.SFWrite(handle, buf, off, len) }
     /** 同步删单文件（接收失败/取消删半成品；路径直传隐藏区完整路径）。 */
     fun streamDelete(path: String): Boolean = synchronized(fsShell) { LibJniFSShell.SFDelete(path) }
+    /** 卡内文件是否存在（预览前判断缓存是否已被 TTL 清理 → 过期降级）。 */
+    fun exists(path: String): Boolean = synchronized(fsShell) {
+        val h = LibJniFSShell.SFOpen(path)
+        if (h > 0) { LibJniFSShell.SFClose(h); true } else false
+    }
     /** 跨目录移动（接收文件保存到隐私文件夹；SFRename 改完整路径）。失败回 false，调用方回退 [copyWithinCard]。 */
     fun streamMove(fromPath: String, toPath: String): Boolean =
         synchronized(fsShell) { LibJniFSShell.SFRename(fromPath, toPath) }

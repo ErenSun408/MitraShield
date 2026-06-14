@@ -1,6 +1,7 @@
 package com.example.midun.network
 
 import android.util.Base64
+import com.example.midun.data.FileCachePaths
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.mock.MockChatRepository
 import com.example.midun.data.mock.MockOperationLog
@@ -341,7 +342,7 @@ class P2PSessionManager @Inject constructor(
         val totalChunks = ((size + FILE_CHUNK_BYTES - 1) / FILE_CHUNK_BYTES).toInt().coerceAtLeast(1)
 
         // 发送方预览副本：手机来源在真卡模式下边发边落 `.sent_<msgId>`；落不成则不留（localPath 保持 null）。
-        val sentCopyPath = if (sourceCardPath == null && cardManager.useRealCard.value) "$SENT_PREFIX$msgId" else null
+        val sentCopyPath = if (sourceCardPath == null && cardManager.useRealCard.value) FileCachePaths.sent(msgId) else null
         val copyHandle = sentCopyPath?.let { realFileSystem.streamCreate(it).takeIf { h -> h > 0 } }
 
         // 隐私文件夹来源即刻可预览（文件已在卡上）→ 起始就带 localPath；手机来源成功后再补。
@@ -572,7 +573,7 @@ class P2PSessionManager @Inject constructor(
             _incomingMessages.emit(contactId)
             return
         }
-        val stagingPath = "$RECV_PREFIX$msgId"
+        val stagingPath = FileCachePaths.recv(msgId)
         val handle = realFileSystem.streamCreate(stagingPath)
         if (handle <= 0) {
             chatRepo.addFileMessage(contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.FAILED)
@@ -620,7 +621,7 @@ class P2PSessionManager @Inject constructor(
     }
 
     /** 接收文件的卡内暂存路径（供 UI 免保存预览直接读卡 `0:/.recv_<msgId>`）。 */
-    fun stagingPathFor(msgId: String): String = "$RECV_PREFIX$msgId"
+    fun stagingPathFor(msgId: String): String = FileCachePaths.recv(msgId)
 
     /**
      * 接收方保存暂存文件到隐私文件夹（M11.5.3）：把卡内暂存 `0:/.recv_<msgId>` **复制**到 `0:/<folderId>/<fileName>`，
@@ -630,7 +631,7 @@ class P2PSessionManager @Inject constructor(
     suspend fun saveReceivedFile(
         msgId: String, contactId: String, fileName: String, folderId: String
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        val staging = "$RECV_PREFIX$msgId"
+        val staging = FileCachePaths.recv(msgId)
         if (realFileSystem.streamOpen(staging).let { h -> if (h > 0) { realFileSystem.streamClose(h); false } else true }) {
             return@withContext Result.failure(IllegalStateException("暂存文件不存在，可能已被清理"))
         }
@@ -893,10 +894,7 @@ class P2PSessionManager @Inject constructor(
         private const val FILE_CHUNK_BYTES = 64 * 1024
         /** 文件传输上限（100MB，需求）。 */
         private const val MAX_FILE_BYTES = 100L * 1024 * 1024
-        /** 接收文件的卡内暂存路径前缀（根级 `.` 前缀 → 文件/文件夹列表不可见、待用户选文件夹保存）。 */
-        private const val RECV_PREFIX = "0:/.recv_"
-        /** 发送方预览副本路径前缀（手机来源发送时留的卡内副本，同 `.recv_` 不可见、受 7 天 TTL 清理）。 */
-        private const val SENT_PREFIX = "0:/.sent_"
+        // 卡内缓存路径前缀（.recv_/.sent_）的唯一来源在 data.FileCachePaths（与 TTL 清理共用）。
     }
 }
 

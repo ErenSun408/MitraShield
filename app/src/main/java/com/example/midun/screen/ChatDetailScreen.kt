@@ -39,6 +39,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.midun.data.FileCachePaths
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
@@ -95,6 +96,20 @@ fun ChatDetailScreen(
     var fileToSave by remember { mutableStateOf<ChatMessage?>(null) } // 接收方点「保存」时选文件夹的目标消息
     var previewFile by remember { mutableStateOf<FileItem?>(null) }   // 预览中的文件（暂存区或已保存文件夹）
     var previewSaveTarget by remember { mutableStateOf<ChatMessage?>(null) } // 免保存预览时可「保存到文件夹」的接收消息
+    // 打开媒体预览前先验卡内文件是否还在（缓存可能已被 7 天 TTL 清理）→ 过期/缺失优雅降级，不开空白预览。
+    val openMediaPreview: (String, String, FileType, ChatMessage?) -> Unit = { path, name, type, saveTarget ->
+        scope.launch {
+            if (chatViewModel.cardFileExists(path)) {
+                previewFile = FileItem(id = path, name = name, type = type)
+                previewSaveTarget = saveTarget
+            } else {
+                snackbarHostState.showSnackbar(
+                    if (FileCachePaths.isCachePath(path)) "缓存已过期，该文件已自动清理，无法预览"
+                    else "文件不存在或已被删除，无法预览"
+                )
+            }
+        }
+    }
     var sendGateMsg by remember { mutableStateOf<String?>(null) }     // 不能发文件时的提示文案（非真卡/未连接）
     var cancelTarget by remember { mutableStateOf<ChatMessage?>(null) } // 取消在途发送的目标消息
     var showSourceMenu by remember { mutableStateOf(false) }          // 发送来源菜单（手机/隐私文件夹）
@@ -329,37 +344,21 @@ fun ChatDetailScreen(
                                 msg.isMine && msg.type == MessageType.FILE && transferring -> cancelTarget = msg
                                 // 发送方点自己发完的图/视频 → 预览卡内副本（手机来源 .sent_ / 隐私文件夹源路径）。
                                 msg.isMine && msg.type == MessageType.FILE && !transferring &&
-                                    isMedia && msg.localPath != null -> {
-                                    previewFile = FileItem(
-                                        id = msg.localPath, name = msg.fileName ?: "", type = ft
-                                    )
-                                    previewSaveTarget = null
-                                }
+                                    isMedia && msg.localPath != null ->
+                                    openMediaPreview(msg.localPath!!, msg.fileName ?: "", ft, null)
                                 // 接收方收到、未保存：媒体免保存直接预览暂存区（点预览里再选保存）；非媒体走保存弹窗。
                                 !msg.isMine && msg.type == MessageType.FILE && msg.savedFolderId == null &&
                                     msg.status == MessageStatus.RECEIVED && !transferring -> {
-                                    if (isMedia) {
-                                        previewFile = FileItem(
-                                            id = chatViewModel.stagingPathFor(msg.id),
-                                            name = msg.fileName ?: "", type = ft
-                                        )
-                                        previewSaveTarget = msg
-                                    } else {
+                                    if (isMedia) openMediaPreview(chatViewModel.stagingPathFor(msg.id), msg.fileName ?: "", ft, msg)
+                                    else {
                                         fileToSave = msg
                                         chatViewModel.loadSaveFolders()
                                     }
                                 }
                                 // 已保存的图片/视频 → 预览（文件夹永久副本）。
                                 msg.savedFolderId != null -> {
-                                    if (isMedia) {
-                                        previewFile = FileItem(
-                                            id = "${msg.savedFolderId}/${msg.fileName}",
-                                            name = msg.fileName ?: "", type = ft
-                                        )
-                                        previewSaveTarget = null
-                                    } else {
-                                        scope.launch { snackbarHostState.showSnackbar("已保存到文件夹，该类型暂不支持预览") }
-                                    }
+                                    if (isMedia) openMediaPreview("${msg.savedFolderId}/${msg.fileName}", msg.fileName ?: "", ft, null)
+                                    else scope.launch { snackbarHostState.showSnackbar("已保存到文件夹，该类型暂不支持预览") }
                                 }
                             }
                         }

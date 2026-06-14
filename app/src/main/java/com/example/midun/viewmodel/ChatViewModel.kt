@@ -22,8 +22,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
@@ -203,6 +205,10 @@ class ChatViewModel @Inject constructor(
 
     /** 接收暂存文件的卡内路径（接收方免保存预览：点媒体气泡直接读暂存区预览）。 */
     fun stagingPathFor(msgId: String): String = p2pManager.stagingPathFor(msgId)
+
+    /** 卡内文件是否还在（预览前判断缓存是否已被 7 天 TTL 清理 → 过期降级）。 */
+    suspend fun cardFileExists(path: String): Boolean =
+        withContext(Dispatchers.IO) { fileRepository.cardFileExists(path) }
 
     /**
      * 接收方把暂存文件保存到隐私文件夹：转发 P2PSessionManager.saveReceivedFile（卡内复制暂存→文件夹，暂存保留作缓存）。

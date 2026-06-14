@@ -55,4 +55,11 @@ class FileRepository @Inject constructor(
     fun openFileStream(fileId: String): java.io.InputStream =
         if (cardManager.useRealCard.value) real.openCardStream(fileId)
         else throw IllegalStateException("模拟模式无真实文件可发送")
+
+    /**
+     * 卡内文件是否存在（file-transfer 阶段3）：预览前判断缓存是否已被 7 天 TTL 清理 → 过期降级。
+     * 模拟模式无真实卡文件 → 一律 false（聊天文件传输/预览本就真卡专属，不会在模拟模式命中）。
+     */
+    fun cardFileExists(path: String): Boolean =
+        if (cardManager.useRealCard.value) real.exists(path) else false
 }
