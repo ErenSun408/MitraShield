@@ -5,6 +5,7 @@ import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import javax.inject.Inject
@@ -130,6 +131,26 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
     /** 跨目录移动（接收文件保存到隐私文件夹；SFRename 改完整路径）。失败回 false，调用方回退 [copyWithinCard]。 */
     fun streamMove(fromPath: String, toPath: String): Boolean =
         synchronized(fsShell) { LibJniFSShell.SFRename(fromPath, toPath) }
+
+    /**
+     * 打开卡内文件为流式 [InputStream]（M11.5.3：发送隐私文件夹文件时按需读，不把整文件读进内存）。
+     * 持有 `SFOpen` 句柄直到 `close()`；调用方须 `use{}`。打开失败抛 [IOException]。
+     */
+    fun openCardStream(path: String): InputStream {
+        val handle = synchronized(fsShell) { LibJniFSShell.SFOpen(path) }
+        if (handle <= 0) throw IOException("打开卡内文件失败：$path")
+        return object : InputStream() {
+            private val single = ByteArray(1)
+            override fun read(): Int = if (read(single, 0, 1) < 0) -1 else single[0].toInt() and 0xFF
+            override fun read(b: ByteArray, off: Int, len: Int): Int =
+                when (val n = streamRead(handle, b, off, len)) {
+                    0 -> -1 // EOF
+                    in Int.MIN_VALUE..-1 -> throw IOException("读取卡内文件失败")
+                    else -> n
+                }
+            override fun close() = streamClose(handle)
+        }
+    }
 
     /** 卡内流式复制（[streamMove] 失败时兜底）：64KB 分块读写，不攒整文件在内存。成功回 true。 */
     fun copyWithinCard(fromPath: String, toPath: String): Boolean = synchronized(fsShell) {

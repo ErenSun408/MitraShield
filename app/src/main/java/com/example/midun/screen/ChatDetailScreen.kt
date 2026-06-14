@@ -94,6 +94,8 @@ fun ChatDetailScreen(
     var fileToSave by remember { mutableStateOf<ChatMessage?>(null) } // 接收方点「保存」时选文件夹的目标消息
     var previewFile by remember { mutableStateOf<FileItem?>(null) }   // 已保存文件预览
     var showSendGate by remember { mutableStateOf(false) }            // 未连接时点发文件的提示
+    var showSourceMenu by remember { mutableStateOf(false) }          // 发送来源菜单（手机/隐私文件夹）
+    var showPickDialog by remember { mutableStateOf(false) }          // 隐私文件夹来源选取对话框
     // 手机存储选取器（GetContent）：选中即查名/大小/mime → 流式加密发送。
     val pickFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -215,11 +217,29 @@ fun ChatDetailScreen(
                         .padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = {
-                        // 发文件需先与对方建立连接（文件通道随会话建立）。未连接则提示。
-                        if (connectedHere) pickFileLauncher.launch("*/*") else showSendGate = true
-                    }) {
-                        Icon(Icons.Default.AttachFile, "发送文件", tint = if (connectedHere) Primary else TextSecondary)
+                    Box {
+                        IconButton(onClick = {
+                            // 发文件需先与对方建立连接（文件通道随会话建立）。未连接则提示。
+                            if (connectedHere) showSourceMenu = true else showSendGate = true
+                        }) {
+                            Icon(Icons.Default.AttachFile, "发送文件", tint = if (connectedHere) Primary else TextSecondary)
+                        }
+                        DropdownMenu(expanded = showSourceMenu, onDismissRequest = { showSourceMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("从手机存储") },
+                                leadingIcon = { Icon(Icons.Default.PhoneAndroid, null, tint = Primary) },
+                                onClick = { showSourceMenu = false; pickFileLauncher.launch("*/*") }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("从隐私文件夹") },
+                                leadingIcon = { Icon(Icons.Default.Folder, null, tint = Primary) },
+                                onClick = {
+                                    showSourceMenu = false
+                                    showPickDialog = true
+                                    chatViewModel.loadSaveFolders()
+                                }
+                            )
+                        }
                     }
                     OutlinedTextField(
                         value = inputText,
@@ -432,7 +452,87 @@ fun ChatDetailScreen(
         )
     }
 
+    // 隐私文件夹发送来源选取（M11.5.3b）：选文件夹 → 选文件 → 卡内流式加密发送。
+    if (showPickDialog) {
+        PickFromFolderDialog(
+            folders = chatViewModel.saveFolders.collectAsState().value,
+            files = chatViewModel.pickFiles.collectAsState().value,
+            onOpenFolder = { chatViewModel.loadPickFiles(it) },
+            onPickFile = { file ->
+                chatViewModel.sendCardFile(file) { scope.launch { snackbarHostState.showSnackbar(it) } }
+                showPickDialog = false
+            },
+            onDismiss = { showPickDialog = false }
+        )
+    }
+
     previewFile?.let { FilePreviewDialog(file = it, onClose = { previewFile = null }) }
+}
+
+/** 隐私文件夹发送来源选取对话框（M11.5.3b）：先列文件夹，进入后列文件，点文件即发送。 */
+@Composable
+private fun PickFromFolderDialog(
+    folders: List<FileItem>,
+    files: List<FileItem>,
+    onOpenFolder: (folderId: String) -> Unit,
+    onPickFile: (FileItem) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedFolder by remember { mutableStateOf<FileItem?>(null) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Folder, null, tint = Primary) },
+        title = { Text(selectedFolder?.name ?: "选择文件发送") },
+        text = {
+            Column(modifier = Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+                val folder = selectedFolder
+                if (folder == null) {
+                    if (folders.isEmpty()) {
+                        Text("暂无隐私文件夹。", fontSize = 12.sp, color = TextSecondary)
+                    } else {
+                        folders.forEach { f ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth()
+                                    .clickable { selectedFolder = f; onOpenFolder(f.id) }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Folder, null, tint = Primary, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text(f.name, fontSize = 14.sp)
+                            }
+                        }
+                    }
+                } else {
+                    if (files.isEmpty()) {
+                        Text("该文件夹暂无文件。", fontSize = 12.sp, color = TextSecondary)
+                    } else {
+                        files.forEach { file ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth()
+                                    .clickable { onPickFile(file) }
+                                    .padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.InsertDriveFile, null, tint = Accent, modifier = Modifier.size(20.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Column {
+                                    Text(file.name, fontSize = 14.sp, maxLines = 1)
+                                    Text(formatFileSize(file.size), fontSize = 11.sp, color = TextSecondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = { if (selectedFolder != null) selectedFolder = null else onDismiss() }) {
+                Text(if (selectedFolder != null) "返回" else "取消", color = TextSecondary)
+            }
+        }
+    )
 }
 
 /** 文件气泡内容（M11.5.3）：名/大小 + 进度条（传输中）/ 状态提示（待保存 / 已保存 / 失败）。 */

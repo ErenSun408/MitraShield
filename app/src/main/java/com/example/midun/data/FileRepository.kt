@@ -47,4 +47,12 @@ class FileRepository @Inject constructor(
     override suspend fun deleteFolder(folderId: String) = active().deleteFolder(folderId)
     override suspend fun renameFolder(folderId: String, newName: String) = active().renameFolder(folderId, newName)
     override suspend fun renameFile(fileId: String, newName: String) = active().renameFile(fileId, newName)
+
+    /**
+     * 打开隐私文件夹内某文件为流式 InputStream（M11.5.3：发送该文件时用）。真卡读卡内明文流；
+     * 模拟模式无真实文件 → 抛异常（隐私文件夹来源发送=真卡专属，UI 已在真卡模式才提供入口）。
+     */
+    fun openFileStream(fileId: String): java.io.InputStream =
+        if (cardManager.useRealCard.value) real.openCardStream(fileId)
+        else throw IllegalStateException("模拟模式无真实文件可发送")
 }

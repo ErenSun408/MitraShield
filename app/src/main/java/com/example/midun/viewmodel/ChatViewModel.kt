@@ -34,9 +34,13 @@ class ChatViewModel @Inject constructor(
     /** 文件传输进度（M11.5.3）：messageId → 0f..1f；转发 P2PSessionManager 单例，气泡据此画进度条。 */
     val transferProgress: StateFlow<Map<String, Float>> = p2pManager.transferProgress
 
-    /** 保存对话框的隐私文件夹列表（接收文件「保存到文件夹」用）。打开对话框时 loadSaveFolders 刷新。 */
+    /** 文件夹列表（接收保存 / 隐私文件夹发送来源 共用）。打开对话框时 loadFolders 刷新。 */
     private val _saveFolders = MutableStateFlow<List<FileItem>>(emptyList())
     val saveFolders: StateFlow<List<FileItem>> = _saveFolders.asStateFlow()
+
+    /** 隐私文件夹发送来源：选中文件夹后其内文件列表（M11.5.3b）。 */
+    private val _pickFiles = MutableStateFlow<List<FileItem>>(emptyList())
+    val pickFiles: StateFlow<List<FileItem>> = _pickFiles.asStateFlow()
 
     // 联系人列表：以 MockChatRepository（单例）为唯一数据源。
     // 因 ChatList / ChatDetail / QrCode 各自是不同 NavBackStackEntry，会拿到不同的
@@ -157,9 +161,23 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** 刷新保存对话框的文件夹列表。 */
+    /** 刷新文件夹列表（保存对话框 / 隐私文件夹发送来源共用）。 */
     fun loadSaveFolders() {
         viewModelScope.launch { _saveFolders.value = fileRepository.getFolders() }
+    }
+
+    /** 加载某隐私文件夹内的文件（发送来源选取器，M11.5.3b）。 */
+    fun loadPickFiles(folderId: String) {
+        viewModelScope.launch { _pickFiles.value = fileRepository.getFilesInFolder(folderId) }
+    }
+
+    /** 发送一个隐私文件夹内的文件（卡内流式读 → 加密发送，M11.5.3b）。 */
+    fun sendCardFile(file: FileItem, onError: (String) -> Unit = {}) {
+        sendFile(
+            file.name, file.size, "application/octet-stream",
+            openStream = { fileRepository.openFileStream(file.id) },
+            onError = onError
+        )
     }
 
     /** 保存对话框内新建文件夹（默认不可拷贝），成功回调返回新文件夹 id 供随即保存。 */
