@@ -844,8 +844,15 @@ M11.5 较大，按子子阶段拆分逐个提交（[[feedback-commit-per-substag
 - `FileSystemOps.exportFile(fileId, fileName, output)`：真卡 `readFile` 流式写出到 `CreateDocument` 选的位置；Mock 写占位说明。
 - **加密拷贝策略诚实降级**：卡内本就加密存储、`SFRead` 已解密、App 层无独立密钥 → `COPY_ENCRYPTED` 实际也导**明文**（无法在 App 侧产出独立加密副本）。文件夹/批量导出仍占位（多文件打包后续）。
 
-**M11.5.3 真实文件传输（P2P 收发文件落卡）= 延后到真机联调阶段**（用户 2026-06-10 决策）
-- 理由：现有传输是**文本行协议**（`BufferedReader.readLine`/`println`），二进制文件不能同流裸混（`BufferedReader` 预读缓冲会吞字节）；真实方案（长度前缀二进制分帧 + 分块 AES-GCM〈递增 nonce + AAD 防重排〉 + 流式落卡 + 文件单开 socket）是安全敏感的网络协议大改、**纯本地无法验证**（需两机两卡），先写易返工 → 连写带验留真机阶段。方案细节见记忆 [[project-midun-m11-5-filetransfer]]。
+**M11.5.3 真实文件传输（P2P 收发文件落卡）= 已实现**（2026-06-14，commit 前缀 `[file-transfer]`，非 `M11.5.3.x`——四层编号太深，用户定改功能名前缀）。子阶段 `96b8819`/`d044094`/`642e7d2`/`dfa07df`/`0f10473`/`7ce2bda`/`40af5c8`。
+- **协议**：文件**单开一条二进制 socket**（端口 8889 = 聊天端口+1），不动聊天的文本行协议（`BufferedReader` 预读会吞二进制）。帧 = `writeInt(type)‖writeInt(len)‖payload`（`FileTransferChannel`），握手后立即建立（A accept / B connect，TCP 全双工 → 双向复用一条），断开/对端断开时拆除。
+- **分块加密**（`P2PCrypto.encryptChunk/decryptChunk`）：nonce = `fileNonce(8B 随机/文件)‖chunkIndex(4B BE)`，AAD = `fileNonce‖chunkIndex‖isLast` → 重排/重放/截断块过不了 GCM tag；输出仅密文+tag（不含 IV，省膨胀）。`isLast` 由 totalChunks（据 size 算）确定，两端一致。FILE_BEGIN(加密元数据)→N×FILE_CHUNK→FILE_END(加密 sha256 整文件校验)。
+- **接收 UX（⚠️偏离原文档「自动落 `0:/接收文件/`」——用户 2026-06-14 改）**：收端流式解密先落**卡内隐藏暂存 `0:/.recv_<msgId>`**（根级 `.` 前缀、列表不可见、卡内加密、**明文不落手机**），双方聊天显 FILE 气泡（进度条→待保存）；**接收方点气泡 → 选已有/新建隐私文件夹 → `saveReceivedFile` 把暂存移动到 `0:/<folder>/<原名>`**（优先 `SFRename`，失败回退卡内流式 `copyWithinCard`+删），冲突加序号；保存后图/视频气泡可点开 `FilePreviewDialog` 预览。
+- **发送来源**（用户选 B）：手机存储（`GetContent`）+ 隐私文件夹（`RealFileSystem.openCardStream` 卡内流式读，不整文件进内存）。
+- **真卡专属**：收端落卡需已认证真卡 → 模拟模式发送按钮诚实降级（灰显+提示需真卡）、收端 FILE_BEGIN 在模拟模式退化为 FAILED 气泡。
+- **取消/清理**：发送方点在途文件可取消（发 FILE_CANCEL，收端删半成品）；解密失败/断开自动 abort 删半成品。100MB 上限；FILE 不参与阅后即焚（仅 TEXT 焚）。新增 `ChatMessage.savedFolderId`（落卡持久化）。
+- **耦合**：`P2PSessionManager` 直接注入 `RealFileSystem` 叶子（同 ChatStore 选型避 DI 环）；`ChatViewModel` 注入 `FileRepository`（文件夹列表/选取）+ `SecurityCardManager`（真卡模式门控）。
+- ⚠️ **端到端未真机验证**（需两机两卡同 WiFi；本地仅编译 + 5.3.1 分块加密单测 + 单机 UI 不崩）。已知 v1 限制：接收中途断开可能残留 `0:/.recv_*` 暂存到下次 wipe；断点续传 v1 砍。
 
 **M11.5.4 / M11.5.5 落卡持久化**（`bd55faa` / `23fc8a4`）
 - 操作日志 → `0:/.midun_oplog.json`、聊天（联系人 + 消息）→ `0:/.midun_chat.json`，经新增 `data/real/OperationLogStore.kt` / `ChatStore.kt` 用 `RealFileSystem` 读写 JSON。
