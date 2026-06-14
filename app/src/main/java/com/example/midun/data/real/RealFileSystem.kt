@@ -133,6 +133,14 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
         val h = LibJniFSShell.SFOpen(path)
         if (h > 0) { LibJniFSShell.SFClose(h); true } else false
     }
+    /** 卡内文件大小（字节）；不存在/读不到返回 null（缓存占用统计用）。 */
+    fun fileSizeOrNull(path: String): Long? = synchronized(fsShell) {
+        val h = LibJniFSShell.SFOpen(path)
+        if (h <= 0) return null
+        val sz = LibJniFSShell.SFGetSize(h)
+        LibJniFSShell.SFClose(h)
+        if (sz >= 0) sz else null
+    }
     /** 跨目录移动（接收文件保存到隐私文件夹；SFRename 改完整路径）。失败回 false，调用方回退 [copyWithinCard]。 */
     fun streamMove(fromPath: String, toPath: String): Boolean =
         synchronized(fsShell) { LibJniFSShell.SFRename(fromPath, toPath) }

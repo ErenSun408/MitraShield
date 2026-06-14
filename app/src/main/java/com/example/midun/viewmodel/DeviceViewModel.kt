@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.SettingsStore
+import com.example.midun.data.mock.MockChatRepository
 import com.example.midun.data.model.UsbDeviceStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -19,8 +20,19 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class DeviceViewModel @Inject constructor(
     private val cardManager: SecurityCardManager,
-    private val settingsStore: SettingsStore
+    private val settingsStore: SettingsStore,
+    private val chatRepository: MockChatRepository
 ) : ViewModel() {
+
+    /** 文件预览缓存统计（设置页「清除缓存」副标题）：返回 (文件数, 总字节)。 */
+    fun loadCacheStats(onResult: (count: Int, bytes: Long) -> Unit) {
+        viewModelScope.launch { chatRepository.cacheStats().let { onResult(it.first, it.second) } }
+    }
+
+    /** 清除全部文件预览缓存（只清 .recv_/.sent_ 暂存，不动文件夹/聊天记录）。回调返回释放字节数。 */
+    fun clearFileCache(onResult: (freedBytes: Long) -> Unit) {
+        viewModelScope.launch { onResult(chatRepository.clearCache()) }
+    }
 
     val deviceStatus = cardManager.deviceStatus
 

@@ -15,9 +15,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import android.widget.Toast
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -81,6 +83,13 @@ fun SettingsScreen(
     var showAboutDialog by remember { mutableStateOf(false) }
 
     val isBound = deviceStatus.boundPhoneId != null
+
+    // 文件预览缓存（file-transfer 阶段4）：副标题显占用，点击确认后只清 .recv_/.sent_ 暂存。
+    val context = LocalContext.current
+    var cacheBytes by remember { mutableStateOf<Long?>(null) }
+    var showCacheDialog by remember { mutableStateOf(false) }
+    fun refreshCache() = deviceViewModel.loadCacheStats { _, b -> cacheBytes = b }
+    LaunchedEffect(Unit) { refreshCache() }
 
     Column(
         modifier = Modifier
@@ -156,6 +165,15 @@ fun SettingsScreen(
                         pickedTimeout = timeoutMin
                         showTimeoutDialog = true
                     }
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                SettingsActionItem(
+                    icon = Icons.Default.CleaningServices,
+                    title = "清除文件缓存",
+                    subtitle = "聊天图片/视频预览缓存" +
+                        (cacheBytes?.let { "（占用 ${formatStorage(it)}）" } ?: ""),
+                    iconTint = Accent,
+                    onClick = { showCacheDialog = true }
                 )
             }
         }
@@ -608,6 +626,39 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showAboutDialog = false }) { Text("确定") }
+            }
+        )
+    }
+
+    // 清除文件缓存确认（file-transfer 阶段4）：只清 .recv_/.sent_ 暂存，已保存到文件夹的不受影响。
+    if (showCacheDialog) {
+        AlertDialog(
+            onDismissRequest = { showCacheDialog = false },
+            icon = { Icon(Icons.Default.CleaningServices, null, tint = Accent) },
+            title = { Text("清除文件缓存") },
+            text = {
+                Text(
+                    "将清除聊天中图片/视频的预览缓存" +
+                        (cacheBytes?.takeIf { it > 0 }?.let { "（约 ${formatStorage(it)}）" } ?: "") +
+                        "。\n\n对话中未保存的文件可能无法再预览；已保存到隐私文件夹的文件不受影响。",
+                    color = TextSecondary
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showCacheDialog = false
+                    deviceViewModel.clearFileCache { freed ->
+                        refreshCache()
+                        Toast.makeText(
+                            context,
+                            if (freed > 0) "已清除 ${formatStorage(freed)} 缓存" else "没有可清除的缓存",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }) { Text("清除", color = Danger) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCacheDialog = false }) { Text("取消", color = TextSecondary) }
             }
         )
     }

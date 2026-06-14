@@ -19,6 +19,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 聊天仓库（联系人 + 消息，内存版 + 真卡持久化）。
@@ -70,6 +71,33 @@ class MockChatRepository @Inject constructor(
                 realFileSystem.streamDelete(FileCachePaths.sent(m.id))
             }
         }
+    }
+
+    /** 所有 FILE 消息推出的候选缓存路径（.recv_ + .sent_；是否存在由调用方判断）。 */
+    private fun cachePaths(): List<String> =
+        mockMessages.values.flatten()
+            .filter { it.type == MessageType.FILE }
+            .flatMap { listOf(FileCachePaths.recv(it.id), FileCachePaths.sent(it.id)) }
+
+    /** 现存文件预览缓存统计（设置页展示）：返回 (文件数, 总字节)。仅真卡认证态有意义，模拟模式恒 (0,0)。 */
+    suspend fun cacheStats(): Pair<Int, Long> = withContext(Dispatchers.IO) {
+        var count = 0
+        var bytes = 0L
+        cachePaths().forEach { p -> realFileSystem.fileSizeOrNull(p)?.let { count++; bytes += it } }
+        count to bytes
+    }
+
+    /**
+     * 手动清除全部文件预览缓存（设置页「清除缓存」）：只删 `.recv_`/`.sent_` 暂存，
+     * **不碰隐私文件夹/聊天记录**（已保存到文件夹的永久副本不受影响）。返回释放的字节数。
+     */
+    suspend fun clearCache(): Long = withContext(Dispatchers.IO) {
+        var freed = 0L
+        cachePaths().forEach { p ->
+            val sz = realFileSystem.fileSizeOrNull(p) ?: return@forEach
+            if (realFileSystem.streamDelete(p)) freed += sz
+        }
+        freed
     }
 
     private val mockContacts = mutableListOf(
