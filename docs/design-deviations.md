@@ -874,6 +874,15 @@ M11.5 较大，按子子阶段拆分逐个提交（[[feedback-commit-per-substag
 
 **M11.6.6 设备绑定**（`d7ea22e`，用户定「写 .bind 且强制校验」）`updateBinding` 改 `suspend`（卡 IO）：bind 写卡内 `0:/.bind`=本机 androidId、unbind 删之；`initDevice(bindDevice)` 同写。`authenticate` 开盘后读 `.bind`，存在且 != 本机 → **拒登 + 关盘**（绑定 A 机的卡在 B 机登不了——安全设计；解绑须在原机或 PC 串口工具）。无 `.bind`=未绑定放行。`UsbCardOps`/`SecurityCardManager`/`MockUsbManager` 的 `updateBinding` 同步改 suspend。**真机必验**（绑定读写 + 锁死行为）。
 
-- M11.6 全部 compileDebugKotlin + assembleDebug 干净、Hilt 图无环；**真卡相关全未真机验证**（容量/SN/SFFormat/绑定锁死攒到真机阶段）。剩 M11.7（混淆 SDK keep + 正式签名 + 多机型验收）+ M11.5.3 真实文件传输（真机阶段连写带验）。
+**M11.6.5 修订 ①「SFFormat 真机未实现 → 降级」**（`2727ab2`）M11.6.5 上线后真机实测：原 SDK 的 `.so` **没有把 `SFFormat` 的 JNI 实现编进库**（`Java_..._SFFormat` 符号缺失，所有文件操作符号都在、唯独缺它），调用即 `UnsatisfiedLinkError` 崩进程——用户实测「恢复出厂闪退、卡没擦」根因。故**弃用 SFFormat**：`wipeAll` 改为 `RealFileSystem.clear()`（逐文件删）+ 删 chat/oplog/.bind 侧车 + `SFDiskSetPassword("123456")`（重置回出厂默认明文 → connectUsb 探测默认密码能开 = 视为未初始化 = 等效恢复出厂）。**需盘已打开（已登录）**；忘记密码（盘未开）App 内无解 → 诚实失败指向 PC 串口工具（坐实原审计结论）。另修 `DeviceViewModel.factoryReset/wipeAndReset` 原**忽略 wipeAll Result 无条件 onSuccess** → 改按 Result 分流（失败显错不导航）。
+
+**M11.6.5 修订 ②「厂商补 .so → 恢复真擦」=M11.6.7**（换库 `1da206c` + 逻辑 `本次提交`）厂商交付了**实现 `SFFormat` JNI 符号的新 `libjniFSShell.so`**（已替换 `app/src/main/jniLibs/` 下各 ABI；`javap` 核实 jar 侧 `SFFormat(String):int` 签名一致）。`wipeAll` 据此恢复真擦，策略「真擦 + 兜底 + 回未初始化态」：
+- **A. 已登录（AUTHENTICATED，盘已打开 = SFFormat 合法用法）**：`SFFormat("0:/")` 强擦隐藏区（比逐文件删更彻底、抗取证恢复）→ 返回非 0 则**降级**为 `RealFileSystem.clear()` + 删三侧车（保证数据至少被清空）→ 显式 `SFDiskSetPassword("123456")` 回出厂默认密码（SFFormat 是否自动重置密码未知，兜底确保未初始化态）→ `finishReset()`（关盘 / 清会话密码 / 状态退回 CONNECTED → connectUsb 重探测走 Init 向导）。
+- **B. 忘记密码（CONNECTED，盘未打开）**：**不调 `SFFormat`**——真机实测盘未开时调用会原生崩溃（SIGSEGV，`runCatching` 抓不住 .so 崩溃）或返回 -1 → 一律诚实失败、指向 PC 串口工具。
+- **真机待验**：① `SFFormat` 返回码 / 是否真需开盘；② 格式化后开盘句柄是否仍可 `SFDiskSetPassword`（若 SFFormat 关盘，第 3 步可能失败——此时数据已擦、UI 报错但卡是干净的）。
+
+**M11.6.6 设备绑定** 见上（顺序按提交时间）。
+
+- M11.6 全部 compileDebugKotlin + assembleDebug 干净、Hilt 图无环；**真卡相关全未真机验证**（容量/SN/SFFormat 真擦/绑定锁死攒到真机阶段）。剩 M11.7（混淆 SDK keep + 正式签名 + 多机型验收）+ M11.5.3 真实文件传输（真机阶段连写带验）。
 
 <!-- 后续里程碑的偏离继续在下面追加 -->
