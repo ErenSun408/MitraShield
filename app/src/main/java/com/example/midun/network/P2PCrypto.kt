@@ -136,6 +136,71 @@ object P2PCrypto {
         return String(cipher.doFinal(cipherText), Charsets.UTF_8)
     }
 
+    // —— 分块加密（M11.5.3 文件传输）——
+    // 文件不能像短消息那样每块塞随机 IV（+12B/块膨胀、且 IV 要跟着传）。改用「确定性 nonce + AAD」：
+    //   nonce = fileNonce(8B 随机，每文件一份) ‖ chunkIndex(4B 大端) —— 同密钥下唯一（不同文件 fileNonce 不同、
+    //           同文件 chunkIndex 递增），满足 GCM nonce 不可复用。
+    //   AAD   = fileNonce(8B) ‖ chunkIndex(4B) ‖ isLast(1B) —— 把「这是第几块/是不是最后一块/属于哪个文件」
+    //           绑进认证标签，防止攻击者重排块、重放块、或截断（丢最后一块伪装文件结束）。
+    // 输出仅 GCM 密文+tag（不含 IV，收端用同样的 fileNonce+chunkIndex 复原 nonce）。
+
+    const val FILE_NONCE_BYTES = 8
+
+    /** 生成每文件一份的随机 8 字节 fileNonce（与 chunkIndex 拼成每块的 GCM nonce）。 */
+    fun newFileNonce(): ByteArray = ByteArray(FILE_NONCE_BYTES).also { SecureRandom().nextBytes(it) }
+
+    /**
+     * 加密一个文件块。[plain] 为本块明文（最后一块可不足 64KB），[chunkIndex] 从 0 递增，[isLast] 标记末块。
+     * 返回 GCM 密文+tag（不含 IV）。同一 ([key],[fileNonce]) 下各 [chunkIndex] 必须唯一。
+     */
+    fun encryptChunk(
+        key: ByteArray, fileNonce: ByteArray, chunkIndex: Int, isLast: Boolean, plain: ByteArray
+    ): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+            init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_BITS, chunkIv(fileNonce, chunkIndex)))
+            updateAAD(chunkAad(fileNonce, chunkIndex, isLast))
+        }
+        return cipher.doFinal(plain)
+    }
+
+    /**
+     * 解密一个文件块。[cipherText] = [encryptChunk] 输出。[fileNonce]/[chunkIndex]/[isLast] 必须与加密端一致，
+     * 否则（块被重排/重放/截断/篡改）GCM 校验失败抛 `AEADBadTagException`。
+     */
+    fun decryptChunk(
+        key: ByteArray, fileNonce: ByteArray, chunkIndex: Int, isLast: Boolean, cipherText: ByteArray
+    ): ByteArray {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding").apply {
+            init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(GCM_TAG_BITS, chunkIv(fileNonce, chunkIndex)))
+            updateAAD(chunkAad(fileNonce, chunkIndex, isLast))
+        }
+        return cipher.doFinal(cipherText)
+    }
+
+    /** 每块 GCM nonce = fileNonce(8B) ‖ chunkIndex(4B 大端)。 */
+    private fun chunkIv(fileNonce: ByteArray, chunkIndex: Int): ByteArray {
+        require(fileNonce.size == FILE_NONCE_BYTES) { "fileNonce 应为 $FILE_NONCE_BYTES 字节" }
+        return ByteArray(GCM_IV_BYTES).also { iv ->
+            System.arraycopy(fileNonce, 0, iv, 0, FILE_NONCE_BYTES)
+            putIntBE(iv, FILE_NONCE_BYTES, chunkIndex)
+        }
+    }
+
+    /** 每块 AAD = fileNonce(8B) ‖ chunkIndex(4B 大端) ‖ isLast(1B)。 */
+    private fun chunkAad(fileNonce: ByteArray, chunkIndex: Int, isLast: Boolean): ByteArray =
+        ByteArray(FILE_NONCE_BYTES + 4 + 1).also { aad ->
+            System.arraycopy(fileNonce, 0, aad, 0, FILE_NONCE_BYTES)
+            putIntBE(aad, FILE_NONCE_BYTES, chunkIndex)
+            aad[FILE_NONCE_BYTES + 4] = if (isLast) 1 else 0
+        }
+
+    private fun putIntBE(out: ByteArray, off: Int, v: Int) {
+        out[off] = (v ushr 24).toByte()
+        out[off + 1] = (v ushr 16).toByte()
+        out[off + 2] = (v ushr 8).toByte()
+        out[off + 3] = v.toByte()
+    }
+
     /** RFC 5869 HKDF-SHA256（salt 取全零，单块输出，要求 length ≤ 32）。 */
     private fun hkdfSha256(ikm: ByteArray, length: Int): ByteArray {
         val mac = Mac.getInstance("HmacSHA256")

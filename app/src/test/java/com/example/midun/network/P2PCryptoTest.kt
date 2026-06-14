@@ -78,4 +78,57 @@ class P2PCryptoTest {
         val cipher = P2PCrypto.encrypt(freshSharedKey(), "secret")
         assertThrows(Exception::class.java) { P2PCrypto.decrypt(freshSharedKey(), cipher) }
     }
+
+    // —— 分块加密（M11.5.3 文件传输）——
+
+    @Test
+    fun chunk_roundTripReassemblesFile() {
+        val key = freshSharedKey()
+        val fileNonce = P2PCrypto.newFileNonce()
+        // 模拟一个多块文件（含一个不足整块的末块）。
+        val chunks = listOf(
+            "第一块 chunk-0 ".repeat(100).toByteArray(),
+            "第二块 chunk-1 ".repeat(100).toByteArray(),
+            "末块（短）tail".toByteArray()
+        )
+        val out = java.io.ByteArrayOutputStream()
+        chunks.forEachIndexed { i, plain ->
+            val isLast = i == chunks.lastIndex
+            val ct = P2PCrypto.encryptChunk(key, fileNonce, i, isLast, plain)
+            val pt = P2PCrypto.decryptChunk(key, fileNonce, i, isLast, ct)
+            out.write(pt)
+        }
+        assertArrayEquals("解密重组应还原整文件", chunks.reduce { a, b -> a + b }, out.toByteArray())
+    }
+
+    @Test
+    fun chunk_reorderedRejected() {
+        val key = freshSharedKey()
+        val fileNonce = P2PCrypto.newFileNonce()
+        val c0 = P2PCrypto.encryptChunk(key, fileNonce, 0, isLast = false, "chunk0".toByteArray())
+        // 用块 0 的密文冒充块 1（重排/重放）→ AAD 里的 chunkIndex 不符 → 拒解。
+        assertThrows(Exception::class.java) {
+            P2PCrypto.decryptChunk(key, fileNonce, 1, isLast = false, c0)
+        }
+    }
+
+    @Test
+    fun chunk_truncationRejected() {
+        val key = freshSharedKey()
+        val fileNonce = P2PCrypto.newFileNonce()
+        // 真末块（isLast=true）被攻击者当作中间块塞入 → isLast 不符 → 拒解（防截断）。
+        val last = P2PCrypto.encryptChunk(key, fileNonce, 5, isLast = true, "final".toByteArray())
+        assertThrows(Exception::class.java) {
+            P2PCrypto.decryptChunk(key, fileNonce, 5, isLast = false, last)
+        }
+    }
+
+    @Test
+    fun chunk_wrongFileNonceRejected() {
+        val key = freshSharedKey()
+        val ct = P2PCrypto.encryptChunk(key, P2PCrypto.newFileNonce(), 0, isLast = true, "x".toByteArray())
+        assertThrows(Exception::class.java) {
+            P2PCrypto.decryptChunk(key, P2PCrypto.newFileNonce(), 0, isLast = true, ct)
+        }
+    }
 }
