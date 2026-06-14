@@ -192,33 +192,51 @@ class RealUsbManager @Inject constructor(
     // —— 以下依赖后续子阶段，先占位 ——
 
     /**
-     * 恢复出厂（M11.6.5 修订）。**`SFFormat` 在本 SDK 的 .so 中未实现**（真机实测调用即 `UnsatisfiedLinkError`
-     * 崩进程）→ 弃用。改为「清空所有数据 + 把密码重置回出厂默认明文 `123456`」：之后 connectUsb 探测默认密码
-     * 能开 = 视为未初始化，走 Init 向导，效果等同恢复出厂。
+     * 恢复出厂（M11.6.7，SDK 补全 `SFFormat` 后恢复真擦）。厂商新 .so 已实现 `SFFormat` JNI 符号
+     * （旧 .so 缺 `Java_..._SFFormat` 致 `UnsatisfiedLinkError` 崩进程，换库见 commit `1da206c`）。
+     * 策略「真擦 + 兜底 + 回未初始化态」：
+     *  1. `SFFormat("0:/")` 强制格式化隐藏区（比逐文件删更彻底、抗取证恢复）；
+     *  2. 失败（`ret != 0`）则降级为逐文件 [RealFileSystem.clear] + 删侧车，保证数据至少被清空；
+     *  3. `SFDiskSetPassword(123456)` 重置回出厂默认密码 → connectUsb 探测默认密码视为未初始化 → Init 向导。
      *
-     * **需盘已打开（= 已登录）**：清文件/改密码都要开盘。**忘记密码（盘未打开、无密码）无法在 App 内重置**
-     * → 诚实失败，指向 PC 串口管理工具（SDK 无 App 层免密擦除接口，原审计结论）。
+     * **A. 已登录（AUTHENTICATED）**：盘已打开 = `SFFormat` 合法用法。强擦，失败则降级逐文件清，再 `SFDiskSetPassword` 重置默认密码。
+     * **B. 忘记密码（CONNECTED，盘未打开）**：**不调 `SFFormat`**——真机实测盘未开时调用会原生崩溃或返回 -1。诚实失败、指向 PC 串口管理工具。
+     *
+     * 真机待验：① `SFFormat` 返回码/是否需开盘；② 格式化后开盘句柄是否仍可 `SFDiskSetPassword`
+     * （若 SFFormat 关盘，第 3 步可能失败——此时数据已擦，UI 报错但卡是干净的）。
      */
     override suspend fun wipeAll(): Result<Unit> = withContext(Dispatchers.IO) {
+        // 忘记密码（未登录、盘未打开）不能调 SFFormat：真机实测「开过盘又登出」的状态下调用会原生崩溃
+        // （SIGSEGV，runCatching 抓不住 .so 的崩溃），「从没开盘」则返回 -1 → 一律诚实失败、指向 PC 工具。
         if (_deviceStatus.value.status != UsbDeviceStatus.AUTHENTICATED) {
             return@withContext Result.failure(
                 IllegalStateException("真卡恢复出厂需先登录；忘记密码无法在 App 内重置，请用 PC 串口管理工具")
             )
         }
+        // 已登录、盘已打开 = SFFormat 的合法用法：真擦 → 失败降级逐文件清 → 重置默认密码回未初始化态。
         runCatching {
-            realFileSystem.clear() // 删所有文件夹/文件/元数据
-            // clear() 不含这些隐藏侧车，单独删（聊天 / 日志 / 绑定）。
-            listOf(CHAT_SIDECAR, OPLOG_SIDECAR, BIND_PATH).forEach { runCatching { realFileSystem.deleteFile(it) } }
-            val ret = fsShell.SFDiskSetPassword(DEFAULT_PASSWORD) // 重置为出厂默认明文 123456
+            val fmt = synchronized(fsShell) { LibJniFSShell.SFFormat(ROOT) }
+            if (fmt != 0) {
+                realFileSystem.clear() // 删所有文件夹/文件/元数据
+                // clear() 不含这些隐藏侧车，单独删（聊天 / 日志 / 绑定）。
+                listOf(CHAT_SIDECAR, OPLOG_SIDECAR, BIND_PATH).forEach { runCatching { realFileSystem.deleteFile(it) } }
+            }
+            // 回出厂默认密码（SFFormat 是否自动重置密码未知，显式兜底确保未初始化态）。
+            val ret = fsShell.SFDiskSetPassword(DEFAULT_PASSWORD)
             if (ret != 0) throw IllegalStateException("重置密码失败，错误码=$ret")
-            runCatching { fsShell.SFCloseDisk() }
-            sessionPwdHash = null
-            _deviceStatus.value = DeviceInfo(
-                isInitialized = false,
-                status = UsbDeviceStatus.CONNECTED,
-                deviceId = _deviceStatus.value.deviceId
-            )
+            finishReset()
         }
+    }
+
+    /** 恢复出厂收尾：关盘、清会话密码、状态退回未初始化（CONNECTED）→ connectUsb 重探测走 Init 向导。 */
+    private fun finishReset() {
+        runCatching { fsShell.SFCloseDisk() }
+        sessionPwdHash = null
+        _deviceStatus.value = DeviceInfo(
+            isInitialized = false,
+            status = UsbDeviceStatus.CONNECTED,
+            deviceId = _deviceStatus.value.deviceId
+        )
     }
 
     /**
@@ -286,6 +304,7 @@ class RealUsbManager @Inject constructor(
 
     private companion object {
         const val DEFAULT_PASSWORD = "123456"
+        const val ROOT = "0:/"
         const val BIND_PATH = "0:/.bind"
         const val CHAT_SIDECAR = "0:/.midun_chat.json"
         const val OPLOG_SIDECAR = "0:/.midun_oplog.json"
