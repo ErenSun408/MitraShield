@@ -121,6 +121,16 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
         synchronized(fsShell) { LibJniFSShell.SFRead(handle, buf, off, len) }
     fun streamClose(handle: Int) { synchronized(fsShell) { LibJniFSShell.SFClose(handle) } }
 
+    // —— 增量写原语（M11.5.3 文件接收：网络块到达即解密落卡，不攒整文件）。句柄 SFCreate 返回（>0 有效）。 ——
+    fun streamCreate(path: String): Int = synchronized(fsShell) { LibJniFSShell.SFCreate(path) }
+    fun streamWrite(handle: Int, buf: ByteArray, off: Int, len: Int): Int =
+        synchronized(fsShell) { LibJniFSShell.SFWrite(handle, buf, off, len) }
+    /** 同步删单文件（接收失败/取消删半成品；路径直传隐藏区完整路径）。 */
+    fun streamDelete(path: String): Boolean = synchronized(fsShell) { LibJniFSShell.SFDelete(path) }
+    /** 跨目录移动（接收文件保存到隐私文件夹；SFRename 改完整路径）。失败回 false，调用方回退 copy+delete。 */
+    fun streamMove(fromPath: String, toPath: String): Boolean =
+        synchronized(fsShell) { LibJniFSShell.SFRename(fromPath, toPath) }
+
     override suspend fun deleteFile(fileId: String): Result<Unit> = withContext(Dispatchers.IO) {
         if (synchronized(fsShell) { LibJniFSShell.SFDelete(fileId) }) Result.success(Unit)
         else Result.failure(IllegalStateException("删除文件失败"))

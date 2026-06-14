@@ -4,6 +4,7 @@ import android.util.Base64
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.mock.MockChatRepository
 import com.example.midun.data.mock.MockOperationLog
+import com.example.midun.data.real.RealFileSystem
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
@@ -35,6 +36,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -59,7 +62,9 @@ import org.json.JSONObject
 class P2PSessionManager @Inject constructor(
     private val chatRepo: MockChatRepository,
     private val operationLog: MockOperationLog,
-    private val cardManager: SecurityCardManager
+    private val cardManager: SecurityCardManager,
+    // 文件接收落卡（M11.5.3）：直接依赖叶子 RealFileSystem（无 DI 环，同 ChatStore/OperationLogStore 选型）。
+    private val realFileSystem: RealFileSystem
 ) {
 
     /** 接收循环 / 身份发送的常驻协程作用域（单例，独占 socket，跨屏存活）。 */
@@ -136,6 +141,19 @@ class P2PSessionManager @Inject constructor(
      */
     private var fileServerSocket: ServerSocket? = null
     @Volatile private var fileChannel: FileTransferChannel? = null
+
+    /** 文件发送串行化锁（M11.5.3）：一条通道上文件帧不能交错，收端单文件状态机才成立。 */
+    private val fileSendMutex = Mutex()
+
+    /** 当前正在接收的文件（单文件状态机）。@Volatile：接收循环写、teardown 读。 */
+    @Volatile private var incoming: IncomingFile? = null
+
+    /** 接收中文件的状态（流式落卡，不在内存攒整文件）。 */
+    private class IncomingFile(
+        val msgId: String, val contactId: String, val fileName: String, val fileSize: Long,
+        val fileNonce: ByteArray, val totalChunks: Int, val stagingPath: String,
+        val handle: Int, val digest: MessageDigest, var written: Long = 0
+    )
 
     data class P2PSession(
         val socket: Socket,
@@ -299,6 +317,14 @@ class P2PSessionManager @Inject constructor(
         if (size > MAX_FILE_BYTES) {
             return@withContext Result.failure(IllegalStateException("文件超过 100MB 上限，无法发送"))
         }
+        // 串行化文件发送：一条通道上 BEGIN/CHUNK/END 必须不被另一文件穿插，收端单文件状态机才成立。
+        fileSendMutex.withLock { doSendFile(channel, session, contactId, fileName, size, mime, openStream) }
+    }
+
+    private suspend fun doSendFile(
+        channel: FileTransferChannel, session: P2PSession, contactId: String,
+        fileName: String, size: Long, mime: String, openStream: () -> InputStream
+    ): Result<Unit> {
         val key = session.sessionKey
         val msgId = generateMessageId()
         val fileNonce = P2PCrypto.newFileNonce()
@@ -307,7 +333,7 @@ class P2PSessionManager @Inject constructor(
         chatRepo.addFileMessage(contactId, msgId, isMine = true, fileName, size, MessageStatus.SENDING)
         setProgress(msgId, 0f)
         _incomingMessages.emit(contactId)
-        try {
+        return try {
             val beginJson = JSONObject().apply {
                 put("msgId", msgId)
                 put("fileName", fileName)
@@ -484,17 +510,101 @@ class P2PSessionManager @Inject constructor(
     }
 
     /**
-     * 文件帧分发（骨架，5.3.4 填充落卡逻辑）：
-     * FILE_BEGIN→建卡内暂存、FILE_CHUNK→解密流式落卡、FILE_END→校验 sha256、FILE_CANCEL→删半成品。
+     * 文件帧分发（M11.5.3 接收管线）：FILE_BEGIN→卡内建暂存、FILE_CHUNK→解密流式落卡、
+     * FILE_END→校验 sha256、FILE_CANCEL→删半成品。接收为单文件状态机（发送端已串行化保证帧不交错）。
      */
     private suspend fun handleFileFrame(type: Int, payload: ByteArray) {
+        val session = _activeSession.value ?: return
+        val key = session.sessionKey
         when (type) {
-            else -> {} // 5.3.4 实现；当前仅建立通道与接收循环
+            FileTransferChannel.FILE_BEGIN -> handleFileBegin(session, key, payload)
+            FileTransferChannel.FILE_CHUNK -> handleFileChunk(key, payload)
+            FileTransferChannel.FILE_END -> handleFileEnd(key, payload)
+            FileTransferChannel.FILE_CANCEL -> abortIncoming(MessageStatus.FAILED)
+            else -> {}
         }
     }
 
-    /** 关闭文件通道 + A 侧监听 socket（disconnect / 对端断开时）。 */
+    /** FILE_BEGIN：解密元数据 → 真卡建暂存文件 `0:/.recv_<msgId>` → 插「接收中」FILE 气泡。 */
+    private suspend fun handleFileBegin(session: P2PSession, key: ByteArray, payload: ByteArray) {
+        val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
+        val json = runCatching { JSONObject(P2PCrypto.decrypt(key, payload)) }.getOrNull() ?: return
+        val msgId = json.getString("msgId")
+        val fileName = json.getString("fileName")
+        val fileSize = json.getLong("fileSize")
+        val fileNonce = Base64.decode(json.getString("nonce"), Base64.NO_WRAP)
+        val totalChunks = json.getInt("chunks")
+        // 文件接收=真卡专属：无真卡无法落卡 → 诚实降级为一条 FAILED 文件气泡。
+        if (!cardManager.useRealCard.value) {
+            chatRepo.addFileMessage(contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.FAILED)
+            _incomingMessages.emit(contactId)
+            return
+        }
+        val stagingPath = "$RECV_PREFIX$msgId"
+        val handle = realFileSystem.streamCreate(stagingPath)
+        if (handle <= 0) {
+            chatRepo.addFileMessage(contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.FAILED)
+            _incomingMessages.emit(contactId)
+            return
+        }
+        incoming = IncomingFile(
+            msgId, contactId, fileName, fileSize, fileNonce, totalChunks, stagingPath, handle,
+            MessageDigest.getInstance("SHA-256")
+        )
+        chatRepo.addFileMessage(contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.RECEIVED)
+        setProgress(msgId, 0f)
+        _incomingMessages.emit(contactId)
+    }
+
+    /** FILE_CHUNK：`4B chunkIndex ‖ 密文` → 解密（验重排/截断）→ SFWrite 流式落卡（不攒内存）→ 进度。 */
+    private suspend fun handleFileChunk(key: ByteArray, payload: ByteArray) {
+        val f = incoming ?: return
+        if (payload.size < 4) return
+        val index = bytesToInt(payload, 0)
+        val cipher = payload.copyOfRange(4, payload.size)
+        val isLast = index == f.totalChunks - 1
+        val plain = runCatching { P2PCrypto.decryptChunk(key, f.fileNonce, index, isLast, cipher) }.getOrNull()
+        if (plain == null) { abortIncoming(MessageStatus.FAILED); return } // 块被重排/重放/篡改 → GCM 校验失败
+        realFileSystem.streamWrite(f.handle, plain, 0, plain.size)
+        f.digest.update(plain)
+        f.written += plain.size
+        setProgress(f.msgId, if (f.fileSize > 0) f.written.toFloat() / f.fileSize else 1f)
+    }
+
+    /** FILE_END：关句柄 → 校验整文件 sha256，过则标 RECEIVED（待保存）、不过删半成品标 FAILED。 */
+    private suspend fun handleFileEnd(key: ByteArray, payload: ByteArray) {
+        val f = incoming ?: return
+        incoming = null
+        realFileSystem.streamClose(f.handle)
+        val expect = runCatching { JSONObject(P2PCrypto.decrypt(key, payload)).getString("sha256") }.getOrNull()
+        if (expect != null && expect == toHex(f.digest.digest())) {
+            chatRepo.updateFileStatus(f.msgId, f.contactId, MessageStatus.RECEIVED)
+        } else {
+            realFileSystem.streamDelete(f.stagingPath)
+            chatRepo.updateFileStatus(f.msgId, f.contactId, MessageStatus.FAILED)
+        }
+        clearProgress(f.msgId)
+        _incomingMessages.emit(f.contactId)
+    }
+
+    /** 中止当前接收（解密失败/取消/断开）：关句柄、删半成品、消息标 [status]、清进度。 */
+    private fun abortIncoming(status: MessageStatus) {
+        val f = incoming ?: return
+        incoming = null
+        runCatching { realFileSystem.streamClose(f.handle) }
+        runCatching { realFileSystem.streamDelete(f.stagingPath) }
+        chatRepo.updateFileStatus(f.msgId, f.contactId, status)
+        clearProgress(f.msgId)
+        _incomingMessages.tryEmit(f.contactId)
+    }
+
+    private fun bytesToInt(b: ByteArray, off: Int): Int =
+        ((b[off].toInt() and 0xFF) shl 24) or ((b[off + 1].toInt() and 0xFF) shl 16) or
+            ((b[off + 2].toInt() and 0xFF) shl 8) or (b[off + 3].toInt() and 0xFF)
+
+    /** 关闭文件通道 + A 侧监听 socket（disconnect / 对端断开时）；中止在途接收、删半成品。 */
     private fun teardownFileChannel() {
+        abortIncoming(MessageStatus.FAILED)
         runCatching { fileChannel?.close() }
         fileChannel = null
         runCatching { fileServerSocket?.close() }
@@ -711,6 +821,8 @@ class P2PSessionManager @Inject constructor(
         private const val FILE_CHUNK_BYTES = 64 * 1024
         /** 文件传输上限（100MB，需求）。 */
         private const val MAX_FILE_BYTES = 100L * 1024 * 1024
+        /** 接收文件的卡内暂存路径前缀（根级 `.` 前缀 → 文件/文件夹列表不可见、待用户选文件夹保存）。 */
+        private const val RECV_PREFIX = "0:/.recv_"
     }
 }
 
