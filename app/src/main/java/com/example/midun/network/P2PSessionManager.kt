@@ -599,10 +599,13 @@ class P2PSessionManager @Inject constructor(
         _incomingMessages.emit(f.contactId)
     }
 
+    /** 接收文件的卡内暂存路径（供 UI 免保存预览直接读卡 `0:/.recv_<msgId>`）。 */
+    fun stagingPathFor(msgId: String): String = "$RECV_PREFIX$msgId"
+
     /**
-     * 接收方保存暂存文件到隐私文件夹（M11.5.3）：把卡内暂存 `0:/.recv_<msgId>` 移动到 `0:/<folderId>/<fileName>`，
-     * 成功后记 savedFolderId（气泡转「已保存」、可预览）。优先 `SFRename` 跨目录移动，失败回退卡内流式 copy+delete。
-     * 仍是卡内操作、明文不出卡。文件名冲突时加序号避让。
+     * 接收方保存暂存文件到隐私文件夹（M11.5.3）：把卡内暂存 `0:/.recv_<msgId>` **复制**到 `0:/<folderId>/<fileName>`，
+     * 成功后记 savedFolderId（气泡转「已保存」、可预览）。**暂存不删**——保留作 7 天预览缓存，保证对话内即点即看的丝滑度，
+     * 到期由 TTL 清理。仍是卡内操作、明文不出卡。文件名冲突时加序号避让。
      */
     suspend fun saveReceivedFile(
         msgId: String, contactId: String, fileName: String, folderId: String
@@ -612,9 +615,9 @@ class P2PSessionManager @Inject constructor(
             return@withContext Result.failure(IllegalStateException("暂存文件不存在，可能已被清理"))
         }
         val dest = uniqueDestPath(folderId, fileName)
-        val ok = realFileSystem.streamMove(staging, dest) ||
-            (realFileSystem.copyWithinCard(staging, dest).also { if (it) realFileSystem.streamDelete(staging) })
-        if (!ok) return@withContext Result.failure(IllegalStateException("保存到文件夹失败"))
+        if (!realFileSystem.copyWithinCard(staging, dest)) {
+            return@withContext Result.failure(IllegalStateException("保存到文件夹失败"))
+        }
         chatRepo.setFileSaved(msgId, contactId, folderId, dest.substringAfterLast('/'))
         _incomingMessages.emit(contactId)
         Result.success(Unit)

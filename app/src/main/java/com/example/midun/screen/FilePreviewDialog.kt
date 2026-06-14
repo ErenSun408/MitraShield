@@ -13,6 +13,8 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,11 +53,14 @@ import kotlinx.coroutines.withContext
 /**
  * 全屏文件预览（方案 B，安全）。图片：卡内字节内存解码（不落盘）；视频：ExoPlayer + 卡内流式 DataSource
  * （边解密边播、不落整文件）。`FLAG_SECURE` 已全局开启 → 预览界面不可截屏录屏。
+ *
+ * [onSave] 非空时（接收方免保存预览场景）底部显「保存到文件夹」按钮——隐私文件夹预览不传，则不显示。
  */
 @Composable
 fun FilePreviewDialog(
     file: FileItem,
     onClose: () -> Unit,
+    onSave: (() -> Unit)? = null,
     vm: PreviewViewModel = hiltViewModel()
 ) {
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -77,6 +82,19 @@ fun FilePreviewDialog(
                 fontSize = 14.sp,
                 modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 14.dp)
             )
+            onSave?.let { save ->
+                Button(
+                    onClick = save,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(bottom = 24.dp)
+                ) {
+                    Icon(Icons.Default.Download, null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("保存到文件夹")
+                }
+            }
         }
     }
 }

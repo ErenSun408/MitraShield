@@ -197,8 +197,11 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /** 接收暂存文件的卡内路径（接收方免保存预览：点媒体气泡直接读暂存区预览）。 */
+    fun stagingPathFor(msgId: String): String = p2pManager.stagingPathFor(msgId)
+
     /**
-     * 接收方把暂存文件保存到隐私文件夹：转发 P2PSessionManager.saveReceivedFile（卡内移动暂存→文件夹）。
+     * 接收方把暂存文件保存到隐私文件夹：转发 P2PSessionManager.saveReceivedFile（卡内复制暂存→文件夹，暂存保留作缓存）。
      * 成功后刷新会话（气泡转「已保存」、可预览）。
      */
     fun saveReceivedFile(msg: ChatMessage, folderId: String, onResult: (success: Boolean, message: String) -> Unit) {

@@ -93,7 +93,8 @@ fun ChatDetailScreen(
     val transferProgress by chatViewModel.transferProgress.collectAsState()
     val realCardMode by chatViewModel.realCardMode.collectAsState()   // 文件传输=真卡专属
     var fileToSave by remember { mutableStateOf<ChatMessage?>(null) } // 接收方点「保存」时选文件夹的目标消息
-    var previewFile by remember { mutableStateOf<FileItem?>(null) }   // 已保存文件预览
+    var previewFile by remember { mutableStateOf<FileItem?>(null) }   // 预览中的文件（暂存区或已保存文件夹）
+    var previewSaveTarget by remember { mutableStateOf<ChatMessage?>(null) } // 免保存预览时可「保存到文件夹」的接收消息
     var sendGateMsg by remember { mutableStateOf<String?>(null) }     // 不能发文件时的提示文案（非真卡/未连接）
     var cancelTarget by remember { mutableStateOf<ChatMessage?>(null) } // 取消在途发送的目标消息
     var showSourceMenu by remember { mutableStateOf(false) }          // 发送来源菜单（手机/隐私文件夹）
@@ -321,23 +322,33 @@ fun ChatDetailScreen(
                         onRecall = { chatViewModel.recallMessage(msg.id) },
                         onFileTap = {
                             val transferring = transferProgress[msg.id] != null
+                            val ft = fileTypeOf(msg.fileName ?: "")
+                            val isMedia = ft == FileType.IMAGE || ft == FileType.VIDEO
                             when {
                                 // 发送方点在途文件 → 取消发送确认。
                                 msg.isMine && msg.type == MessageType.FILE && transferring -> cancelTarget = msg
-                                // 接收方点「待保存」文件 → 选文件夹保存。
+                                // 接收方收到、未保存：媒体免保存直接预览暂存区（点预览里再选保存）；非媒体走保存弹窗。
                                 !msg.isMine && msg.type == MessageType.FILE && msg.savedFolderId == null &&
                                     msg.status == MessageStatus.RECEIVED && !transferring -> {
-                                    fileToSave = msg
-                                    chatViewModel.loadSaveFolders()
+                                    if (isMedia) {
+                                        previewFile = FileItem(
+                                            id = chatViewModel.stagingPathFor(msg.id),
+                                            name = msg.fileName ?: "", type = ft
+                                        )
+                                        previewSaveTarget = msg
+                                    } else {
+                                        fileToSave = msg
+                                        chatViewModel.loadSaveFolders()
+                                    }
                                 }
-                                // 已保存的图片/视频 → 预览（文件已在卡上）。
+                                // 已保存的图片/视频 → 预览（文件夹永久副本）。
                                 msg.savedFolderId != null -> {
-                                    val ft = fileTypeOf(msg.fileName ?: "")
-                                    if (ft == FileType.IMAGE || ft == FileType.VIDEO) {
+                                    if (isMedia) {
                                         previewFile = FileItem(
                                             id = "${msg.savedFolderId}/${msg.fileName}",
                                             name = msg.fileName ?: "", type = ft
                                         )
+                                        previewSaveTarget = null
                                     } else {
                                         scope.launch { snackbarHostState.showSnackbar("已保存到文件夹，该类型暂不支持预览") }
                                     }
@@ -494,7 +505,21 @@ fun ChatDetailScreen(
         )
     }
 
-    previewFile?.let { FilePreviewDialog(file = it, onClose = { previewFile = null }) }
+    previewFile?.let { file ->
+        FilePreviewDialog(
+            file = file,
+            onClose = { previewFile = null; previewSaveTarget = null },
+            // 免保存预览（接收方未保存的媒体）时提供「保存到文件夹」→ 转交保存弹窗。
+            onSave = previewSaveTarget?.let { m ->
+                {
+                    previewFile = null
+                    previewSaveTarget = null
+                    fileToSave = m
+                    chatViewModel.loadSaveFolders()
+                }
+            }
+        )
+    }
 }
 
 /** 隐私文件夹发送来源选取对话框（M11.5.3b）：先列文件夹，进入后列文件，点文件即发送。 */
@@ -603,7 +628,8 @@ private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, conten
         } else {
             val (hint, hintColor) = when {
                 msg.status == MessageStatus.FAILED && !msg.isMine -> "接收失败" to Danger
-                !msg.isMine && msg.savedFolderId == null -> "📥 点击保存到文件夹" to Accent
+                !msg.isMine && msg.savedFolderId == null ->
+                    (if (ft == FileType.IMAGE || ft == FileType.VIDEO) "👁 点击预览 · 可保存" else "📥 点击保存到文件夹") to Accent
                 msg.savedFolderId != null ->
                     (if (ft == FileType.IMAGE || ft == FileType.VIDEO) "✓ 已保存 · 点击预览" else "✓ 已保存到文件夹") to
                         contentColor.copy(alpha = 0.7f)
