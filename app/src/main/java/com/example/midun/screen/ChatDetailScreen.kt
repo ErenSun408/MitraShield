@@ -91,9 +91,11 @@ fun ChatDetailScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val transferProgress by chatViewModel.transferProgress.collectAsState()
+    val realCardMode by chatViewModel.realCardMode.collectAsState()   // 文件传输=真卡专属
     var fileToSave by remember { mutableStateOf<ChatMessage?>(null) } // 接收方点「保存」时选文件夹的目标消息
     var previewFile by remember { mutableStateOf<FileItem?>(null) }   // 已保存文件预览
-    var showSendGate by remember { mutableStateOf(false) }            // 未连接时点发文件的提示
+    var sendGateMsg by remember { mutableStateOf<String?>(null) }     // 不能发文件时的提示文案（非真卡/未连接）
+    var cancelTarget by remember { mutableStateOf<ChatMessage?>(null) } // 取消在途发送的目标消息
     var showSourceMenu by remember { mutableStateOf(false) }          // 发送来源菜单（手机/隐私文件夹）
     var showPickDialog by remember { mutableStateOf(false) }          // 隐私文件夹来源选取对话框
     // 手机存储选取器（GetContent）：选中即查名/大小/mime → 流式加密发送。
@@ -219,10 +221,15 @@ fun ChatDetailScreen(
                 ) {
                     Box {
                         IconButton(onClick = {
-                            // 发文件需先与对方建立连接（文件通道随会话建立）。未连接则提示。
-                            if (connectedHere) showSourceMenu = true else showSendGate = true
+                            // 文件传输=真卡专属（模拟模式收端无卡可落）；且需先建立连接（文件通道随会话建立）。
+                            when {
+                                !realCardMode -> sendGateMsg = "文件传输需在真卡模式下使用（当前为模拟模式）。"
+                                !connectedHere -> sendGateMsg = "发送文件需先与对方建立加密连接（扫码或出码连接后再发送）。"
+                                else -> showSourceMenu = true
+                            }
                         }) {
-                            Icon(Icons.Default.AttachFile, "发送文件", tint = if (connectedHere) Primary else TextSecondary)
+                            val enabled = realCardMode && connectedHere
+                            Icon(Icons.Default.AttachFile, "发送文件", tint = if (enabled) Primary else TextSecondary)
                         }
                         DropdownMenu(expanded = showSourceMenu, onDismissRequest = { showSourceMenu = false }) {
                             DropdownMenuItem(
@@ -315,6 +322,8 @@ fun ChatDetailScreen(
                         onFileTap = {
                             val transferring = transferProgress[msg.id] != null
                             when {
+                                // 发送方点在途文件 → 取消发送确认。
+                                msg.isMine && msg.type == MessageType.FILE && transferring -> cancelTarget = msg
                                 // 接收方点「待保存」文件 → 选文件夹保存。
                                 !msg.isMine && msg.type == MessageType.FILE && msg.savedFolderId == null &&
                                     msg.status == MessageStatus.RECEIVED && !transferring -> {
@@ -412,15 +421,34 @@ fun ChatDetailScreen(
         )
     }
 
-    // 发文件需先连接的提示（M11.5.3）。
-    if (showSendGate) {
+    // 不能发文件时的提示（非真卡 / 未连接，M11.5.3）。
+    sendGateMsg?.let { msg ->
         AlertDialog(
-            onDismissRequest = { showSendGate = false },
+            onDismissRequest = { sendGateMsg = null },
             icon = { Icon(Icons.Default.AttachFile, null, tint = Primary) },
             title = { Text("发送文件") },
-            text = { Text("发送文件需先与对方建立加密连接（扫码或出码连接后再发送）。", color = TextSecondary) },
+            text = { Text(msg, color = TextSecondary) },
             confirmButton = {
-                TextButton(onClick = { showSendGate = false }) { Text("知道了", color = Primary) }
+                TextButton(onClick = { sendGateMsg = null }) { Text("知道了", color = Primary) }
+            }
+        )
+    }
+
+    // 取消在途发送确认（M11.5.3 收尾）。
+    cancelTarget?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { cancelTarget = null },
+            icon = { Icon(Icons.Default.Cancel, null, tint = Danger) },
+            title = { Text("取消发送") },
+            text = { Text("确定取消发送「${msg.fileName ?: msg.content}」？已传输的部分会被对方丢弃。", color = TextSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = { chatViewModel.cancelFileSend(); cancelTarget = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = Danger)
+                ) { Text("取消发送") }
+            },
+            dismissButton = {
+                TextButton(onClick = { cancelTarget = null }) { Text("继续发送", color = TextSecondary) }
             }
         )
     }

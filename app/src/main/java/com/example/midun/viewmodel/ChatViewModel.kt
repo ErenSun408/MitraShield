@@ -3,6 +3,7 @@ package com.example.midun.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.FileRepository
+import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.mock.MockChatRepository
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
@@ -28,11 +29,15 @@ import kotlinx.coroutines.launch
 class ChatViewModel @Inject constructor(
     private val chatRepo: MockChatRepository,
     private val p2pManager: P2PSessionManager,
-    private val fileRepository: FileRepository
+    private val fileRepository: FileRepository,
+    cardManager: SecurityCardManager
 ) : ViewModel() {
 
     /** 文件传输进度（M11.5.3）：messageId → 0f..1f；转发 P2PSessionManager 单例，气泡据此画进度条。 */
     val transferProgress: StateFlow<Map<String, Float>> = p2pManager.transferProgress
+
+    /** 真卡模式（M11.5.3 收尾）：文件传输=真卡专属，模拟模式发送按钮诚实降级提示。 */
+    val realCardMode: StateFlow<Boolean> = cardManager.useRealCard
 
     /** 文件夹列表（接收保存 / 隐私文件夹发送来源 共用）。打开对话框时 loadFolders 刷新。 */
     private val _saveFolders = MutableStateFlow<List<FileItem>>(emptyList())
@@ -179,6 +184,9 @@ class ChatViewModel @Inject constructor(
             onError = onError
         )
     }
+
+    /** 取消在途文件发送（M11.5.3 收尾）：通知对端删半成品、本地标未送达。 */
+    fun cancelFileSend() = p2pManager.cancelFileSend()
 
     /** 保存对话框内新建文件夹（默认不可拷贝），成功回调返回新文件夹 id 供随即保存。 */
     fun createFolderForSave(name: String, onCreated: (folderId: String) -> Unit, onError: (String) -> Unit) {

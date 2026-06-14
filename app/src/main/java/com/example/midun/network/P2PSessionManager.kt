@@ -145,6 +145,12 @@ class P2PSessionManager @Inject constructor(
     /** 文件发送串行化锁（M11.5.3）：一条通道上文件帧不能交错，收端单文件状态机才成立。 */
     private val fileSendMutex = Mutex()
 
+    /** 发送取消标志（M11.5.3 收尾）：用户取消在途发送时置位，发送循环检测到即发 FILE_CANCEL 并中止。 */
+    @Volatile private var sendCancelled = false
+
+    /** 取消当前在途文件发送（接收端会收到 FILE_CANCEL 删半成品）。 */
+    fun cancelFileSend() { sendCancelled = true }
+
     /** 当前正在接收的文件（单文件状态机）。@Volatile：接收循环写、teardown 读。 */
     @Volatile private var incoming: IncomingFile? = null
 
@@ -333,6 +339,7 @@ class P2PSessionManager @Inject constructor(
         chatRepo.addFileMessage(contactId, msgId, isMine = true, fileName, size, MessageStatus.SENDING)
         setProgress(msgId, 0f)
         _incomingMessages.emit(contactId)
+        sendCancelled = false
         return try {
             val beginJson = JSONObject().apply {
                 put("msgId", msgId)
@@ -348,6 +355,11 @@ class P2PSessionManager @Inject constructor(
             openStream().use { input ->
                 var sent = 0L
                 for (index in 0 until totalChunks) {
+                    if (sendCancelled) {
+                        // 用户取消：通知对端删半成品后中止（落入 catch 标 FAILED）。
+                        runCatching { channel.sendFrame(FileTransferChannel.FILE_CANCEL, P2PCrypto.encrypt(key, msgId)) }
+                        throw IOException("已取消发送")
+                    }
                     val want = minOf(FILE_CHUNK_BYTES.toLong(), size - index.toLong() * FILE_CHUNK_BYTES)
                         .toInt().coerceAtLeast(0)
                     val chunk = ByteArray(want)
