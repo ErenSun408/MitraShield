@@ -312,7 +312,7 @@ class P2PSessionManager @Inject constructor(
      * `isLast` 由 totalChunks（据 [size] 算）确定，收端用同一 totalChunks 复算 → 两端一致。
      */
     suspend fun sendFile(
-        fileName: String, size: Long, mime: String, openStream: () -> InputStream
+        fileName: String, size: Long, mime: String, sourceCardPath: String? = null, openStream: () -> InputStream
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val session = _activeSession.value
             ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
@@ -324,19 +324,28 @@ class P2PSessionManager @Inject constructor(
             return@withContext Result.failure(IllegalStateException("文件超过 100MB 上限，无法发送"))
         }
         // 串行化文件发送：一条通道上 BEGIN/CHUNK/END 必须不被另一文件穿插，收端单文件状态机才成立。
-        fileSendMutex.withLock { doSendFile(channel, session, contactId, fileName, size, mime, openStream) }
+        fileSendMutex.withLock { doSendFile(channel, session, contactId, fileName, size, mime, sourceCardPath, openStream) }
     }
 
+    /**
+     * @param sourceCardPath 隐私文件夹来源=源文件卡内路径（已在卡上、发送方直接据此预览，不另留副本）；
+     *   手机来源=null（真卡模式下边发边把明文流另写一份 `0:/.sent_<msgId>` 作发送方预览副本）。
+     */
     private suspend fun doSendFile(
         channel: FileTransferChannel, session: P2PSession, contactId: String,
-        fileName: String, size: Long, mime: String, openStream: () -> InputStream
+        fileName: String, size: Long, mime: String, sourceCardPath: String?, openStream: () -> InputStream
     ): Result<Unit> {
         val key = session.sessionKey
         val msgId = generateMessageId()
         val fileNonce = P2PCrypto.newFileNonce()
         val totalChunks = ((size + FILE_CHUNK_BYTES - 1) / FILE_CHUNK_BYTES).toInt().coerceAtLeast(1)
 
-        chatRepo.addFileMessage(contactId, msgId, isMine = true, fileName, size, MessageStatus.SENDING)
+        // 发送方预览副本：手机来源在真卡模式下边发边落 `.sent_<msgId>`；落不成则不留（localPath 保持 null）。
+        val sentCopyPath = if (sourceCardPath == null && cardManager.useRealCard.value) "$SENT_PREFIX$msgId" else null
+        val copyHandle = sentCopyPath?.let { realFileSystem.streamCreate(it).takeIf { h -> h > 0 } }
+
+        // 隐私文件夹来源即刻可预览（文件已在卡上）→ 起始就带 localPath；手机来源成功后再补。
+        chatRepo.addFileMessage(contactId, msgId, isMine = true, fileName, size, MessageStatus.SENDING, localPath = sourceCardPath)
         setProgress(msgId, 0f)
         _incomingMessages.emit(contactId)
         sendCancelled = false
@@ -364,6 +373,7 @@ class P2PSessionManager @Inject constructor(
                         .toInt().coerceAtLeast(0)
                     val chunk = ByteArray(want)
                     if (want > 0) readFully(input, chunk)
+                    if (copyHandle != null && want > 0) realFileSystem.streamWrite(copyHandle, chunk, 0, want)
                     digest.update(chunk)
                     val isLast = index == totalChunks - 1
                     val cipher = P2PCrypto.encryptChunk(key, fileNonce, index, isLast, chunk)
@@ -379,11 +389,21 @@ class P2PSessionManager @Inject constructor(
             }.toString()
             channel.sendFrame(FileTransferChannel.FILE_END, P2PCrypto.encrypt(key, endJson))
 
+            // 副本写全 → 记 localPath（发送方此后可预览自己发的图/视频）。
+            if (copyHandle != null) {
+                realFileSystem.streamClose(copyHandle)
+                sentCopyPath?.let { chatRepo.setFileLocalPath(msgId, contactId, it) }
+            }
             chatRepo.updateFileStatus(msgId, contactId, MessageStatus.SENT)
             clearProgress(msgId)
             _incomingMessages.emit(contactId)
             Result.success(Unit)
         } catch (e: Exception) {
+            // 失败/取消：关副本句柄并删半成品（localPath 仍为 null，发送方不会预览到残片）。
+            if (copyHandle != null) {
+                runCatching { realFileSystem.streamClose(copyHandle) }
+                sentCopyPath?.let { runCatching { realFileSystem.streamDelete(it) } }
+            }
             chatRepo.updateFileStatus(msgId, contactId, MessageStatus.FAILED)
             clearProgress(msgId)
             _incomingMessages.emit(contactId)
@@ -875,6 +895,8 @@ class P2PSessionManager @Inject constructor(
         private const val MAX_FILE_BYTES = 100L * 1024 * 1024
         /** 接收文件的卡内暂存路径前缀（根级 `.` 前缀 → 文件/文件夹列表不可见、待用户选文件夹保存）。 */
         private const val RECV_PREFIX = "0:/.recv_"
+        /** 发送方预览副本路径前缀（手机来源发送时留的卡内副本，同 `.recv_` 不可见、受 7 天 TTL 清理）。 */
+        private const val SENT_PREFIX = "0:/.sent_"
     }
 }
 

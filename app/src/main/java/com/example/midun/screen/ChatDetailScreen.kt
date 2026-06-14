@@ -327,6 +327,14 @@ fun ChatDetailScreen(
                             when {
                                 // 发送方点在途文件 → 取消发送确认。
                                 msg.isMine && msg.type == MessageType.FILE && transferring -> cancelTarget = msg
+                                // 发送方点自己发完的图/视频 → 预览卡内副本（手机来源 .sent_ / 隐私文件夹源路径）。
+                                msg.isMine && msg.type == MessageType.FILE && !transferring &&
+                                    isMedia && msg.localPath != null -> {
+                                    previewFile = FileItem(
+                                        id = msg.localPath, name = msg.fileName ?: "", type = ft
+                                    )
+                                    previewSaveTarget = null
+                                }
                                 // 接收方收到、未保存：媒体免保存直接预览暂存区（点预览里再选保存）；非媒体走保存弹窗。
                                 !msg.isMine && msg.type == MessageType.FILE && msg.savedFolderId == null &&
                                     msg.status == MessageStatus.RECEIVED && !transferring -> {
@@ -626,12 +634,16 @@ private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, conten
                 color = contentColor.copy(alpha = 0.7f), fontSize = 10.sp
             )
         } else {
+            val isMedia = ft == FileType.IMAGE || ft == FileType.VIDEO
             val (hint, hintColor) = when {
                 msg.status == MessageStatus.FAILED && !msg.isMine -> "接收失败" to Danger
+                // 发送方：自己发的图/视频有卡内副本 → 可预览。
+                msg.isMine && isMedia && msg.localPath != null && msg.status == MessageStatus.SENT ->
+                    "👁 点击预览" to contentColor.copy(alpha = 0.7f)
                 !msg.isMine && msg.savedFolderId == null ->
-                    (if (ft == FileType.IMAGE || ft == FileType.VIDEO) "👁 点击预览 · 可保存" else "📥 点击保存到文件夹") to Accent
+                    (if (isMedia) "👁 点击预览 · 可保存" else "📥 点击保存到文件夹") to Accent
                 msg.savedFolderId != null ->
-                    (if (ft == FileType.IMAGE || ft == FileType.VIDEO) "✓ 已保存 · 点击预览" else "✓ 已保存到文件夹") to
+                    (if (isMedia) "✓ 已保存 · 点击预览" else "✓ 已保存到文件夹") to
                         contentColor.copy(alpha = 0.7f)
                 else -> null to contentColor
             }

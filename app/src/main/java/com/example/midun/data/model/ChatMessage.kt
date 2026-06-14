@@ -22,7 +22,10 @@ data class ChatMessage(
     val burned: Boolean = false,
     // 文件消息（M11.5.3 file-transfer）：接收方保存后落到的隐私文件夹路径。
     // null + type=FILE + isMine=false = 已收到、暂存在卡内 0:/.recv_<id>、待用户点击选文件夹保存。
-    val savedFolderId: String? = null
+    val savedFolderId: String? = null,
+    // 发送方自己可预览的卡内路径（file-transfer 阶段2）：手机来源=发送时留的副本 0:/.sent_<id>，
+    // 隐私文件夹来源=源文件卡内路径。null=无副本（模拟模式/非媒体/留副本失败）→ 发送方不可预览。
+    val localPath: String? = null
 )
 
 data class Contact(

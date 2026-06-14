@@ -157,10 +157,13 @@ class ChatViewModel @Inject constructor(
      * 发送文件（来源无关）：[openStream] 打开输入流（手机选取器 URI 流 / 隐私文件夹卡内读流）。
      * 转发 P2PSessionManager.sendFile（分块加密走文件通道 + 本地 FILE 气泡 SENDING→SENT/FAILED）。
      */
-    fun sendFile(fileName: String, size: Long, mime: String, openStream: () -> InputStream, onError: (String) -> Unit = {}) {
+    fun sendFile(
+        fileName: String, size: Long, mime: String, openStream: () -> InputStream,
+        sourceCardPath: String? = null, onError: (String) -> Unit = {}
+    ) {
         val contactId = _currentContactId.value ?: return
         viewModelScope.launch {
-            p2pManager.sendFile(fileName, size, mime, openStream)
+            p2pManager.sendFile(fileName, size, mime, sourceCardPath, openStream)
                 .onFailure { onError("发送失败：${it.message ?: "未知错误"}") }
             reloadCurrent(contactId)
         }
@@ -176,11 +179,12 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch { _pickFiles.value = fileRepository.getFilesInFolder(folderId) }
     }
 
-    /** 发送一个隐私文件夹内的文件（卡内流式读 → 加密发送，M11.5.3b）。 */
+    /** 发送一个隐私文件夹内的文件（卡内流式读 → 加密发送，M11.5.3b）。文件已在卡上 → 源路径即发送方预览路径。 */
     fun sendCardFile(file: FileItem, onError: (String) -> Unit = {}) {
         sendFile(
             file.name, file.size, "application/octet-stream",
             openStream = { fileRepository.openFileStream(file.id) },
+            sourceCardPath = file.id,
             onError = onError
         )
     }

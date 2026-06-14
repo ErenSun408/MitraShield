@@ -253,7 +253,8 @@ class MockChatRepository @Inject constructor(
         fileName: String,
         fileSize: Long,
         status: MessageStatus,
-        savedFolderId: String? = null
+        savedFolderId: String? = null,
+        localPath: String? = null
     ): ChatMessage {
         val msg = ChatMessage(
             id = messageId,
@@ -264,7 +265,8 @@ class MockChatRepository @Inject constructor(
             status = status,
             fileName = fileName,
             fileSize = fileSize,
-            savedFolderId = savedFolderId
+            savedFolderId = savedFolderId,
+            localPath = localPath
         )
         mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
         if (!isMine) {
@@ -274,6 +276,18 @@ class MockChatRepository @Inject constructor(
         updateContactPreview(contactId)
         persist()
         return msg
+    }
+
+    /**
+     * 记下发送方自己的卡内预览副本路径（file-transfer 阶段2）：手机来源发送成功后留的 `0:/.sent_<id>`。
+     * 隐私文件夹来源在 addFileMessage 时即带 localPath，无需此设。按 id 原地改。
+     */
+    fun setFileLocalPath(messageId: String, contactId: String, localPath: String) {
+        val list = mockMessages[contactId] ?: return
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx < 0) return
+        list[idx] = list[idx].copy(localPath = localPath)
+        persist()
     }
 
     /** 更新文件消息状态（发送 SENDING→SENT/FAILED；接收完成/失败）。按 id 原地改。 */
