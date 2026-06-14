@@ -854,6 +854,14 @@ M11.5 较大，按子子阶段拆分逐个提交（[[feedback-commit-per-substag
 - **耦合**：`P2PSessionManager` 直接注入 `RealFileSystem` 叶子（同 ChatStore 选型避 DI 环）；`ChatViewModel` 注入 `FileRepository`（文件夹列表/选取）+ `SecurityCardManager`（真卡模式门控）。
 - ⚠️ **端到端未真机验证**（需两机两卡同 WiFi；本地仅编译 + 5.3.1 分块加密单测 + 单机 UI 不崩）。已知 v1 限制：接收中途断开可能残留 `0:/.recv_*` 暂存到下次 wipe；断点续传 v1 砍。
 
+**聊天文件预览扩展（`[file-transfer]` 阶段1–4，2026-06-14；v4 无此设计）**
+> v4 doc + patch 对「聊天里发的图片/视频」只有 FILE 气泡（图标+名+大小），**无任何预览/缓存语义**。本扩展按用户 2026-06-14 拍板，把双端媒体做成「即点即预览 + 卡内缓存 + 定时清理」一套机制，故整体记为偏离。commit `7f39f21`/`cab95c6`/`2f8bcfb`/`771bc97`。
+- **阶段1 接收方免保存预览**：点收到的图/视频气泡**直接从暂存 `0:/.recv_<id>` 预览**（原须先「保存到文件夹」才可看）；`saveReceivedFile` 由「移动」改「**复制**」、暂存保留作缓存（保证对话内即点即看的丝滑度）；预览弹框加可选「保存到文件夹」按钮。
+- **阶段2 发送方预览自己发的媒体**：手机来源发送时边发边把明文流**另写卡内副本 `0:/.sent_<id>`**（仅真卡模式，取消/失败删半成品），隐私文件夹来源复用源路径不另占空间；新增 `ChatMessage.localPath`（发送方预览路径，持久化进 `ChatStore`）。**明文副本只落卡（加密）、不落手机存储**，守住安全模型。
+- **阶段3 7天缓存 TTL + 过期降级**：`.recv_`/`.sent_` 缓存按 `ChatMessage.timestamp` **超 7 天即清**（安全 App 无常驻定时器 → `MockChatRepository` 每次认证后扫一遍）；只删缓存前缀、绝不碰隐私文件夹/聊天记录；已保存到文件夹的过期后仍可从永久副本预览。预览前 `cardFileExists` 验在否，缺失则「缓存已过期」降级、不开空白预览。新增 `data/FileCachePaths`（`.recv_`/`.sent_` 前缀唯一来源，发送侧与清理侧共用避免漂移；`MockChatRepository` 不能反依赖 network 层否则 DI 环）。
+- **阶段4 手动清缓存**：设置页「清除文件缓存」项显占用（`MockChatRepository.cacheStats`）+ 确认弹框（警示未保存文件可能不可再预览、已保存的不受影响）→ `clearCache` 只删 `.recv_`/`.sent_` 暂存、返回释放字节。
+- **接收方未保存文件 = 唯一副本**：纯 P2P 无服务器，7 天 TTL 或手动清后**永久丢失**（已在保存弹窗/确认弹框话术告知，「保存到文件夹」是留存通路）。⚠️ 全部需两机两卡同 WiFi 真机验。
+
 **M11.5.4 / M11.5.5 落卡持久化**（`bd55faa` / `23fc8a4`）
 - 操作日志 → `0:/.midun_oplog.json`、聊天（联系人 + 消息）→ `0:/.midun_chat.json`，经新增 `data/real/OperationLogStore.kt` / `ChatStore.kt` 用 `RealFileSystem` 读写 JSON。
 - **活动判据 = `RealUsbManager` AUTHENTICATED**（真卡模式 + 盘已打开的精确代理）。**有意依赖 `RealUsbManager` 叶子而非 `SecurityCardManager`**——后者经 `MockUsbManager` 反向依赖 `MockOperationLog`/`MockChatRepository`，注入会成 Hilt DI 环。
