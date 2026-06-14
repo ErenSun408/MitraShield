@@ -112,6 +112,14 @@ class P2PSessionManager @Inject constructor(
     /** A 侧临时密钥对：generateConnectionInfo 生成、startListening 握手时消费。 */
     private var listenerKeyPair: KeyPair? = null
 
+    /**
+     * 文件传输通道（M11.5.3 / `[file-transfer]`）：与聊天 socket 物理隔离的第二条二进制 TCP。
+     * [fileServerSocket] 仅 A 侧用（提前绑定 [FileTransferChannel.FILE_PORT]）；[fileChannel] 是握手后
+     * 建立的双工通道（A accept / B connect），TCP 全双工 → 双向发文件复用同一条。建立失败不影响聊天会话。
+     */
+    private var fileServerSocket: ServerSocket? = null
+    @Volatile private var fileChannel: FileTransferChannel? = null
+
     data class P2PSession(
         val socket: Socket,
         val contactId: String,
@@ -145,6 +153,8 @@ class P2PSessionManager @Inject constructor(
             try {
                 val server = ServerSocket(port)
                 serverSocket.value = server
+                // 文件通道端口提前绑定：B 握手后会立即 connect，提前 bind 让其入 backlog、避免 accept 时序竞态。
+                fileServerSocket = ServerSocket(FileTransferChannel.FILE_PORT)
                 _connectionState.value = ConnectionState.LISTENING
                 val socket = server.accept() // 阻塞；disconnect() 关闭 server 会以异常打断
                 val session = performListenerHandshake(socket)
@@ -153,6 +163,7 @@ class P2PSessionManager @Inject constructor(
                 onConnected(session)
                 // A 侧联系人在收到 B 的 IDENTITY 帧后才建（A 事先不知对端身份）。
                 onSessionEstablished(session)
+                establishFileChannelAsListener() // A 侧：accept 文件通道连接
             } catch (e: Exception) {
                 // accept 被 disconnect() 主动关闭打断属正常拆除，不标 FAILED
                 if (_connectionState.value != ConnectionState.CONNECTED) {
@@ -181,6 +192,7 @@ class P2PSessionManager @Inject constructor(
                 _activeSession.value = session
                 _connectionState.value = ConnectionState.CONNECTED
                 onSessionEstablished(session)
+                establishFileChannelAsConnector(info.ipv6) // B 侧：连接文件通道端口
                 Result.success(session)
             } catch (e: Exception) {
                 _connectionState.value = ConnectionState.FAILED
@@ -327,6 +339,61 @@ class P2PSessionManager @Inject constructor(
         scope.launch { runCatching { writeFrame(session, generateMessageId(), IDENTITY_TYPE, currentDeviceSn()) } }
     }
 
+    // —— 文件传输通道（M11.5.3 / `[file-transfer]`）——
+
+    /** A 侧：accept 文件通道连接（[fileServerSocket] 已在 startListening 提前绑定），起常驻接收循环。 */
+    private fun establishFileChannelAsListener() {
+        scope.launch {
+            var channel: FileTransferChannel? = null
+            try {
+                val sock = fileServerSocket?.accept() ?: return@launch
+                channel = FileTransferChannel(sock).also { fileChannel = it }
+                channel.receiveLoop { type, payload -> handleFileFrame(type, payload) }
+            } catch (_: Exception) {
+                // 文件通道建立/中断不影响聊天会话；仅清空，后续发文件会失败提示。
+            } finally {
+                channel?.close()
+                if (fileChannel === channel) fileChannel = null
+            }
+        }
+    }
+
+    /** B 侧：连接 A 的文件通道端口（[FileTransferChannel.FILE_PORT]），起常驻接收循环。 */
+    private fun establishFileChannelAsConnector(host: String) {
+        scope.launch {
+            var channel: FileTransferChannel? = null
+            try {
+                val sock = Socket().apply {
+                    connect(InetSocketAddress(host, FileTransferChannel.FILE_PORT), CONNECT_TIMEOUT_MS)
+                }
+                channel = FileTransferChannel(sock).also { fileChannel = it }
+                channel.receiveLoop { type, payload -> handleFileFrame(type, payload) }
+            } catch (_: Exception) {
+            } finally {
+                channel?.close()
+                if (fileChannel === channel) fileChannel = null
+            }
+        }
+    }
+
+    /**
+     * 文件帧分发（骨架，5.3.4 填充落卡逻辑）：
+     * FILE_BEGIN→建卡内暂存、FILE_CHUNK→解密流式落卡、FILE_END→校验 sha256、FILE_CANCEL→删半成品。
+     */
+    private suspend fun handleFileFrame(type: Int, payload: ByteArray) {
+        when (type) {
+            else -> {} // 5.3.4 实现；当前仅建立通道与接收循环
+        }
+    }
+
+    /** 关闭文件通道 + A 侧监听 socket（disconnect / 对端断开时）。 */
+    private fun teardownFileChannel() {
+        runCatching { fileChannel?.close() }
+        fileChannel = null
+        runCatching { fileServerSocket?.close() }
+        fileServerSocket = null
+    }
+
     /** 后台读 socket：逐行解析 MessageFrame → 解密 → 分发（身份帧 / 普通消息）。对端关闭则归位状态。 */
     private fun startReceiveLoop(session: P2PSession) {
         scope.launch {
@@ -420,6 +487,7 @@ class P2PSessionManager @Inject constructor(
             _activeSession.value = null
             _connectionState.value = ConnectionState.DISCONNECTED
             _burnMode.value = BurnMode(enabled = false, ttlSeconds = 0) // 焚毁模式随会话清除
+            teardownFileChannel()
         }
     }
 
@@ -430,6 +498,7 @@ class P2PSessionManager @Inject constructor(
             runCatching { session.socket.close() }
         }
         runCatching { serverSocket.value?.close() }
+        teardownFileChannel()
         _activeSession.value = null
         serverSocket.value = null
         listenerKeyPair = null
