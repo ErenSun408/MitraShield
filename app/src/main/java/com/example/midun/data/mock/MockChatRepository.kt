@@ -285,12 +285,15 @@ class MockChatRepository @Inject constructor(
         persist()
     }
 
-    /** 接收文件保存到隐私文件夹后，记下落地文件夹路径（savedFolderId 非 null = 已保存、气泡可预览）。 */
-    fun setFileSaved(messageId: String, contactId: String, savedFolderId: String) {
+    /**
+     * 接收文件保存到隐私文件夹后，记下落地文件夹路径（savedFolderId 非 null = 已保存、气泡可预览）。
+     * [finalFileName] 为实际落地文件名（冲突避让后可能加了序号）→ 同步更新 fileName/content，保证预览路径正确。
+     */
+    fun setFileSaved(messageId: String, contactId: String, savedFolderId: String, finalFileName: String) {
         val list = mockMessages[contactId] ?: return
         val idx = list.indexOfFirst { it.id == messageId }
         if (idx < 0) return
-        list[idx] = list[idx].copy(savedFolderId = savedFolderId)
+        list[idx] = list[idx].copy(savedFolderId = savedFolderId, fileName = finalFileName, content = finalFileName)
         persist()
     }
 

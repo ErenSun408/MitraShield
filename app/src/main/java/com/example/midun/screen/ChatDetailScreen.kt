@@ -1,10 +1,15 @@
 package com.example.midun.screen
 
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -20,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -34,6 +40,8 @@ import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.data.model.ChatMessage
+import com.example.midun.data.model.FileItem
+import com.example.midun.data.model.FileType
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.network.P2PSessionManager.ConnectionState
@@ -43,6 +51,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,6 +86,27 @@ fun ChatDetailScreen(
     var showClearConfirm by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
+    // —— 文件传输（M11.5.3）——
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val transferProgress by chatViewModel.transferProgress.collectAsState()
+    var fileToSave by remember { mutableStateOf<ChatMessage?>(null) } // 接收方点「保存」时选文件夹的目标消息
+    var previewFile by remember { mutableStateOf<FileItem?>(null) }   // 已保存文件预览
+    var showSendGate by remember { mutableStateOf(false) }            // 未连接时点发文件的提示
+    // 手机存储选取器（GetContent）：选中即查名/大小/mime → 流式加密发送。
+    val pickFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) {
+            val (name, size) = queryNameSize(context, uri)
+            val mime = context.contentResolver.getType(uri) ?: "application/octet-stream"
+            chatViewModel.sendFile(
+                name, size, mime,
+                openStream = { context.contentResolver.openInputStream(uri) ?: throw java.io.IOException("无法读取所选文件") },
+                onError = { scope.launch { snackbarHostState.showSnackbar(it) } }
+            )
+        }
+    }
+
     // 搜索词非空时按内容/文件名过滤；空时用原始消息流。messages 变化时重算。
     val displayMessages = remember(messages, searchQuery) {
         if (searchQuery.isBlank()) messages
@@ -95,6 +125,7 @@ fun ChatDetailScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -185,10 +216,10 @@ fun ChatDetailScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(onClick = {
-                        // Mock 发文件：真实文件选取器（隐私区/U盘/手机）按 patch 待实现第3条留到 M10。
-                        chatViewModel.sendMessage("[文件] 示例文件.pdf", MessageType.FILE)
+                        // 发文件需先与对方建立连接（文件通道随会话建立）。未连接则提示。
+                        if (connectedHere) pickFileLauncher.launch("*/*") else showSendGate = true
                     }) {
-                        Icon(Icons.Default.AttachFile, "文件", tint = Primary)
+                        Icon(Icons.Default.AttachFile, "发送文件", tint = if (connectedHere) Primary else TextSecondary)
                     }
                     OutlinedTextField(
                         value = inputText,
@@ -257,9 +288,33 @@ fun ChatDetailScreen(
                     else -> ChatBubble(
                         msg = msg,
                         burnDeadline = burnTimers[msg.id],
+                        transferFraction = transferProgress[msg.id],
                         onReveal = { chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl) },
                         onDelete = { chatViewModel.deleteMessage(msg.id) },
-                        onRecall = { chatViewModel.recallMessage(msg.id) }
+                        onRecall = { chatViewModel.recallMessage(msg.id) },
+                        onFileTap = {
+                            val transferring = transferProgress[msg.id] != null
+                            when {
+                                // 接收方点「待保存」文件 → 选文件夹保存。
+                                !msg.isMine && msg.type == MessageType.FILE && msg.savedFolderId == null &&
+                                    msg.status == MessageStatus.RECEIVED && !transferring -> {
+                                    fileToSave = msg
+                                    chatViewModel.loadSaveFolders()
+                                }
+                                // 已保存的图片/视频 → 预览（文件已在卡上）。
+                                msg.savedFolderId != null -> {
+                                    val ft = fileTypeOf(msg.fileName ?: "")
+                                    if (ft == FileType.IMAGE || ft == FileType.VIDEO) {
+                                        previewFile = FileItem(
+                                            id = "${msg.savedFolderId}/${msg.fileName}",
+                                            name = msg.fileName ?: "", type = ft
+                                        )
+                                    } else {
+                                        scope.launch { snackbarHostState.showSnackbar("已保存到文件夹，该类型暂不支持预览") }
+                                    }
+                                }
+                            }
+                        }
                     )
                 }
             }
@@ -336,6 +391,201 @@ fun ChatDetailScreen(
             }
         )
     }
+
+    // 发文件需先连接的提示（M11.5.3）。
+    if (showSendGate) {
+        AlertDialog(
+            onDismissRequest = { showSendGate = false },
+            icon = { Icon(Icons.Default.AttachFile, null, tint = Primary) },
+            title = { Text("发送文件") },
+            text = { Text("发送文件需先与对方建立加密连接（扫码或出码连接后再发送）。", color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = { showSendGate = false }) { Text("知道了", color = Primary) }
+            }
+        )
+    }
+
+    // 接收文件「保存到隐私文件夹」对话框（M11.5.3）。
+    fileToSave?.let { msg ->
+        SaveToFolderDialog(
+            fileName = msg.fileName ?: msg.content,
+            folders = chatViewModel.saveFolders.collectAsState().value,
+            onPickFolder = { folderId ->
+                chatViewModel.saveReceivedFile(msg, folderId) { ok, message ->
+                    scope.launch { snackbarHostState.showSnackbar(message) }
+                }
+                fileToSave = null
+            },
+            onCreateFolder = { name ->
+                chatViewModel.createFolderForSave(
+                    name,
+                    onCreated = { folderId ->
+                        chatViewModel.saveReceivedFile(msg, folderId) { ok, message ->
+                            scope.launch { snackbarHostState.showSnackbar(message) }
+                        }
+                        fileToSave = null
+                    },
+                    onError = { scope.launch { snackbarHostState.showSnackbar(it) } }
+                )
+            },
+            onDismiss = { fileToSave = null }
+        )
+    }
+
+    previewFile?.let { FilePreviewDialog(file = it, onClose = { previewFile = null }) }
+}
+
+/** 文件气泡内容（M11.5.3）：名/大小 + 进度条（传输中）/ 状态提示（待保存 / 已保存 / 失败）。 */
+@Composable
+private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, contentColor: Color) {
+    val ft = fileTypeOf(msg.fileName ?: "")
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                when (ft) {
+                    FileType.IMAGE -> Icons.Default.Image
+                    FileType.VIDEO -> Icons.Default.VideoFile
+                    FileType.AUDIO -> Icons.Default.AudioFile
+                    else -> Icons.Default.InsertDriveFile
+                },
+                null,
+                tint = if (msg.isMine) Accent else Primary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Column {
+                Text(msg.fileName ?: msg.content, color = contentColor, fontSize = 14.sp)
+                msg.fileSize?.let {
+                    Text(formatFileSize(it), color = contentColor.copy(alpha = 0.7f), fontSize = 11.sp)
+                }
+            }
+        }
+        if (transferFraction != null) {
+            Spacer(Modifier.height(6.dp))
+            LinearProgressIndicator(
+                progress = { transferFraction },
+                modifier = Modifier.fillMaxWidth().height(3.dp),
+                color = if (msg.isMine) Color.White else Primary
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "${if (msg.isMine) "发送中" else "接收中"} ${(transferFraction * 100).toInt()}%",
+                color = contentColor.copy(alpha = 0.7f), fontSize = 10.sp
+            )
+        } else {
+            val (hint, hintColor) = when {
+                msg.status == MessageStatus.FAILED && !msg.isMine -> "接收失败" to Danger
+                !msg.isMine && msg.savedFolderId == null -> "📥 点击保存到文件夹" to Accent
+                msg.savedFolderId != null ->
+                    (if (ft == FileType.IMAGE || ft == FileType.VIDEO) "✓ 已保存 · 点击预览" else "✓ 已保存到文件夹") to
+                        contentColor.copy(alpha = 0.7f)
+                else -> null to contentColor
+            }
+            hint?.let {
+                Spacer(Modifier.height(4.dp))
+                Text(it, color = hintColor, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+/** 「保存到隐私文件夹」对话框：列已有文件夹 + 新建文件夹入口。 */
+@Composable
+private fun SaveToFolderDialog(
+    fileName: String,
+    folders: List<FileItem>,
+    onPickFolder: (folderId: String) -> Unit,
+    onCreateFolder: (name: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var creating by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.FolderOpen, null, tint = Primary) },
+        title = { Text("保存文件") },
+        text = {
+            Column {
+                Text("将「$fileName」保存到隐私文件夹：", fontSize = 13.sp, color = TextSecondary)
+                Spacer(Modifier.height(12.dp))
+                if (creating) {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("新文件夹名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    if (folders.isEmpty()) {
+                        Text("暂无文件夹，请新建一个。", fontSize = 12.sp, color = TextSecondary)
+                    } else {
+                        Column(modifier = Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                            folders.forEach { folder ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth()
+                                        .clickable { onPickFolder(folder.id) }
+                                        .padding(vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Folder, null, tint = Primary, modifier = Modifier.size(20.dp))
+                                    Spacer(Modifier.width(10.dp))
+                                    Text(folder.name, fontSize = 14.sp)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    TextButton(onClick = { creating = true }) {
+                        Icon(Icons.Default.CreateNewFolder, null, tint = Primary, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("新建文件夹", color = Primary)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (creating) {
+                Button(
+                    onClick = { if (newName.isNotBlank()) onCreateFolder(newName.trim()) },
+                    enabled = newName.isNotBlank(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                ) { Text("创建并保存") }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { if (creating) creating = false else onDismiss() }) {
+                Text(if (creating) "返回" else "取消", color = TextSecondary)
+            }
+        }
+    )
+}
+
+/** 按扩展名粗判文件类型（气泡图标 + 是否可预览）。 */
+private fun fileTypeOf(name: String): FileType =
+    when (name.substringAfterLast('.', "").lowercase()) {
+        "jpg", "jpeg", "png", "gif", "webp" -> FileType.IMAGE
+        "mp4", "mkv", "avi", "mov" -> FileType.VIDEO
+        "mp3", "aac", "wav", "m4a" -> FileType.AUDIO
+        "pdf", "doc", "docx", "txt", "xls", "xlsx" -> FileType.DOCUMENT
+        else -> FileType.OTHER
+    }
+
+/** 从内容 URI 查显示名与大小（OpenableColumns）；查不到名用兜底、大小回 0。 */
+private fun queryNameSize(context: android.content.Context, uri: android.net.Uri): Pair<String, Long> {
+    var name = "未命名文件"
+    var size = 0L
+    runCatching {
+        context.contentResolver.query(uri, null, null, null, null)?.use { c ->
+            val nameIdx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            val sizeIdx = c.getColumnIndex(OpenableColumns.SIZE)
+            if (c.moveToFirst()) {
+                if (nameIdx >= 0) c.getString(nameIdx)?.let { name = it }
+                if (sizeIdx >= 0 && !c.isNull(sizeIdx)) size = c.getLong(sizeIdx)
+            }
+        }
+    }
+    return name to size
 }
 
 /**
@@ -389,9 +639,11 @@ private fun BurnStatusLabel(isMine: Boolean, burnDeadline: Long?, contentColor: 
 private fun ChatBubble(
     msg: ChatMessage,
     burnDeadline: Long?,
+    transferFraction: Float? = null,
     onReveal: () -> Unit,
     onDelete: () -> Unit,
-    onRecall: () -> Unit
+    onRecall: () -> Unit,
+    onFileTap: () -> Unit = {}
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val isFile = msg.type == MessageType.FILE
@@ -431,9 +683,9 @@ private fun ChatBubble(
                     ),
                     // 焚毁消息加火焰色描边以示特殊（B 阶段）。
                     border = if (isBurn) BorderStroke(1.dp, Warning) else null,
-                    // 遮罩态点击揭示并启动倒计时；其余点击无操作，长按弹菜单。
+                    // 遮罩态点击揭示并启动倒计时；文件气泡点击触发保存/预览；其余点击无操作，长按弹菜单。
                     modifier = Modifier.combinedClickable(
-                        onClick = { if (masked) onReveal() },
+                        onClick = { if (masked) onReveal() else if (isFile) onFileTap() },
                         onLongClick = { showMenu = true }
                     )
                 ) {
@@ -448,10 +700,10 @@ private fun ChatBubble(
                             }
                         } else {
                         when {
-                            isFile || isVideo -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            isFile -> FileBubbleContent(msg, transferFraction, contentColor)
+                            isVideo -> Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    if (isVideo) Icons.Default.VideoFile else Icons.Default.InsertDriveFile,
-                                    null,
+                                    Icons.Default.VideoFile, null,
                                     tint = if (msg.isMine) Accent else Primary,
                                     modifier = Modifier.size(20.dp)
                                 )

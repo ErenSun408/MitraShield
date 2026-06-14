@@ -587,6 +587,43 @@ class P2PSessionManager @Inject constructor(
         _incomingMessages.emit(f.contactId)
     }
 
+    /**
+     * 接收方保存暂存文件到隐私文件夹（M11.5.3）：把卡内暂存 `0:/.recv_<msgId>` 移动到 `0:/<folderId>/<fileName>`，
+     * 成功后记 savedFolderId（气泡转「已保存」、可预览）。优先 `SFRename` 跨目录移动，失败回退卡内流式 copy+delete。
+     * 仍是卡内操作、明文不出卡。文件名冲突时加序号避让。
+     */
+    suspend fun saveReceivedFile(
+        msgId: String, contactId: String, fileName: String, folderId: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val staging = "$RECV_PREFIX$msgId"
+        if (realFileSystem.streamOpen(staging).let { h -> if (h > 0) { realFileSystem.streamClose(h); false } else true }) {
+            return@withContext Result.failure(IllegalStateException("暂存文件不存在，可能已被清理"))
+        }
+        val dest = uniqueDestPath(folderId, fileName)
+        val ok = realFileSystem.streamMove(staging, dest) ||
+            (realFileSystem.copyWithinCard(staging, dest).also { if (it) realFileSystem.streamDelete(staging) })
+        if (!ok) return@withContext Result.failure(IllegalStateException("保存到文件夹失败"))
+        chatRepo.setFileSaved(msgId, contactId, folderId, dest.substringAfterLast('/'))
+        _incomingMessages.emit(contactId)
+        Result.success(Unit)
+    }
+
+    /** 目标文件夹内文件名冲突则加序号（`a.pdf`→`a(1).pdf`）。 */
+    private fun uniqueDestPath(folderId: String, fileName: String): String {
+        fun exists(path: String): Boolean {
+            val h = realFileSystem.streamOpen(path)
+            return if (h > 0) { realFileSystem.streamClose(h); true } else false
+        }
+        val base = "$folderId/$fileName"
+        if (!exists(base)) return base
+        val dot = fileName.lastIndexOf('.')
+        val stem = if (dot > 0) fileName.substring(0, dot) else fileName
+        val ext = if (dot > 0) fileName.substring(dot) else ""
+        var i = 1
+        while (exists("$folderId/$stem($i)$ext")) i++
+        return "$folderId/$stem($i)$ext"
+    }
+
     /** 中止当前接收（解密失败/取消/断开）：关句柄、删半成品、消息标 [status]、清进度。 */
     private fun abortIncoming(status: MessageStatus) {
         val f = incoming ?: return

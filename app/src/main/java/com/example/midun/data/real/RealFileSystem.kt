@@ -127,9 +127,30 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
         synchronized(fsShell) { LibJniFSShell.SFWrite(handle, buf, off, len) }
     /** 同步删单文件（接收失败/取消删半成品；路径直传隐藏区完整路径）。 */
     fun streamDelete(path: String): Boolean = synchronized(fsShell) { LibJniFSShell.SFDelete(path) }
-    /** 跨目录移动（接收文件保存到隐私文件夹；SFRename 改完整路径）。失败回 false，调用方回退 copy+delete。 */
+    /** 跨目录移动（接收文件保存到隐私文件夹；SFRename 改完整路径）。失败回 false，调用方回退 [copyWithinCard]。 */
     fun streamMove(fromPath: String, toPath: String): Boolean =
         synchronized(fsShell) { LibJniFSShell.SFRename(fromPath, toPath) }
+
+    /** 卡内流式复制（[streamMove] 失败时兜底）：64KB 分块读写，不攒整文件在内存。成功回 true。 */
+    fun copyWithinCard(fromPath: String, toPath: String): Boolean = synchronized(fsShell) {
+        val rh = LibJniFSShell.SFOpen(fromPath)
+        if (rh <= 0) return false
+        val wh = LibJniFSShell.SFCreate(toPath)
+        if (wh <= 0) { LibJniFSShell.SFClose(rh); return false }
+        try {
+            val buf = ByteArray(CHUNK)
+            while (true) {
+                val n = LibJniFSShell.SFRead(rh, buf, 0, CHUNK)
+                if (n < 0) return false
+                if (n == 0) break
+                if (LibJniFSShell.SFWrite(wh, buf, 0, n) < 0) return false
+            }
+            true
+        } finally {
+            LibJniFSShell.SFClose(rh)
+            LibJniFSShell.SFClose(wh)
+        }
+    }
 
     override suspend fun deleteFile(fileId: String): Result<Unit> = withContext(Dispatchers.IO) {
         if (synchronized(fsShell) { LibJniFSShell.SFDelete(fileId) }) Result.success(Unit)

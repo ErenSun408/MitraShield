@@ -2,13 +2,17 @@ package com.example.midun.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.midun.data.FileRepository
 import com.example.midun.data.mock.MockChatRepository
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
+import com.example.midun.data.model.CopyPolicy
+import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.network.ConnectionInfo
 import com.example.midun.network.P2PSessionManager
+import java.io.InputStream
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,8 +27,16 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val chatRepo: MockChatRepository,
-    private val p2pManager: P2PSessionManager
+    private val p2pManager: P2PSessionManager,
+    private val fileRepository: FileRepository
 ) : ViewModel() {
+
+    /** 文件传输进度（M11.5.3）：messageId → 0f..1f；转发 P2PSessionManager 单例，气泡据此画进度条。 */
+    val transferProgress: StateFlow<Map<String, Float>> = p2pManager.transferProgress
+
+    /** 保存对话框的隐私文件夹列表（接收文件「保存到文件夹」用）。打开对话框时 loadSaveFolders 刷新。 */
+    private val _saveFolders = MutableStateFlow<List<FileItem>>(emptyList())
+    val saveFolders: StateFlow<List<FileItem>> = _saveFolders.asStateFlow()
 
     // 联系人列表：以 MockChatRepository（单例）为唯一数据源。
     // 因 ChatList / ChatDetail / QrCode 各自是不同 NavBackStackEntry，会拿到不同的
@@ -128,6 +140,48 @@ class ChatViewModel @Inject constructor(
     private fun reloadCurrent(contactId: String) {
         _messages.value = chatRepo.getMessages(contactId)
         _contacts.value = chatRepo.getContacts()
+    }
+
+    // —— 文件传输（M11.5.3 file-transfer）——
+
+    /**
+     * 发送文件（来源无关）：[openStream] 打开输入流（手机选取器 URI 流 / 隐私文件夹卡内读流）。
+     * 转发 P2PSessionManager.sendFile（分块加密走文件通道 + 本地 FILE 气泡 SENDING→SENT/FAILED）。
+     */
+    fun sendFile(fileName: String, size: Long, mime: String, openStream: () -> InputStream, onError: (String) -> Unit = {}) {
+        val contactId = _currentContactId.value ?: return
+        viewModelScope.launch {
+            p2pManager.sendFile(fileName, size, mime, openStream)
+                .onFailure { onError("发送失败：${it.message ?: "未知错误"}") }
+            reloadCurrent(contactId)
+        }
+    }
+
+    /** 刷新保存对话框的文件夹列表。 */
+    fun loadSaveFolders() {
+        viewModelScope.launch { _saveFolders.value = fileRepository.getFolders() }
+    }
+
+    /** 保存对话框内新建文件夹（默认不可拷贝），成功回调返回新文件夹 id 供随即保存。 */
+    fun createFolderForSave(name: String, onCreated: (folderId: String) -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            fileRepository.createFolder(name.trim(), CopyPolicy.NO_COPY)
+                .onSuccess { _saveFolders.value = fileRepository.getFolders(); onCreated(it.id) }
+                .onFailure { onError(it.message ?: "新建文件夹失败") }
+        }
+    }
+
+    /**
+     * 接收方把暂存文件保存到隐私文件夹：转发 P2PSessionManager.saveReceivedFile（卡内移动暂存→文件夹）。
+     * 成功后刷新会话（气泡转「已保存」、可预览）。
+     */
+    fun saveReceivedFile(msg: ChatMessage, folderId: String, onResult: (success: Boolean, message: String) -> Unit) {
+        val contactId = _currentContactId.value ?: return
+        viewModelScope.launch {
+            p2pManager.saveReceivedFile(msg.id, contactId, msg.fileName ?: msg.content, folderId)
+                .onSuccess { reloadCurrent(contactId); onResult(true, "已保存到文件夹") }
+                .onFailure { onResult(false, it.message ?: "保存失败") }
+        }
     }
 
     /**
