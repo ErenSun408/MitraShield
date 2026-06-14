@@ -101,6 +101,7 @@ class ChatStore @Inject constructor(
         m.fileSize?.let { put("fileSize", it) }
         m.fileName?.let { put("fileName", it) }
         put("recalled", m.recalled); put("burnTtl", m.burnTtl); put("burned", m.burned)
+        m.savedFolderId?.let { put("savedFolderId", it) }
     }
 
     private fun messageFromJson(o: JSONObject) = ChatMessage(
@@ -116,7 +117,8 @@ class ChatStore @Inject constructor(
         fileName = if (o.has("fileName")) o.getString("fileName") else null,
         recalled = o.optBoolean("recalled"),
         burnTtl = o.optInt("burnTtl"),
-        burned = o.optBoolean("burned")
+        burned = o.optBoolean("burned"),
+        savedFolderId = if (o.has("savedFolderId")) o.getString("savedFolderId") else null
     )
 
     private companion object {

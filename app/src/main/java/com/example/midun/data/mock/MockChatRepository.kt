@@ -240,6 +240,60 @@ class MockChatRepository @Inject constructor(
         return msg
     }
 
+    // —— 文件消息（M11.5.3 file-transfer）——
+
+    /**
+     * 插入一条文件消息（发送端 [isMine]=true 起始 SENDING；接收端 false 起始 RECEIVED、[savedFolderId]=null 待保存）。
+     * 进度是瞬时态、不入库（由 `P2PSessionManager.transferProgress` 单独驱动），这里只管消息本体与状态。
+     */
+    fun addFileMessage(
+        contactId: String,
+        messageId: String,
+        isMine: Boolean,
+        fileName: String,
+        fileSize: Long,
+        status: MessageStatus,
+        savedFolderId: String? = null
+    ): ChatMessage {
+        val msg = ChatMessage(
+            id = messageId,
+            contactId = contactId,
+            content = fileName,
+            type = MessageType.FILE,
+            isMine = isMine,
+            status = status,
+            fileName = fileName,
+            fileSize = fileSize,
+            savedFolderId = savedFolderId
+        )
+        mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
+        if (!isMine) {
+            val idx = mockContacts.indexOfFirst { it.id == contactId }
+            if (idx >= 0) mockContacts[idx] = mockContacts[idx].copy(unreadCount = mockContacts[idx].unreadCount + 1)
+        }
+        updateContactPreview(contactId)
+        persist()
+        return msg
+    }
+
+    /** 更新文件消息状态（发送 SENDING→SENT/FAILED；接收完成/失败）。按 id 原地改。 */
+    fun updateFileStatus(messageId: String, contactId: String, status: MessageStatus) {
+        val list = mockMessages[contactId] ?: return
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx < 0) return
+        list[idx] = list[idx].copy(status = status)
+        persist()
+    }
+
+    /** 接收文件保存到隐私文件夹后，记下落地文件夹路径（savedFolderId 非 null = 已保存、气泡可预览）。 */
+    fun setFileSaved(messageId: String, contactId: String, savedFolderId: String) {
+        val list = mockMessages[contactId] ?: return
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx < 0) return
+        list[idx] = list[idx].copy(savedFolderId = savedFolderId)
+        persist()
+    }
+
     /** 切换联系人置顶状态。由 ChatViewModel.togglePin 调用；置顶项在 getContacts 中排在最前。 */
     fun togglePin(contactId: String) {
         mockContacts.indexOfFirst { it.id == contactId }
@@ -295,6 +349,7 @@ class MockChatRepository @Inject constructor(
                 lastMessage.recalled -> "[消息已撤回]"
                 lastMessage.burned -> "🔥 [已焚毁]"
                 lastMessage.burnAfterRead -> "🔥 [阅后即焚]" // 焚毁消息预览不泄漏原文
+                lastMessage.type == MessageType.FILE -> "[文件] ${lastMessage.fileName ?: ""}"
                 else -> lastMessage.content
             },
             lastMessageTime = lastMessage?.timestamp ?: 0L

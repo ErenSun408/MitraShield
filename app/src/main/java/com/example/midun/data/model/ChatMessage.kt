@@ -19,7 +19,10 @@ data class ChatMessage(
     // 焚毁 TTL（秒）：阅后即焚消息「读到」后的倒计时时长。0 = 非焚毁消息。
     val burnTtl: Int = 0,
     // 已焚毁标记（阅后即焚墓碑），与 recalled 同为「原地把真实消息变残骸」，渲染为焚毁墓碑。
-    val burned: Boolean = false
+    val burned: Boolean = false,
+    // 文件消息（M11.5.3 file-transfer）：接收方保存后落到的隐私文件夹路径。
+    // null + type=FILE + isMine=false = 已收到、暂存在卡内 0:/.recv_<id>、待用户点击选文件夹保存。
+    val savedFolderId: String? = null
 )
 
 data class Contact(

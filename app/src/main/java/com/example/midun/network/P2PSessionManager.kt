@@ -10,8 +10,10 @@ import com.example.midun.data.model.MessageType
 import com.example.midun.data.model.OperationType
 import java.io.BufferedReader
 import java.io.IOException
+import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.PrintWriter
+import java.security.MessageDigest
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetSocketAddress
@@ -78,6 +80,21 @@ class P2PSessionManager @Inject constructor(
     /** 收到对端消息后发出的 contactId 信号，ChatViewModel 收到即重载列表/会话（M10.4）。 */
     private val _incomingMessages = MutableSharedFlow<String>(extraBufferCapacity = 32)
     val incomingMessages: SharedFlow<String> = _incomingMessages.asSharedFlow()
+
+    /**
+     * 文件传输进度（M11.5.3）：messageId → 0f..1f。发送/接收共用，UI 观察以画进度条；完成/失败即移除。
+     * 进度是瞬时态、不入库（消息本体只存 SENDING/SENT/RECEIVED/FAILED 状态）。
+     */
+    private val _transferProgress = MutableStateFlow<Map<String, Float>>(emptyMap())
+    val transferProgress: StateFlow<Map<String, Float>> = _transferProgress.asStateFlow()
+
+    private fun setProgress(messageId: String, fraction: Float) {
+        _transferProgress.value = _transferProgress.value + (messageId to fraction.coerceIn(0f, 1f))
+    }
+
+    private fun clearProgress(messageId: String) {
+        _transferProgress.value = _transferProgress.value - messageId
+    }
 
     /**
      * 本端阅后即焚模式（B 阶段）：开启后本端发出的消息均为焚毁消息，并经 BURN_MODE 帧通知对端。
@@ -261,6 +278,96 @@ class P2PSessionManager @Inject constructor(
             Result.failure(e)
         }
     }
+
+    /**
+     * 发送一个文件（M11.5.3）。来源无关：UI 传入文件名/大小/mime + 打开输入流的 lambda（手机选取器 URI 流
+     * 或隐私文件夹卡内读流）。走文件通道分块加密发送，本地插一条 FILE 气泡（SENDING→SENT/FAILED）。
+     *
+     * 协议：`FILE_BEGIN`(加密元数据 JSON) → N×`FILE_CHUNK`(4B chunkIndex ‖ [P2PCrypto.encryptChunk] 密文) →
+     * `FILE_END`(加密 JSON{msgId, sha256})。每块 nonce/AAD 绑 chunkIndex/isLast，收端可验重排/截断。
+     * `isLast` 由 totalChunks（据 [size] 算）确定，收端用同一 totalChunks 复算 → 两端一致。
+     */
+    suspend fun sendFile(
+        fileName: String, size: Long, mime: String, openStream: () -> InputStream
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val session = _activeSession.value
+            ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
+        val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT }
+            ?: return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
+        val channel = fileChannel
+            ?: return@withContext Result.failure(IllegalStateException("文件通道未建立，无法发送文件"))
+        if (size > MAX_FILE_BYTES) {
+            return@withContext Result.failure(IllegalStateException("文件超过 100MB 上限，无法发送"))
+        }
+        val key = session.sessionKey
+        val msgId = generateMessageId()
+        val fileNonce = P2PCrypto.newFileNonce()
+        val totalChunks = ((size + FILE_CHUNK_BYTES - 1) / FILE_CHUNK_BYTES).toInt().coerceAtLeast(1)
+
+        chatRepo.addFileMessage(contactId, msgId, isMine = true, fileName, size, MessageStatus.SENDING)
+        setProgress(msgId, 0f)
+        _incomingMessages.emit(contactId)
+        try {
+            val beginJson = JSONObject().apply {
+                put("msgId", msgId)
+                put("fileName", fileName)
+                put("fileSize", size)
+                put("mime", mime)
+                put("nonce", Base64.encodeToString(fileNonce, Base64.NO_WRAP))
+                put("chunks", totalChunks)
+            }.toString()
+            channel.sendFrame(FileTransferChannel.FILE_BEGIN, P2PCrypto.encrypt(key, beginJson))
+
+            val digest = MessageDigest.getInstance("SHA-256")
+            openStream().use { input ->
+                var sent = 0L
+                for (index in 0 until totalChunks) {
+                    val want = minOf(FILE_CHUNK_BYTES.toLong(), size - index.toLong() * FILE_CHUNK_BYTES)
+                        .toInt().coerceAtLeast(0)
+                    val chunk = ByteArray(want)
+                    if (want > 0) readFully(input, chunk)
+                    digest.update(chunk)
+                    val isLast = index == totalChunks - 1
+                    val cipher = P2PCrypto.encryptChunk(key, fileNonce, index, isLast, chunk)
+                    channel.sendFrame(FileTransferChannel.FILE_CHUNK, intToBytes(index) + cipher)
+                    sent += want
+                    setProgress(msgId, if (size > 0) sent.toFloat() / size else 1f)
+                }
+            }
+
+            val endJson = JSONObject().apply {
+                put("msgId", msgId)
+                put("sha256", toHex(digest.digest()))
+            }.toString()
+            channel.sendFrame(FileTransferChannel.FILE_END, P2PCrypto.encrypt(key, endJson))
+
+            chatRepo.updateFileStatus(msgId, contactId, MessageStatus.SENT)
+            clearProgress(msgId)
+            _incomingMessages.emit(contactId)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            chatRepo.updateFileStatus(msgId, contactId, MessageStatus.FAILED)
+            clearProgress(msgId)
+            _incomingMessages.emit(contactId)
+            Result.failure(e)
+        }
+    }
+
+    /** 从 [input] 精确读满 [buf]（InputStream.read 可能短读）；流提前结束抛 EOFException。 */
+    private fun readFully(input: InputStream, buf: ByteArray) {
+        var off = 0
+        while (off < buf.size) {
+            val n = input.read(buf, off, buf.size - off)
+            if (n < 0) throw IOException("文件流提前结束 @${off}/${buf.size}")
+            off += n
+        }
+    }
+
+    /** Int → 4 字节大端（文件块帧的 chunkIndex 前缀）。 */
+    private fun intToBytes(v: Int): ByteArray =
+        byteArrayOf((v ushr 24).toByte(), (v ushr 16).toByte(), (v ushr 8).toByte(), v.toByte())
+
+    private fun toHex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
 
     /**
      * 开/关阅后即焚模式（B 阶段，仅在活动会话内有效）：发 BURN_MODE 帧通知对端 → 对端插系统行；
@@ -600,6 +707,10 @@ class P2PSessionManager @Inject constructor(
         const val BURN_TYPE = "BURN"
         /** TCP 连接超时（ms）：不可达/对方未监听时快速失败。 */
         private const val CONNECT_TIMEOUT_MS = 10_000
+        /** 文件分块大小（64KB，与 RealFileSystem.writeFile 分块一致）。 */
+        private const val FILE_CHUNK_BYTES = 64 * 1024
+        /** 文件传输上限（100MB，需求）。 */
+        private const val MAX_FILE_BYTES = 100L * 1024 * 1024
     }
 }
 
