@@ -56,8 +56,11 @@ fun MainScreen(
     )
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     val saveableStateHolder = rememberSaveableStateHolder()
+    // 文件夹 Tab 的结果 Snackbar 由本壳托管，使其落在底部导航栏之上（而非被 FilesScreen 内 FAB 顶起）。
+    val snackbarHostState = remember { SnackbarHostState() }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             NavigationBar(containerColor = CardBg) {
                 navItems.forEachIndexed { index, item ->
@@ -97,7 +100,11 @@ fun MainScreen(
                         onNavigateToSettings = { selectedTab = 3 },
                         onQrCodeClick = onQrCodeClick
                     )
-                    1 -> FilesScreen(onFolderClick = onFolderClick, onCreateFolder = onCreateFolder)
+                    1 -> FilesScreen(
+                        onFolderClick = onFolderClick,
+                        onCreateFolder = onCreateFolder,
+                        snackbarHostState = snackbarHostState
+                    )
                     2 -> ChatListScreen(onContactClick = onContactClick, onQrCodeClick = onQrCodeClick)
                     3 -> SettingsScreen(
                         onLogoutComplete = onLogoutComplete,

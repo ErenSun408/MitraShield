@@ -1005,7 +1005,7 @@ private fun ChatBubble(
                     )
                 ) {
                     val contentColor = if (msg.isMine) Color.White else TextPrimary
-                    Column(modifier = Modifier.padding(12.dp)) {
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)) {
                         if (masked) {
                             // 遮罩：接收方点开前不显示原文（B 阶段）。
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1080,11 +1080,11 @@ private fun ChatBubble(
                             .clip(RoundedCornerShape(6.dp))
                             .clickable { onResend() }
                             .background(Danger.copy(alpha = 0.1f))
-                            .padding(horizontal = 2.dp, vertical = 1.dp)
+                            .padding(horizontal = 3.dp, vertical = 0.dp)
                     ) {
-                        Icon(Icons.Default.ErrorOutline, "未送达", tint = Danger, modifier = Modifier.size(11.dp))
+                        Icon(Icons.Default.ErrorOutline, "未送达", tint = Danger, modifier = Modifier.size(10.dp))
                         Spacer(Modifier.width(2.dp))
-                        Text("未送达", fontSize = 10.sp, color = Danger)
+                        Text("未送达", fontSize = 10.sp, lineHeight = 15.sp, color = Danger)
                     }
                     Spacer(Modifier.width(6.dp))
                 }

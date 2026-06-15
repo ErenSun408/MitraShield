@@ -36,6 +36,7 @@ import java.util.Locale
 fun FilesScreen(
     onFolderClick: (String) -> Unit,
     onCreateFolder: () -> Unit,
+    snackbarHostState: SnackbarHostState,
     fileViewModel: FileViewModel = hiltViewModel()
 ) {
     val uiState by fileViewModel.uiState.collectAsState()
@@ -54,7 +55,7 @@ fun FilesScreen(
     }
 
     // 结果反馈走底部 Snackbar（重命名/删除文件夹、文件夹导出完成）；确认弹窗保持模态。
-    val snackbarHostState = remember { SnackbarHostState() }
+    // snackbarHostState 由 MainScreen 托管 → Snackbar 落在底部导航栏之上、不被本屏 FAB 顶起。
     LaunchedEffect(Unit) {
         fileViewModel.operationResult.collect { r ->
             snackbarHostState.showSnackbar(
@@ -73,7 +74,6 @@ fun FilesScreen(
     }
 
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = onCreateFolder,
