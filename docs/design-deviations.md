@@ -900,4 +900,24 @@ M11.5 较大，按子子阶段拆分逐个提交（[[feedback-commit-per-substag
 
 - M11.6 全部 compileDebugKotlin + assembleDebug 干净、Hilt 图无环；**真卡相关全未真机验证**（容量/SN/SFFormat 真擦/绑定锁死攒到真机阶段）。剩 M11.7（混淆 SDK keep + 正式签名 + 多机型验收）+ M11.5.3 真实文件传输（真机阶段连写带验）。
 
+### 隐私文件夹「文件移动」（`[file-move]`，2026-06-15；v4 无此设计）
+> v4 doc + patch + 需求追溯表对隐私文件夹文件只给「导入/导出/重命名/删除」，**无跨文件夹移动**。本功能为用户 2026-06-15 提出的增量，与重命名/导出同属文件管理。commit `e066ca7`。
+- **接口**：`FileSystemOps.moveFile(fileId, targetFolderId): Result<FileItem>`，`FileRepository` 按 `SecurityCardManager.useRealCard` 路由（同认证/文件层开关）。
+- **真卡**（`RealFileSystem`）：保留原文件名，目标路径 = `目标文件夹路径/原名`；优先隐藏区**跨目录 `SFRename`**（原子、不搬字节），失败回退卡内流式 `copyWithinCard` + `SFDelete` 删源。目标已存在同名文件 / 目标即当前文件夹 → `Result.failure` 友好提示。文件自动继承目标文件夹的拷贝策略（策略本就是文件夹级，无需迁移）。
+- **Mock**（`MockFileSystem`）：改 `parentId`，同名/同夹同样守卫。
+- **UI**（`FileDetailScreen`）：文件 ⋮ 菜单加「移动到…」→ `MoveToFolderDialog` 列出当前文件夹之外的全部文件夹（带拷贝策略标签），点选即移动；无其他文件夹时菜单项灰显「无其他文件夹」。结果走底部 Snackbar，并记一条 `OperationType.FILE_MOVE`（新增枚举值「文件移动」+ 首页操作日志图标 `DriveFileMove`）。
+- ⚠️ 真卡跨目录 `SFRename` 行为本地无法验证 → **真机待验**（移动后源/目标列表正确、移动后文件仍可预览/导出）；模拟模式交互可直接验。
+
+### 离线文件发送（`[file-transfer]`，2026-06-15；行为变更）
+> 原文件发送**连接门控**：未与对方建链时发送按钮灰显/拦截。用户 2026-06-15 决定让文件发送**与文字发送对齐**——未连接时不再拦截，而是「发出去 = 本地标未送达 + 发送方留缓存可预览，接收方完全收不到」。commit `da62eb6`。
+- **新路径** `P2PSessionManager.sendFileOffline()`：**不走 socket**。本地插一条 `isMine` FILE 气泡标 `MessageStatus.FAILED`（下方复用文字那条共享「未送达」红字行）；手机来源在真卡模式下仍把明文流写一份卡内副本 `0:/.sent_<msgId>`（带进度、可取消、复用 `RealFileSystem.writeFile` 的 100MB 上限），供发送方自己预览；隐私文件夹来源文件已在卡上 → 直接用源路径作预览路径、不另留副本。>100MB 在插消息前即失败返回（同在线路径）。
+- **分流** `ChatViewModel.sendFile`：按 `p2pManager.activeSession` 是否匹配当前联系人 → 有则真发送、无则 `sendFileOffline`（与 `sendMessage` 文字分流同构）。
+- **UI**（`ChatDetailScreen`）：发送按钮**去掉连接门控、仅保留真卡门控**（模拟模式无卡写副本仍灰显提示）。
+- **诚实模型不破**：纯 P2P 无服务器、无离线队列、无上线补发 → 接收方收不到、发送方也不会自动重发，仅发送方侧 UX 变化。**代价**：离线发的文件会在卡上落整份副本（单份 ≤100MB），受 7 天 TTL + 设置页清缓存约束（用户已知悉接受）。⚠️ 真机待验。
+
+### 聊天气泡：去预览提示文字 + 长文件名限宽（`[file-transfer]`，2026-06-15）
+> 用户 2026-06-15 两处体感修复。commit `4d94c0b`。
+- **删「👁 点击预览」文字**：发送方自己的图/视频文件气泡不再显该 hint（点击预览功能保留，仅去文字）。`FileBubbleContent` 中 `msg.isMine → null` 短路，不再据 SENT/FAILED 显提示。
+- **长文件名限宽**：原气泡 `Card` 无宽度上限，长文件名撑满 `fillMaxWidth` 的行、把头像顶出屏幕。给消息 `Column` 加 `weight(1f, fill = false)`（最多占「行宽 − 头像」剩余空间、内容短时仍贴合），文件名 `Text` 加 `maxLines = 2 + TextOverflow.Ellipsis`。该限宽对图/视频/语音/文本气泡同样生效（同一受限 Column）。
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
