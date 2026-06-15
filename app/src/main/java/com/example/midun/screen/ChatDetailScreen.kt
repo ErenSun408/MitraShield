@@ -12,7 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,6 +50,7 @@ import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
@@ -333,7 +334,12 @@ fun ChatDetailScreen(
                 }
             }
 
-            items(displayMessages, key = { it.id }) { msg ->
+            itemsIndexed(displayMessages, key = { _, m -> m.id }) { index, msg ->
+                // 微信式时间分隔行：第一条前必显；与上一条间隔 > 5 分钟才显（智能日期格式）。
+                val prev = displayMessages.getOrNull(index - 1)
+                if (prev == null || msg.timestamp - prev.timestamp > TIME_SEPARATOR_GAP_MS) {
+                    TimeSeparator(msg.timestamp)
+                }
                 when {
                     // 「去建立连接」系统提示行（带可点链接）：未建立会话发消息后插入。
                     msg.type == MessageType.SYSTEM && msg.connectPrompt ->
@@ -1174,8 +1180,48 @@ private fun MessageActionItem(
 /** 撤回时限：消息发送 2 分钟内可撤回（微信式），超时撤回键变灰。 */
 private const val RECALL_WINDOW_MS = 2 * 60 * 1000L
 
+/** 时间分隔行阈值：与上一条间隔超过 5 分钟才插入新分隔行（微信式，不刷屏）。 */
+private const val TIME_SEPARATOR_GAP_MS = 5 * 60 * 1000L
+
 private fun formatMessageTime(timestamp: Long): String =
     if (timestamp <= 0L) "" else SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(timestamp))
+
+/** 微信式时间分隔行：居中灰字、智能日期格式（[formatTimeSeparator]）。 */
+@Composable
+private fun TimeSeparator(timestamp: Long) {
+    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
+        Text(formatTimeSeparator(timestamp), fontSize = 11.sp, color = TextSecondary)
+    }
+}
+
+private val sepTimeFormat = SimpleDateFormat("HH:mm", Locale.CHINA)
+private val sepWeekFormat = SimpleDateFormat("EEEE HH:mm", Locale.CHINA)
+private val sepDateFormat = SimpleDateFormat("M月d日 HH:mm", Locale.CHINA)
+private val sepYearFormat = SimpleDateFormat("yyyy年M月d日 HH:mm", Locale.CHINA)
+
+/**
+ * 智能日期格式（24h）：今天=`14:30`；昨天=`昨天 14:30`；2–6 天内=`星期三 14:30`；
+ * 今年更早=`6月10日 14:30`；跨年=`2025年6月10日 14:30`。
+ */
+private fun formatTimeSeparator(ts: Long): String {
+    fun startOfDay(t: Long): Long = Calendar.getInstance().apply {
+        timeInMillis = t
+        set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0)
+    }.timeInMillis
+    val dayMs = 24L * 60 * 60 * 1000
+    val daysAgo = ((startOfDay(System.currentTimeMillis()) - startOfDay(ts)) / dayMs).toInt()
+    val sameYear = Calendar.getInstance().get(Calendar.YEAR) ==
+        Calendar.getInstance().apply { timeInMillis = ts }.get(Calendar.YEAR)
+    val d = Date(ts)
+    return when {
+        daysAgo <= 0 -> sepTimeFormat.format(d)
+        daysAgo == 1 -> "昨天 " + sepTimeFormat.format(d)
+        daysAgo in 2..6 -> sepWeekFormat.format(d)
+        sameYear -> sepDateFormat.format(d)
+        else -> sepYearFormat.format(d)
+    }
+}
 
 private fun formatFileSize(bytes: Long): String = when {
     bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / 1024.0 / 1024.0)
