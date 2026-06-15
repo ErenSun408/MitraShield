@@ -165,8 +165,15 @@ class ChatViewModel @Inject constructor(
     ) {
         val contactId = _currentContactId.value ?: return
         viewModelScope.launch {
-            p2pManager.sendFile(fileName, size, mime, sourceCardPath, openStream)
-                .onFailure { onError("发送失败：${it.message ?: "未知错误"}") }
+            val session = p2pManager.activeSession.value
+            val result = if (session != null && session.contactId == contactId) {
+                // 有活动会话：走文件通道分块加密真发送。
+                p2pManager.sendFile(fileName, size, mime, sourceCardPath, openStream)
+            } else {
+                // 无连接：与文字离线发送对称——本地标「未送达」+ 留发送方预览副本，对方收不到。
+                p2pManager.sendFileOffline(contactId, fileName, size, mime, sourceCardPath, openStream)
+            }
+            result.onFailure { onError("发送失败：${it.message ?: "未知错误"}") }
             reloadCurrent(contactId)
         }
     }

@@ -237,15 +237,14 @@ fun ChatDetailScreen(
                 ) {
                     Box {
                         IconButton(onClick = {
-                            // 文件传输=真卡专属（模拟模式收端无卡可落）；且需先建立连接（文件通道随会话建立）。
+                            // 文件传输=真卡专属（模拟模式无卡可落副本）。未连接时与文字一致：仍可发，
+                            // 本地标「未送达」+ 留发送方预览副本，对方收不到（纯 P2P 无服务器、不补发）。
                             when {
                                 !realCardMode -> sendGateMsg = "文件传输需在真卡模式下使用（当前为模拟模式）。"
-                                !connectedHere -> sendGateMsg = "发送文件需先与对方建立加密连接（扫码或出码连接后再发送）。"
                                 else -> showSourceMenu = true
                             }
                         }) {
-                            val enabled = realCardMode && connectedHere
-                            Icon(Icons.Default.AttachFile, "发送文件", tint = if (enabled) Primary else TextSecondary)
+                            Icon(Icons.Default.AttachFile, "发送文件", tint = if (realCardMode) Primary else TextSecondary)
                         }
                         DropdownMenu(expanded = showSourceMenu, onDismissRequest = { showSourceMenu = false }) {
                             DropdownMenuItem(
@@ -439,7 +438,7 @@ fun ChatDetailScreen(
         )
     }
 
-    // 不能发文件时的提示（非真卡 / 未连接，M11.5.3）。
+    // 不能发文件时的提示（仅非真卡模式；未连接现已允许发送=未送达，不再拦截）。
     sendGateMsg?.let { msg ->
         AlertDialog(
             onDismissRequest = { sendGateMsg = null },
@@ -636,8 +635,9 @@ private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, conten
             val isMedia = ft == FileType.IMAGE || ft == FileType.VIDEO
             val (hint, hintColor) = when {
                 msg.status == MessageStatus.FAILED && !msg.isMine -> "接收失败" to Danger
-                // 发送方：自己发的图/视频有卡内副本 → 可预览。
-                msg.isMine && isMedia && msg.localPath != null && msg.status == MessageStatus.SENT ->
+                // 发送方：自己发的图/视频有卡内副本 → 可预览（已送达 SENT 或离线未送达 FAILED 均可）。
+                msg.isMine && isMedia && msg.localPath != null &&
+                    (msg.status == MessageStatus.SENT || msg.status == MessageStatus.FAILED) ->
                     "👁 点击预览" to contentColor.copy(alpha = 0.7f)
                 !msg.isMine && msg.savedFolderId == null ->
                     (if (isMedia) "👁 点击预览 · 可保存" else "📥 点击保存到文件夹") to Accent

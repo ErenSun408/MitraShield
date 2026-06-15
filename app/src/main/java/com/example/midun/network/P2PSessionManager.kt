@@ -412,6 +412,53 @@ class P2PSessionManager @Inject constructor(
         }
     }
 
+    /**
+     * 离线发送文件（无活动连接时，file-move 后续）：**不走网络**，与文字离线发送对称——发送方本地插一条
+     * FILE 气泡标 [MessageStatus.FAILED]（下方红「未送达」），手机来源在真卡模式下仍把明文流写一份卡内
+     * 副本 `0:/.sent_<msgId>` 供发送方自己预览；接收方**完全收不到**（纯 P2P 无服务器、不在对方上线后补发）。
+     * 隐私文件夹来源文件已在卡上 → 直接以源路径作预览路径、无需另写副本。
+     */
+    suspend fun sendFileOffline(
+        contactId: String, fileName: String, size: Long, mime: String,
+        sourceCardPath: String? = null, openStream: () -> InputStream
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (size > MAX_FILE_BYTES) {
+            return@withContext Result.failure(IllegalStateException("文件超过 100MB 上限，无法发送"))
+        }
+        val msgId = generateMessageId()
+        // 手机来源真卡模式下落副本；隐私文件夹来源（sourceCardPath 非 null）复用源路径，不另留副本。
+        val sentCopyPath = if (sourceCardPath == null && cardManager.useRealCard.value) FileCachePaths.sent(msgId) else null
+        // 有副本要写 → 起始 SENDING 显进度；无副本 → 直接 FAILED 未送达。
+        val initialStatus = if (sentCopyPath != null) MessageStatus.SENDING else MessageStatus.FAILED
+        chatRepo.addFileMessage(contactId, msgId, isMine = true, fileName, size, initialStatus, localPath = sourceCardPath)
+        _incomingMessages.emit(contactId)
+        if (sentCopyPath == null) return@withContext Result.success(Unit)
+
+        sendCancelled = false
+        setProgress(msgId, 0f)
+        return@withContext try {
+            openStream().use { input ->
+                realFileSystem.writeFile(sentCopyPath, input, MAX_FILE_BYTES) { w ->
+                    if (sendCancelled) throw IOException("已取消发送")
+                    setProgress(msgId, if (size > 0) w.toFloat() / size else 1f)
+                }
+            }.getOrThrow()
+            chatRepo.setFileLocalPath(msgId, contactId, sentCopyPath)
+            // 副本就绪可预览，但状态仍是「未送达」（对方收不到）。
+            chatRepo.updateFileStatus(msgId, contactId, MessageStatus.FAILED)
+            clearProgress(msgId)
+            _incomingMessages.emit(contactId)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            // 写副本失败/取消：删半成品；消息仍保留为未送达（只是没有预览副本）。
+            runCatching { realFileSystem.streamDelete(sentCopyPath) }
+            chatRepo.updateFileStatus(msgId, contactId, MessageStatus.FAILED)
+            clearProgress(msgId)
+            _incomingMessages.emit(contactId)
+            Result.success(Unit)
+        }
+    }
+
     /** 从 [input] 精确读满 [buf]（InputStream.read 可能短读）；流提前结束抛 EOFException。 */
     private fun readFully(input: InputStream, buf: ByteArray) {
         var off = 0
