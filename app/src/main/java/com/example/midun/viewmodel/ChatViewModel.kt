@@ -145,9 +145,47 @@ class ChatViewModel @Inject constructor(
                 p2pManager.sendText(content, type)
                 reloadCurrent(contactId)
             } else {
-                // 无连接：仅存本地并标 FAILED（未实时送达，且不会在对方上线后补发）。
+                // 无连接：仅存本地并标 FAILED（未实时送达，且不会在对方上线后补发），
+                // 并在末尾插一条「去建立连接」系统提示（每个断连段只插一条）。
                 chatRepo.sendMessage(contactId, content, type, status = MessageStatus.FAILED)
-                    .onSuccess { reloadCurrent(contactId) }
+                    .onSuccess {
+                        chatRepo.addConnectPromptIfNeeded(contactId)
+                        reloadCurrent(contactId)
+                    }
+            }
+        }
+    }
+
+    /**
+     * 重发一条未送达消息（点气泡下「未送达」触发）：**删除旧消息后作为新消息重发**，从而该消息变为最新
+     * （置于会话底部），「去建立连接」提示也随之挪到最新之下。复用 [sendMessage]/[sendFile] 的在线/离线
+     * 分流。文件从卡内副本（[ChatMessage.localPath]）重新发；无副本则无法重发。
+     */
+    fun resendMessage(msg: ChatMessage, onError: (String) -> Unit = {}) {
+        val contactId = msg.contactId
+        viewModelScope.launch {
+            when (msg.type) {
+                MessageType.TEXT -> {
+                    chatRepo.deleteMessage(msg.id, contactId)
+                    reloadCurrent(contactId)
+                    sendMessage(msg.content, msg.type)
+                }
+                MessageType.FILE -> {
+                    val path = msg.localPath
+                    if (path == null) {
+                        onError("无法重发：文件副本不存在")
+                        return@launch
+                    }
+                    chatRepo.deleteMessage(msg.id, contactId)
+                    reloadCurrent(contactId)
+                    sendFile(
+                        msg.fileName ?: msg.content, msg.fileSize ?: 0L, "application/octet-stream",
+                        openStream = { fileRepository.openFileStream(path) },
+                        sourceCardPath = path,
+                        onError = onError
+                    )
+                }
+                else -> {}
             }
         }
     }
@@ -170,13 +208,16 @@ class ChatViewModel @Inject constructor(
         val contactId = _currentContactId.value ?: return
         viewModelScope.launch {
             val session = p2pManager.activeSession.value
-            val result = if (session != null && session.contactId == contactId) {
+            val online = session != null && session.contactId == contactId
+            val result = if (online) {
                 // 有活动会话：走文件通道分块加密真发送。
                 p2pManager.sendFile(fileName, size, mime, sourceCardPath, openStream)
             } else {
                 // 无连接：与文字离线发送对称——本地标「未送达」+ 留发送方预览副本，对方收不到。
                 p2pManager.sendFileOffline(contactId, fileName, size, mime, sourceCardPath, openStream)
             }
+            // 离线发送同样插一条「去建立连接」提示（与文字一致；文件重发暂不支持）。
+            if (!online) chatRepo.addConnectPromptIfNeeded(contactId)
             result.onFailure { onError("发送失败：${it.message ?: "未知错误"}") }
             reloadCurrent(contactId)
         }

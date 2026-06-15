@@ -201,6 +201,36 @@ class MockChatRepository @Inject constructor(
     }
 
     /**
+     * 未建立会话时发送消息后，确保**当前断连段末尾**有一条「去建立连接」系统提示行（带可点链接）。
+     * 从末尾回扫：遇到「已送达/已收到」的真实消息即停（保留更早的历史提示，重连后不删）；途中遇到本段
+     * 已有的提示则先移除——再在末尾新插一条。效果 = 每个断连段始终只有一条、且永远在最新消息之下。
+     */
+    fun addConnectPromptIfNeeded(contactId: String) {
+        val list = mockMessages.getOrPut(contactId) { mutableListOf() }
+        val iter = list.listIterator(list.size)
+        while (iter.hasPrevious()) {
+            val m = iter.previous()
+            val delivered = (m.isMine && m.status == MessageStatus.SENT) ||
+                (!m.isMine && m.type != MessageType.SYSTEM && m.status == MessageStatus.RECEIVED)
+            if (delivered) break // 上次还连着 → 早于此的提示属历史段，保留
+            if (m.type == MessageType.SYSTEM && m.connectPrompt) iter.remove() // 移除本段旧提示，稍后挪到末尾
+        }
+        list.add(
+            ChatMessage(
+                id = "sys_${System.currentTimeMillis()}_${(0..9999).random()}",
+                contactId = contactId,
+                content = "当前未建立会话，消息无法送达",
+                type = MessageType.SYSTEM,
+                isMine = false,
+                status = MessageStatus.RECEIVED,
+                connectPrompt = true
+            )
+        )
+        updateContactPreview(contactId)
+        persist()
+    }
+
+    /**
      * 焚毁阅后即焚消息（B 阶段）：保留占位但**抹掉原文**并标记 burned，渲染为焚毁墓碑。
      * 与 markRecalled 同为「原地把真实消息变残骸」——保 id 与时间位置，供 BURN 帧按 id 双端引用。
      */
@@ -405,7 +435,9 @@ class MockChatRepository @Inject constructor(
         val index = mockContacts.indexOfFirst { it.id == contactId }
         if (index == -1) return
 
+        // 预览取最后一条**非系统**消息（系统行如「去建立连接」/焚毁开关不应作为会话列表预览）。
         val lastMessage = mockMessages[contactId]
+            ?.filter { it.type != MessageType.SYSTEM }
             ?.maxByOrNull { it.timestamp }
 
         mockContacts[index] = mockContacts[index].copy(

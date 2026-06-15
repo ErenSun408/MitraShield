@@ -61,6 +61,7 @@ fun ChatDetailScreen(
     contactId: String,
     onBack: () -> Unit,
     onOpenProfile: () -> Unit = {},
+    onGoConnect: () -> Unit = {},
     chatViewModel: ChatViewModel = hiltViewModel()
 ) {
     val contacts by chatViewModel.contacts.collectAsState()
@@ -113,6 +114,7 @@ fun ChatDetailScreen(
     }
     var sendGateMsg by remember { mutableStateOf<String?>(null) }     // 不能发文件时的提示文案（非真卡/未连接）
     var cancelTarget by remember { mutableStateOf<ChatMessage?>(null) } // 取消在途发送的目标消息
+    var resendTarget by remember { mutableStateOf<ChatMessage?>(null) } // 点「未送达」重发的目标消息
     var showSourceMenu by remember { mutableStateOf(false) }          // 发送来源菜单（手机/隐私文件夹）
     var showPickDialog by remember { mutableStateOf(false) }          // 隐私文件夹来源选取对话框
     // 手机存储选取器（GetContent）：选中即查名/大小/mime → 流式加密发送。
@@ -144,7 +146,8 @@ fun ChatDetailScreen(
     // 首次进会话**瞬时**跳到底（避免先停在最旧消息、再花约 1s 动画滚下来）；之后新消息才平滑滚动。
     // remember(contactId)：切换联系人时重置，使每个新打开的会话都先瞬时定位。
     var didInitialScroll by remember(contactId) { mutableStateOf(false) }
-    LaunchedEffect(messages.size) {
+    // 同时以末条消息 id 为 key：重发会「删旧+插新」使 size 不变，但末条变化仍需滚到底。
+    LaunchedEffect(messages.size, messages.lastOrNull()?.id) {
         if (messages.isNotEmpty()) {
             if (!didInitialScroll) {
                 listState.scrollToItem(messages.size)
@@ -332,6 +335,9 @@ fun ChatDetailScreen(
 
             items(displayMessages, key = { it.id }) { msg ->
                 when {
+                    // 「去建立连接」系统提示行（带可点链接）：未建立会话发消息后插入。
+                    msg.type == MessageType.SYSTEM && msg.connectPrompt ->
+                        ConnectPromptLine(text = msg.content, onGoConnect = onGoConnect)
                     // 居中系统行：阅后即焚开/关提示（B 阶段）。
                     msg.type == MessageType.SYSTEM -> SystemLine(msg.content)
                     // 撤回墓碑（M10.5）：复用 SystemLine 居中渲染。
@@ -345,6 +351,7 @@ fun ChatDetailScreen(
                         onReveal = { chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl) },
                         onDelete = { chatViewModel.deleteMessage(msg.id) },
                         onRecall = { chatViewModel.recallMessage(msg.id) },
+                        onResend = { resendTarget = msg },
                         onFileTap = {
                             val transferring = transferProgress[msg.id] != null
                             val ft = fileTypeOf(msg.fileName ?: "")
@@ -477,6 +484,35 @@ fun ChatDetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { cancelTarget = null }) { Text("继续发送", color = TextSecondary) }
+            }
+        )
+    }
+
+    // 「未送达」重发确认（微信式）。无会话时重发也只会再失败、提示行已在底部说明。
+    resendTarget?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { resendTarget = null },
+            icon = { Icon(Icons.Default.Refresh, null, tint = Primary) },
+            title = { Text("重发消息") },
+            text = {
+                Text(
+                    "是否重新发送该消息？",
+                    color = TextSecondary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        chatViewModel.resendMessage(msg) { scope.launch { snackbarHostState.showSnackbar(it) } }
+                        resendTarget = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                ) { Text("重发") }
+            },
+            dismissButton = {
+                TextButton(onClick = { resendTarget = null }) { Text("取消", color = TextSecondary) }
             }
         )
     }
@@ -848,6 +884,26 @@ private fun SystemLine(text: String) {
 }
 
 /**
+ * 「去建立连接」系统提示行：未建立会话发消息后插入。居中灰字 + 末尾可点蓝色链接，点击跳扫码/出码连接页。
+ * 作为历史系统消息保留（重连后不删）。
+ */
+@Composable
+private fun ConnectPromptLine(text: String, onGoConnect: () -> Unit) {
+    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.Center) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("$text · ", fontSize = 11.sp, color = TextSecondary, textAlign = TextAlign.Center)
+            Text(
+                "去建立连接",
+                fontSize = 11.sp,
+                color = Primary,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.clickable { onGoConnect() }
+            )
+        }
+    }
+}
+
+/**
  * 焚毁消息的状态标签（B 阶段）：已点开（burnDeadline 非空）显示每秒刷新的剩余倒计时；
  * 未点开时——发送方显示「对方读后焚毁」、接收方（理论上已被遮罩，不会走到此分支）显示静态提示。
  */
@@ -886,6 +942,7 @@ private fun ChatBubble(
     onReveal: () -> Unit,
     onDelete: () -> Unit,
     onRecall: () -> Unit,
+    onResend: () -> Unit = {},
     onFileTap: () -> Unit = {}
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -1001,11 +1058,20 @@ private fun ChatBubble(
             }
             Spacer(Modifier.height(2.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                // 自己发的且未送达：红色「未送达」提示（离线发送或连接已断，且不会在对方上线后补发）。
+                // 自己发的且未送达：红色调小药丸（红底+红字），示意可点 → 点击重发（文字/文件均可，微信式）。
                 if (msg.isMine && msg.status == MessageStatus.FAILED) {
-                    Icon(Icons.Default.ErrorOutline, "未送达", tint = Danger, modifier = Modifier.size(11.dp))
-                    Spacer(Modifier.width(2.dp))
-                    Text("未送达", fontSize = 10.sp, color = Danger)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onResend() }
+                            .background(Danger.copy(alpha = 0.1f))
+                            .padding(horizontal = 2.dp, vertical = 1.dp)
+                    ) {
+                        Icon(Icons.Default.ErrorOutline, "未送达", tint = Danger, modifier = Modifier.size(11.dp))
+                        Spacer(Modifier.width(2.dp))
+                        Text("未送达", fontSize = 10.sp, color = Danger)
+                    }
                     Spacer(Modifier.width(6.dp))
                 }
                 Icon(Icons.Default.Lock, null, tint = TextSecondary.copy(0.5f), modifier = Modifier.size(10.dp))

@@ -103,6 +103,7 @@ class ChatStore @Inject constructor(
         put("recalled", m.recalled); put("burnTtl", m.burnTtl); put("burned", m.burned)
         m.savedFolderId?.let { put("savedFolderId", it) }
         m.localPath?.let { put("localPath", it) }
+        if (m.connectPrompt) put("connectPrompt", true)
     }
 
     private fun messageFromJson(o: JSONObject) = ChatMessage(
@@ -120,7 +121,8 @@ class ChatStore @Inject constructor(
         burnTtl = o.optInt("burnTtl"),
         burned = o.optBoolean("burned"),
         savedFolderId = if (o.has("savedFolderId")) o.getString("savedFolderId") else null,
-        localPath = if (o.has("localPath")) o.getString("localPath") else null
+        localPath = if (o.has("localPath")) o.getString("localPath") else null,
+        connectPrompt = o.optBoolean("connectPrompt")
     )
 
     private companion object {

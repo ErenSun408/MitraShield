@@ -76,7 +76,8 @@ fun NavGraph(navController: NavHostController) {
             ChatDetailScreen(
                 contactId = contactId,
                 onBack = { navController.popBackStack() },
-                onOpenProfile = { navController.navigate(Screen.ContactProfile.createRoute(contactId)) }
+                onOpenProfile = { navController.navigate(Screen.ContactProfile.createRoute(contactId)) },
+                onGoConnect = { navController.navigate(Screen.QrCode.route) }
             )
         }
 
