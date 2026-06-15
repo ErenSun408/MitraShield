@@ -42,6 +42,9 @@ class FileRepository @Inject constructor(
 
     override suspend fun readFileBytes(fileId: String) = active().readFileBytes(fileId)
 
+    override suspend fun moveFile(fileId: String, targetFolderId: String) =
+        active().moveFile(fileId, targetFolderId)
+
     override suspend fun deleteFile(fileId: String) = active().deleteFile(fileId)
     override suspend fun deleteAllFilesInFolder(folderId: String) = active().deleteAllFilesInFolder(folderId)
     override suspend fun deleteFolder(folderId: String) = active().deleteFolder(folderId)

@@ -48,6 +48,13 @@ interface FileSystemOps {
     /** 读取文件全部字节（图片预览用，内存解密）。真卡读隐藏区明文；Mock 无真实内容 → 失败。 */
     suspend fun readFileBytes(fileId: String): Result<ByteArray>
 
+    /**
+     * 把文件 [fileId] 移动到隐私文件夹 [targetFolderId]（保留原文件名）。真卡实现走隐藏区跨目录
+     * `SFRename`（失败回退卡内 read+write+delete）；Mock 实现改 `parentId`。目标文件夹已存在同名文件、
+     * 或目标即当前文件夹时经 [Result] 失败返回。返回移动后的新 [FileItem]（id/parentId 已更新）。
+     */
+    suspend fun moveFile(fileId: String, targetFolderId: String): Result<FileItem>
+
     suspend fun deleteFile(fileId: String): Result<Unit>
     suspend fun deleteAllFilesInFolder(folderId: String): Result<Unit>
     suspend fun deleteFolder(folderId: String): Result<Unit>

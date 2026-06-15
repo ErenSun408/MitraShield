@@ -503,7 +503,9 @@ fun FileDetailScreen(
                     FileItemCard(
                         file = file,
                         copyPolicy = effectiveCopyPolicy,
+                        moveTargets = uiState.folders.filter { it.id != folderId },
                         onRename = { newName -> fileViewModel.renameFile(file.id, newName, folderId) },
+                        onMove = { target -> fileViewModel.moveFile(file.id, file.name, folderId, target.id) },
                         onExportFile = {
                             fileToExport = file
                             exportLauncher.launch(file.name)
@@ -626,7 +628,9 @@ fun FileDetailScreen(
 private fun FileItemCard(
     file: FileItem,
     copyPolicy: CopyPolicy,
+    moveTargets: List<FileItem>,
     onRename: (String) -> Unit,
+    onMove: (FileItem) -> Unit,
     onExportFile: () -> Unit,
     onDelete: () -> Unit,
     onPreview: () -> Unit
@@ -634,6 +638,7 @@ private fun FileItemCard(
     val previewable = file.type == FileType.IMAGE || file.type == FileType.VIDEO
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
+    var showMoveDialog by remember { mutableStateOf(false) }
     var renameText by remember(file.id, file.name) { mutableStateOf(file.name) }
     val canExport = copyPolicy != CopyPolicy.NO_COPY
     val iconData = when (file.type) {
@@ -684,6 +689,26 @@ private fun FileItemCard(
                     DropdownMenuItem(
                         text = {
                             Text(
+                                if (moveTargets.isNotEmpty()) "移动到…" else "无其他文件夹",
+                                color = if (moveTargets.isNotEmpty()) TextPrimary else TextSecondary
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Default.DriveFileMove,
+                                null,
+                                tint = if (moveTargets.isNotEmpty()) Primary else TextSecondary
+                            )
+                        },
+                        enabled = moveTargets.isNotEmpty(),
+                        onClick = {
+                            showMenu = false
+                            showMoveDialog = true
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
                                 if (canExport) "导出" else "不可导出",
                                 color = if (canExport) TextPrimary else TextSecondary
                             )
@@ -726,6 +751,66 @@ private fun FileItemCard(
             }
         )
     }
+
+    if (showMoveDialog) {
+        MoveToFolderDialog(
+            fileName = file.name,
+            targets = moveTargets,
+            onDismiss = { showMoveDialog = false },
+            onSelect = { target ->
+                onMove(target)
+                showMoveDialog = false
+            }
+        )
+    }
+}
+
+/** 选择目标隐私文件夹移动当前文件（M：文件移动增量）。列出当前文件夹之外的全部文件夹，点选即移动。 */
+@Composable
+private fun MoveToFolderDialog(
+    fileName: String,
+    targets: List<FileItem>,
+    onDismiss: () -> Unit,
+    onSelect: (FileItem) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.DriveFileMove, null, tint = Primary) },
+        title = { Text("移动到文件夹") },
+        text = {
+            Column {
+                Text("将「$fileName」移动到：", fontSize = 14.sp, color = TextSecondary)
+                Spacer(Modifier.height(12.dp))
+                targets.forEach { target ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { onSelect(target) }
+                            .padding(vertical = 10.dp, horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))
+                                .background(Primary.copy(0.1f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Folder, null, tint = Primary, modifier = Modifier.size(20.dp))
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(target.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            Text(target.copyPolicy.label(), fontSize = 11.sp, color = TextSecondary)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) }
+        }
+    )
 }
 
 @Composable

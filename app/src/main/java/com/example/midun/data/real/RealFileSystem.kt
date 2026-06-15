@@ -186,6 +186,37 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
         }
     }
 
+    override suspend fun moveFile(fileId: String, targetFolderId: String): Result<FileItem> =
+        withContext(Dispatchers.IO) {
+            // fileId/targetFolderId 均为隐藏区完整路径；保留原文件名，目标路径 = 目标文件夹/原名。
+            val fileName = fileId.substringAfterLast('/')
+            val currentParent = fileId.substringBeforeLast('/')
+            if (currentParent == targetFolderId) {
+                return@withContext Result.failure(IllegalStateException("文件已在该文件夹中"))
+            }
+            val newPath = "$targetFolderId/$fileName"
+            if (exists(newPath)) {
+                return@withContext Result.failure(IllegalStateException("目标文件夹已存在同名文件"))
+            }
+            // 优先跨目录 SFRename（原子、不搬字节）；失败回退卡内流式复制 + 删源。
+            val renamed = synchronized(fsShell) { LibJniFSShell.SFRename(fileId, newPath) }
+            if (!renamed) {
+                if (!copyWithinCard(fileId, newPath)) {
+                    return@withContext Result.failure(IllegalStateException("移动文件失败"))
+                }
+                synchronized(fsShell) { LibJniFSShell.SFDelete(fileId) }
+            }
+            Result.success(
+                FileItem(
+                    id = newPath,
+                    name = fileName,
+                    type = guessFileType(fileName),
+                    size = fileSize(newPath),
+                    parentId = targetFolderId
+                )
+            )
+        }
+
     override suspend fun deleteFile(fileId: String): Result<Unit> = withContext(Dispatchers.IO) {
         if (synchronized(fsShell) { LibJniFSShell.SFDelete(fileId) }) Result.success(Unit)
         else Result.failure(IllegalStateException("删除文件失败"))

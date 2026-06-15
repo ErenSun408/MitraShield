@@ -95,6 +95,20 @@ class MockFileSystem @Inject constructor() : FileSystemOps {
     override suspend fun readFileBytes(fileId: String): Result<ByteArray> =
         Result.failure(UnsupportedOperationException("模拟模式无真实文件内容，无法预览"))
 
+    override suspend fun moveFile(fileId: String, targetFolderId: String): Result<FileItem> {
+        delay(200)
+        val index = mockFiles.indexOfFirst { it.id == fileId }
+        if (index == -1) return Result.failure(Exception("文件不存在"))
+        val file = mockFiles[index]
+        if (file.parentId == targetFolderId) return Result.failure(Exception("文件已在该文件夹中"))
+        if (mockFiles.any { it.parentId == targetFolderId && it.name == file.name }) {
+            return Result.failure(Exception("目标文件夹已存在同名文件"))
+        }
+        val moved = file.copy(parentId = targetFolderId)
+        mockFiles[index] = moved
+        return Result.success(moved)
+    }
+
     override suspend fun deleteFile(fileId: String): Result<Unit> {
         delay(200)
         mockFiles.removeAll { it.id == fileId }

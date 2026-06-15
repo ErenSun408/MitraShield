@@ -326,6 +326,7 @@ private fun iconForOperation(type: OperationType): ImageVector = when (type) {
     OperationType.LOGIN -> Icons.Default.Lock
     OperationType.FILE_IMPORT -> Icons.Default.FileUpload
     OperationType.FILE_EXPORT -> Icons.Default.FileDownload
+    OperationType.FILE_MOVE -> Icons.Default.DriveFileMove
     OperationType.FILE_DELETE -> Icons.Default.DeleteForever
     OperationType.CONNECT -> Icons.Default.Chat
 }

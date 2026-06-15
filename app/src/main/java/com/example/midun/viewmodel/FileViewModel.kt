@@ -164,6 +164,24 @@ class FileViewModel @Inject constructor(
             if (name.isNullOrBlank()) null else name to size
         }
 
+    /**
+     * 把文件 [fileId]（当前在 [fromFolderId]）移动到隐私文件夹 [targetFolderId]。成功后刷新当前文件夹列表
+     * 并记一条操作日志；目标已存在同名文件/目标即当前文件夹等情形由下游失败返回、走 Snackbar 提示。
+     */
+    fun moveFile(fileId: String, fileName: String, fromFolderId: String, targetFolderId: String) {
+        viewModelScope.launch {
+            fileSystem.moveFile(fileId, targetFolderId)
+                .onSuccess {
+                    loadFiles(fromFolderId)
+                    operationLog.record(OperationType.FILE_MOVE, "移动「$fileName」")
+                    _operationResult.emit(OperationResult.Success("文件已移动"))
+                }
+                .onFailure {
+                    _operationResult.emit(OperationResult.Error(it.message ?: "移动失败"))
+                }
+        }
+    }
+
     fun deleteFile(fileId: String, folderId: String) {
         val fileName = _uiState.value.currentFiles.find { it.id == fileId }?.name ?: "文件"
         viewModelScope.launch {

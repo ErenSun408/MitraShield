@@ -10,6 +10,7 @@ enum class OperationType(val label: String) {
     LOGIN("登录认证"),
     FILE_IMPORT("文件导入"),
     FILE_EXPORT("文件导出"),
+    FILE_MOVE("文件移动"),
     FILE_DELETE("文件删除"),
     CONNECT("即时通信"),
 }
