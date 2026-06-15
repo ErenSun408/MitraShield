@@ -141,8 +141,18 @@ fun ChatDetailScreen(
     }
 
     // 自动滚到底：列表含 index 0 的加密横幅，故末条索引 = messages.size。
+    // 首次进会话**瞬时**跳到底（避免先停在最旧消息、再花约 1s 动画滚下来）；之后新消息才平滑滚动。
+    // remember(contactId)：切换联系人时重置，使每个新打开的会话都先瞬时定位。
+    var didInitialScroll by remember(contactId) { mutableStateOf(false) }
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size)
+        if (messages.isNotEmpty()) {
+            if (!didInitialScroll) {
+                listState.scrollToItem(messages.size)
+                didInitialScroll = true
+            } else {
+                listState.animateScrollToItem(messages.size)
+            }
+        }
     }
 
     Scaffold(
