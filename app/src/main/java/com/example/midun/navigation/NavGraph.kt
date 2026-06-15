@@ -97,7 +97,12 @@ fun NavGraph(navController: NavHostController) {
         composable(Screen.QrCode.route) {
             QrCodeScreen(
                 onBack = { navController.popBackStack() },
-                onScanConnected = { navController.popBackStack() }
+                onOpenChat = { contactId ->
+                    // 连接建立（+备注）后进会话，并把 QR 屏弹出栈：从会话返回回到上一层而非二维码页。
+                    navController.navigate(Screen.ChatDetail.createRoute(contactId)) {
+                        popUpTo(Screen.QrCode.route) { inclusive = true }
+                    }
+                }
             )
         }
 

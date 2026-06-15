@@ -92,7 +92,7 @@ private fun shareQrImage(context: Context, bitmap: Bitmap) {
 @Composable
 fun QrCodeScreen(
     onBack: () -> Unit,
-    onScanConnected: () -> Unit = onBack,
+    onOpenChat: (contactId: String) -> Unit = {},
     chatViewModel: ChatViewModel = hiltViewModel()
 ) {
     val mainContext = LocalContext.current
@@ -109,7 +109,11 @@ fun QrCodeScreen(
     // 扫码状态（patch §M6 改动4）
     var scanned by remember { mutableStateOf(false) }
     var scannedContent by remember { mutableStateOf("") }
-    var showRemarkDialog by remember { mutableStateOf(false) }
+    // 新流程：扫到码即连接（占位备注），连上后才弹备注框。
+    var connecting by remember { mutableStateOf(false) }            // 连接进行中（扫码后立即连接）
+    var connectError by remember { mutableStateOf<String?>(null) }  // 连接失败提示（可重扫）
+    // 非空 = 连接已建立且为「新建联系人」→ 弹备注框；已是好友（重连）不弹、直接进会话。
+    var remarkContactId by remember { mutableStateOf<String?>(null) }
 
     // 真实连接状态（M10.3）：源自 P2PSessionManager 单例，A 出码后显示等待/已连接。
     val connectionState by chatViewModel.connectionState.collectAsStateWithLifecycle()
@@ -120,6 +124,13 @@ fun QrCodeScreen(
             if (chatViewModel.connectionState.value != ConnectionState.CONNECTED) {
                 chatViewModel.stopConnection()
             }
+        }
+    }
+
+    // A（出码方）：对端扫码连上并完成身份交换 → 新建联系人则弹备注、已是好友直接进会话。
+    LaunchedEffect(Unit) {
+        chatViewModel.peerIdentified.collect { (contactId, isNew) ->
+            if (isNew) remarkContactId = contactId else onOpenChat(contactId)
         }
     }
 
@@ -404,92 +415,94 @@ fun QrCodeScreen(
                 ScanTab(
                     scanned = scanned,
                     onQrDetected = { value ->
+                        // 新流程：先连接（占位备注=deviceSn），成功后再弹备注；已是好友则直接进会话。
                         scanned = true
                         scannedContent = value
-                        showRemarkDialog = true
+                        connecting = true
+                        connectError = null
+                        chatViewModel.connectToContact(
+                            qrContent = value,
+                            remark = "", // 空 → connectTo 用 deviceSn 占位
+                            onConnected = { contactId, isNew ->
+                                connecting = false
+                                if (isNew) remarkContactId = contactId else onOpenChat(contactId)
+                            },
+                            onError = { msg ->
+                                connecting = false
+                                connectError = msg
+                                scanned = false // 允许重扫
+                            }
+                        )
                     }
                 )
             }
         }
     }
 
-    if (showRemarkDialog) {
-        var remark by remember { mutableStateOf("") }
-        var connecting by remember { mutableStateOf(false) }
-        var connectError by remember { mutableStateOf<String?>(null) }
+    // 扫码后连接进行中：不可关闭的进度提示。
+    if (connecting) {
         AlertDialog(
-            // 强制填备注：点外部 / 返回键不关闭弹框（按用户决策，仍提供"取消"按钮逃生口）。
-            // 连接进行中也禁止点外部关闭。
-            onDismissRequest = { /* no-op：禁止点外部关闭 */ },
+            onDismissRequest = { },
+            icon = { Icon(Icons.Default.Link, null, tint = Primary) },
+            title = { Text("正在连接") },
+            text = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp), color = Primary)
+                    Spacer(Modifier.width(12.dp))
+                    Text("正在建立端到端加密连接…", color = TextSecondary, fontSize = 13.sp)
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    // 连接失败：提示原因，关闭后可重扫（scanned 已置 false）。
+    connectError?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { connectError = null },
+            icon = { Icon(Icons.Default.ErrorOutline, null, tint = Danger) },
+            title = { Text("连接失败") },
+            text = { Text(msg, color = TextSecondary, fontSize = 12.sp) },
+            confirmButton = {
+                TextButton(onClick = { connectError = null }) { Text("知道了", color = Primary) }
+            }
+        )
+    }
+
+    // 连接已建立 + 新建联系人 → 弹备注框（两端共用：B 扫码连上 / A 被扫连上）。填或跳过都进会话。
+    remarkContactId?.let { contactId ->
+        var remark by remember(contactId) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { }, // 已连上，只能用「完成/跳过」离开，避免误触双重导航
             icon = { Icon(Icons.Default.PersonAdd, null, tint = Primary) },
             title = { Text("为联系人添加备注") },
             text = {
                 Column {
-                    Text(
-                        "连接码：${scannedContent.take(40)}${if (scannedContent.length > 40) "..." else ""}",
-                        color = TextSecondary,
-                        fontSize = 12.sp
-                    )
+                    Text("已建立端到端加密连接，给对方设置一个备注名（可跳过）。", color = TextSecondary, fontSize = 12.sp)
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
                         value = remark,
                         onValueChange = { remark = it },
                         label = { Text("备注名称（如：张三）") },
                         singleLine = true,
-                        enabled = !connecting,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    connectError?.let {
-                        Spacer(Modifier.height(8.dp))
-                        Text(it, color = Danger, fontSize = 12.sp)
-                    }
                 }
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        // M10.3：先真实 connectTo + ECDH 握手，成功才建联系人并返回。
-                        connecting = true
-                        connectError = null
-                        chatViewModel.connectToContact(
-                            qrContent = scannedContent,
-                            remark = remark.trim(),
-                            onConnected = {
-                                connecting = false
-                                showRemarkDialog = false
-                                scanned = false
-                                scannedContent = ""
-                                onScanConnected()
-                            },
-                            onError = { msg ->
-                                connecting = false
-                                connectError = msg
-                            }
-                        )
+                        if (remark.isNotBlank()) chatViewModel.updateRemark(contactId, remark.trim())
+                        remarkContactId = null
+                        onOpenChat(contactId)
                     },
-                    enabled = remark.isNotBlank() && !connecting,
                     colors = ButtonDefaults.buttonColors(containerColor = Primary)
-                ) {
-                    if (connecting) {
-                        CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("连接中…")
-                    } else {
-                        Text("确认建链")
-                    }
-                }
+                ) { Text("完成") }
             },
             dismissButton = {
-                // 偏离 patch：patch 无取消按钮（强制填写），实测对误扫无逃生口。连接中禁用。
-                TextButton(
-                    onClick = {
-                        chatViewModel.stopConnection() // 放弃本次连接尝试
-                        showRemarkDialog = false
-                        scanned = false        // 允许重扫
-                        scannedContent = ""
-                    },
-                    enabled = !connecting
-                ) { Text("取消", color = TextSecondary) }
+                TextButton(onClick = { remarkContactId = null; onOpenChat(contactId) }) {
+                    Text("跳过", color = TextSecondary)
+                }
             }
         )
     }

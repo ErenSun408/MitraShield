@@ -69,6 +69,9 @@ class ChatViewModel @Inject constructor(
     // 连接状态：转发 P2PSessionManager（单例）的真实连接状态，跨屏一致（M10.3）。
     val connectionState: StateFlow<P2PSessionManager.ConnectionState> = p2pManager.connectionState
 
+    /** 出码方（A）对端身份确定事件 `(contactId, isNew)`：QR 屏据此弹备注（新建）或直接进会话（已是好友）。 */
+    val peerIdentified = p2pManager.peerIdentified
+
     // 当前活动会话绑定的 contactId（M10.6）：会话详情据此判断「本会话是否已连接」以驱动加密横幅。
     val activeContactId: StateFlow<String?> =
         p2pManager.activeSession
@@ -394,7 +397,7 @@ class ChatViewModel @Inject constructor(
     fun connectToContact(
         qrContent: String,
         remark: String,
-        onConnected: () -> Unit,
+        onConnected: (contactId: String, isNew: Boolean) -> Unit,
         onError: (String) -> Unit
     ) {
         val info = runCatching { ConnectionInfo.fromJson(qrContent) }.getOrNull()
@@ -403,10 +406,12 @@ class ChatViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
+            // 连接前先判断该设备是否已是联系人 → 决定连上后弹备注（新建）还是直接进会话（重连）。
+            val existedBefore = chatRepo.findContactByDevice(info.deviceSn) != null
             p2pManager.connectTo(info, remark.ifBlank { info.deviceSn })
-                .onSuccess {
+                .onSuccess { session ->
                     _contacts.value = chatRepo.getContacts()
-                    onConnected()
+                    onConnected(session.contactId, !existedBefore)
                 }
                 .onFailure { onError(friendlyConnectError(it, info)) }
         }

@@ -88,6 +88,13 @@ class P2PSessionManager @Inject constructor(
     val incomingMessages: SharedFlow<String> = _incomingMessages.asSharedFlow()
 
     /**
+     * 出码方（A）首次收到对端 IDENTITY、绑定联系人后发出 `(contactId, isNew)`：供 QR 屏弹备注/跳会话。
+     * 仅 A 侧（监听方，session.contactId 此前 UNKNOWN）触发；B 侧 contactId 在 connectTo 已定，不经此。
+     */
+    private val _peerIdentified = MutableSharedFlow<Pair<String, Boolean>>(extraBufferCapacity = 4)
+    val peerIdentified: SharedFlow<Pair<String, Boolean>> = _peerIdentified.asSharedFlow()
+
+    /**
      * 文件传输进度（M11.5.3）：messageId → 0f..1f。发送/接收共用，UI 观察以画进度条；完成/失败即移除。
      * 进度是瞬时态、不入库（消息本体只存 SENDING/SENT/RECEIVED/FAILED 状态）。
      */
@@ -229,7 +236,7 @@ class P2PSessionManager @Inject constructor(
                     connect(InetSocketAddress(info.ipv6, port), CONNECT_TIMEOUT_MS)
                 }
                 val handshaken = performConnectorHandshake(socket, info.tempPublicKey)
-                val contactId = bindContact(info.deviceSn, remark)
+                val (contactId, _) = bindContact(info.deviceSn, remark)
                 val session = handshaken.copy(contactId = contactId)
                 _activeSession.value = session
                 _connectionState.value = ConnectionState.CONNECTED
@@ -754,9 +761,11 @@ class P2PSessionManager @Inject constructor(
         when (frame.type) {
             IDENTITY_TYPE -> {
                 // 对端身份帧：建/找联系人并绑定到会话（A 侧由此首次建联系人）。
-                val contactId = bindContact(plaintext, remark = plaintext)
+                val (contactId, isNew) = bindContact(plaintext, remark = plaintext)
                 if (session.contactId == UNKNOWN_CONTACT) {
                     _activeSession.value = session.copy(contactId = contactId)
+                    // A 侧首次身份确定 → 通知 QR 屏（新建则弹备注、否则直接进会话）。
+                    _peerIdentified.emit(contactId to isNew)
                 }
                 _incomingMessages.emit(contactId)
             }
@@ -806,15 +815,18 @@ class P2PSessionManager @Inject constructor(
 
     private fun generateMessageId(): String = "msg_${System.currentTimeMillis()}_${generateRandomHex(3)}"
 
-    /** 按 deviceId 找联系人，没有则按备注新建并记 CONNECT 日志；返回 contactId。 */
-    private suspend fun bindContact(deviceSn: String, remark: String): String {
-        chatRepo.findContactByDevice(deviceSn)?.let { return it.id }
+    /**
+     * 按 deviceId 找联系人，没有则按备注新建并记 CONNECT 日志。返回 `(contactId, isNew)`：
+     * isNew=true 表示本次新建（供 UI 决定是否弹备注框——已是好友的重连不再弹）。
+     */
+    private suspend fun bindContact(deviceSn: String, remark: String): Pair<String, Boolean> {
+        chatRepo.findContactByDevice(deviceSn)?.let { return it.id to false }
         val id = "c_${System.currentTimeMillis()}"
         chatRepo.addContact(
             Contact(id = id, deviceId = deviceSn, remark = remark, lastMessageTime = System.currentTimeMillis())
         )
         operationLog.record(OperationType.CONNECT, "与「$remark」建立加密连接")
-        return id
+        return id to true
     }
 
     /** 接收循环结束（对端断开）：若非主动 disconnect，归位为 DISCONNECTED 并抹密钥。 */
