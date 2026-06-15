@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.navigation.compose.rememberNavController
@@ -100,9 +102,20 @@ class MainActivity : ComponentActivity() {
                     NavGraph(navController = navController)
 
                     if (!isConnected) {
-                        UsbDisconnectedOverlay(onCountdownFinished = {
-                            finishAndRemoveTask()
-                        })
+                        // 放进独立全屏 Dialog 窗口，确保拔卡锁定层盖在所有 AlertDialog（删除确认/选取等）之上——
+                        // Compose 的 AlertDialog 是独立平台窗口，若遮罩只画在 Activity 内容里会被这些 dialog 盖住。
+                        Dialog(
+                            onDismissRequest = {},
+                            properties = DialogProperties(
+                                usePlatformDefaultWidth = false, // 占满全屏
+                                dismissOnBackPress = false,
+                                dismissOnClickOutside = false
+                            )
+                        ) {
+                            UsbDisconnectedOverlay(onCountdownFinished = {
+                                finishAndRemoveTask()
+                            })
+                        }
                     }
 
                     // DEV-only: jump into Init/Login by faking card state then
