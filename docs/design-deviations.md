@@ -931,4 +931,13 @@ M11.5 较大，按子子阶段拆分逐个提交（[[feedback-commit-per-substag
 - **滚动跟随**：重发是"删旧+插新"、`messages.size` 不变，故自动滚到底的 `LaunchedEffect` 追加以末条消息 id 为 key。
 - ⚠️ 真重发/双端送达需两机两卡同 WiFi 验；单机可验 UI/提示去重/导航/样式。
 
+### 扫码建联流程：连接后再备注、双端进会话（`[file-transfer]`，2026-06-15；改 M6.8 设计）
+> 原 M6.8/patch §M6：B 扫码后**先弹备注框**、填完点「确认建链」才连接；A（出码方）被扫连上后**自动以对端 SN 当备注**建联系人、停在二维码页、不跳转。用户 2026-06-15 改为微信式「**先连接成功 → （新建才）弹备注 → 进会话**」，两端一致。commit `8344ee8`。
+- **B（扫码方）**：扫到码**立即连接**（占位备注=二维码里的 deviceSn），显示「正在连接」遮罩；成功后——新建联系人→弹备注框（可跳过）、已是好友→直接进会话；失败显原因、可重扫。**取代**原「先备注后连接 + 强制填写」。
+- **A（出码方）**：新增 `P2PSessionManager.peerIdentified: SharedFlow<(contactId, isNew)>`，在 A 首次收到对端 IDENTITY 帧、`session.contactId` 由 UNKNOWN 绑定为真实 id 时发出；QR 屏监听→新建弹备注、已是好友直接进会话。**补齐**原 A 侧「无备注、不跳转」的缺口。
+- **新建 vs 重连判定**：`bindContact` 返回 `(contactId, isNew)`；`connectToContact` 连接前 `findContactByDevice` 预判 isNew。**已是好友的重连不再弹备注**（用户定，对齐微信）。
+- **占位备注**：保持用 deviceSn（mock 下 DEV-xxxx；真卡为真实 SN）——用户定不改。跳过备注=保留该占位、仍进会话（连接已成、联系人已建，不再像旧流程那样取消=断开重扫）。
+- **导航**：QR 屏 `onScanConnected()`（popBackStack）→ `onOpenChat(contactId)`；NavGraph `navigate(ChatDetail)` + `popUpTo(QrCode, inclusive)`，从会话返回回到上一层而非二维码页。
+- ⚠️ 真双端流程（A 弹框/B 弹框/重连不弹）需两机同 WiFi 验；单机仅验不崩。
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
