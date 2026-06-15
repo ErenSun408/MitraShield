@@ -351,6 +351,9 @@ fun ChatDetailScreen(
                         onReveal = { chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl) },
                         onDelete = { chatViewModel.deleteMessage(msg.id) },
                         onRecall = { chatViewModel.recallMessage(msg.id) },
+                        onRecallBlocked = {
+                            scope.launch { snackbarHostState.showSnackbar("发送超过两分钟的消息不支持撤回") }
+                        },
                         onResend = { resendTarget = msg },
                         onFileTap = {
                             val transferring = transferProgress[msg.id] != null
@@ -942,6 +945,7 @@ private fun ChatBubble(
     onReveal: () -> Unit,
     onDelete: () -> Unit,
     onRecall: () -> Unit,
+    onRecallBlocked: () -> Unit = {},
     onResend: () -> Unit = {},
     onFileTap: () -> Unit = {}
 ) {
@@ -1048,10 +1052,14 @@ private fun ChatBubble(
                 }
                 // 微信式深色横排上下文菜单，锚定气泡下方，非全屏。
                 if (showMenu) {
+                    // 微信式撤回窗口：发送 2 分钟内可撤回，超时撤回键变灰、点击提示不支持。
+                    val recallEnabled = System.currentTimeMillis() - msg.timestamp <= RECALL_WINDOW_MS
                     MessageActionMenu(
                         isMine = msg.isMine,
+                        recallEnabled = recallEnabled,
                         onDelete = onDelete,
                         onRecall = onRecall,
+                        onRecallBlocked = onRecallBlocked,
                         onDismiss = { showMenu = false }
                     )
                 }
@@ -1096,8 +1104,10 @@ private fun ChatBubble(
 @Composable
 private fun MessageActionMenu(
     isMine: Boolean,
+    recallEnabled: Boolean,
     onDelete: () -> Unit,
     onRecall: () -> Unit,
+    onRecallBlocked: () -> Unit,
     onDismiss: () -> Unit
 ) {
     // 把弹窗左上角放到气泡底边下方（+间隙），确保显示在消息下方而非覆盖其上。
@@ -1129,7 +1139,11 @@ private fun MessageActionMenu(
             Row(modifier = Modifier.padding(horizontal = 4.dp, vertical = 6.dp)) {
                 MessageActionItem("删除", Icons.Default.Delete) { onDismiss(); onDelete() }
                 if (isMine) {
-                    MessageActionItem("撤回", Icons.Default.Undo) { onDismiss(); onRecall() }
+                    // 超 2 分钟：撤回项灰显，点击仍触发 → 提示不支持（微信式）。
+                    MessageActionItem("撤回", Icons.Default.Undo, enabled = recallEnabled) {
+                        onDismiss()
+                        if (recallEnabled) onRecall() else onRecallBlocked()
+                    }
                 }
             }
         }
@@ -1137,7 +1151,13 @@ private fun MessageActionMenu(
 }
 
 @Composable
-private fun MessageActionItem(label: String, icon: ImageVector, onClick: () -> Unit) {
+private fun MessageActionItem(
+    label: String,
+    icon: ImageVector,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
+    val tint = if (enabled) Color.White else Color.White.copy(alpha = 0.35f)
     Column(
         modifier = Modifier
             .clip(RoundedCornerShape(6.dp))
@@ -1145,11 +1165,14 @@ private fun MessageActionItem(label: String, icon: ImageVector, onClick: () -> U
             .padding(horizontal = 16.dp, vertical = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Icon(icon, label, tint = Color.White, modifier = Modifier.size(22.dp))
+        Icon(icon, label, tint = tint, modifier = Modifier.size(22.dp))
         Spacer(Modifier.height(4.dp))
-        Text(label, color = Color.White, fontSize = 11.sp)
+        Text(label, color = tint, fontSize = 11.sp)
     }
 }
+
+/** 撤回时限：消息发送 2 分钟内可撤回（微信式），超时撤回键变灰。 */
+private const val RECALL_WINDOW_MS = 2 * 60 * 1000L
 
 private fun formatMessageTime(timestamp: Long): String =
     if (timestamp <= 0L) "" else SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(timestamp))
