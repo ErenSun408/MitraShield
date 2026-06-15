@@ -49,6 +49,10 @@ class ChatViewModel @Inject constructor(
     private val _pickFiles = MutableStateFlow<List<FileItem>>(emptyList())
     val pickFiles: StateFlow<List<FileItem>> = _pickFiles.asStateFlow()
 
+    /** 选取对话框内文件列表是否加载中：切文件夹后置 true，避免闪现上一个文件夹内容（真卡读卡 IO 异步）。 */
+    private val _pickLoading = MutableStateFlow(false)
+    val pickLoading: StateFlow<Boolean> = _pickLoading.asStateFlow()
+
     // 联系人列表：以 MockChatRepository（单例）为唯一数据源。
     // 因 ChatList / ChatDetail / QrCode 各自是不同 NavBackStackEntry，会拿到不同的
     // ChatViewModel 实例（同 M5.3 偏离），故每次进屏 / 改动后都 loadContacts() 重读单例，
@@ -183,9 +187,14 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch { _saveFolders.value = fileRepository.getFolders() }
     }
 
-    /** 加载某隐私文件夹内的文件（发送来源选取器，M11.5.3b）。 */
+    /** 加载某隐私文件夹内的文件（发送来源选取器，M11.5.3b）。先清旧列表 + 置加载态，避免闪现上一个文件夹内容。 */
     fun loadPickFiles(folderId: String) {
-        viewModelScope.launch { _pickFiles.value = fileRepository.getFilesInFolder(folderId) }
+        _pickFiles.value = emptyList()
+        _pickLoading.value = true
+        viewModelScope.launch {
+            _pickFiles.value = fileRepository.getFilesInFolder(folderId)
+            _pickLoading.value = false
+        }
     }
 
     /** 发送一个隐私文件夹内的文件（卡内流式读 → 加密发送，M11.5.3b）。文件已在卡上 → 源路径即发送方预览路径。 */

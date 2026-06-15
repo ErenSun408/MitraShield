@@ -503,6 +503,7 @@ fun ChatDetailScreen(
         PickFromFolderDialog(
             folders = chatViewModel.saveFolders.collectAsState().value,
             files = chatViewModel.pickFiles.collectAsState().value,
+            loading = chatViewModel.pickLoading.collectAsState().value,
             onOpenFolder = { chatViewModel.loadPickFiles(it) },
             onPickFile = { file ->
                 chatViewModel.sendCardFile(file) { scope.launch { snackbarHostState.showSnackbar(it) } }
@@ -534,6 +535,7 @@ fun ChatDetailScreen(
 private fun PickFromFolderDialog(
     folders: List<FileItem>,
     files: List<FileItem>,
+    loading: Boolean,
     onOpenFolder: (folderId: String) -> Unit,
     onPickFile: (FileItem) -> Unit,
     onDismiss: () -> Unit
@@ -544,45 +546,45 @@ private fun PickFromFolderDialog(
         icon = { Icon(Icons.Default.Folder, null, tint = Primary) },
         title = { Text(selectedFolder?.name ?: "选择文件发送") },
         text = {
-            Column(modifier = Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState())) {
+            // 固定宽高：弹框尺寸不随状态或名称长短跳动；内容超高时内部滚动。加载中留空、框体不动。
+            Column(
+                modifier = Modifier
+                    .width(260.dp)
+                    .height(220.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 val folder = selectedFolder
-                if (folder == null) {
-                    if (folders.isEmpty()) {
-                        Text("暂无隐私文件夹。", fontSize = 12.sp, color = TextSecondary)
-                    } else {
+                when {
+                    folder == null && folders.isEmpty() ->
+                        PickEmptyState(Icons.Default.FolderOff, "暂无隐私文件夹")
+                    folder == null ->
                         folders.forEach { f ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth()
-                                    .clickable { selectedFolder = f; onOpenFolder(f.id) }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.Folder, null, tint = Primary, modifier = Modifier.size(20.dp))
-                                Spacer(Modifier.width(10.dp))
-                                Text(f.name, fontSize = 14.sp)
-                            }
+                            PickRow(
+                                icon = Icons.Default.Folder,
+                                iconTint = Primary,
+                                title = f.name,
+                                subtitle = null,
+                                trailing = Icons.Default.ChevronRight,
+                                onClick = { selectedFolder = f; onOpenFolder(f.id) }
+                            )
                         }
-                    }
-                } else {
-                    if (files.isEmpty()) {
-                        Text("该文件夹暂无文件。", fontSize = 12.sp, color = TextSecondary)
-                    } else {
+                    // 加载中：留空（min 高度占位），读完即填；不显「暂无文件」避免误闪。
+                    loading -> Unit
+                    files.isEmpty() ->
+                        PickEmptyState(Icons.Default.InsertDriveFile, "该文件夹暂无文件")
+                    else ->
                         files.forEach { file ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth()
-                                    .clickable { onPickFile(file) }
-                                    .padding(vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.InsertDriveFile, null, tint = Accent, modifier = Modifier.size(20.dp))
-                                Spacer(Modifier.width(10.dp))
-                                Column {
-                                    Text(file.name, fontSize = 14.sp, maxLines = 1)
-                                    Text(formatFileSize(file.size), fontSize = 11.sp, color = TextSecondary)
-                                }
-                            }
+                            val (ic, tint) = fileIconOf(file.name)
+                            PickRow(
+                                icon = ic,
+                                iconTint = tint,
+                                title = file.name,
+                                subtitle = formatFileSize(file.size),
+                                trailing = Icons.Default.Send,
+                                onClick = { onPickFile(file) }
+                            )
                         }
-                    }
                 }
             }
         },
@@ -594,6 +596,67 @@ private fun PickFromFolderDialog(
         }
     )
 }
+
+/** 选取对话框的一行（文件夹/文件通用）：圆角卡片 + 着色图标块 + 标题/副标题 + 尾部图标。 */
+@Composable
+private fun PickRow(
+    icon: ImageVector,
+    iconTint: Color,
+    title: String,
+    subtitle: String?,
+    trailing: ImageVector,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = Surface)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier.size(34.dp).clip(RoundedCornerShape(8.dp)).background(iconTint.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, null, tint = iconTint, modifier = Modifier.size(18.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (subtitle != null) {
+                    Text(subtitle, fontSize = 11.sp, color = TextSecondary, maxLines = 1)
+                }
+            }
+            Spacer(Modifier.width(6.dp))
+            Icon(trailing, null, tint = TextSecondary.copy(alpha = 0.7f), modifier = Modifier.size(18.dp))
+        }
+    }
+}
+
+/** 选取对话框的空态（无文件夹/空文件夹）：居中图标 + 文案，带上下留白避免贴边。 */
+@Composable
+private fun PickEmptyState(icon: ImageVector, text: String) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 28.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(icon, null, tint = TextSecondary.copy(alpha = 0.5f), modifier = Modifier.size(40.dp))
+        Spacer(Modifier.height(8.dp))
+        Text(text, fontSize = 12.sp, color = TextSecondary)
+    }
+}
+
+/** 按文件类型给选取行的图标与着色。 */
+private fun fileIconOf(name: String): Pair<ImageVector, Color> =
+    when (fileTypeOf(name)) {
+        FileType.IMAGE -> Icons.Default.Image to Accent
+        FileType.VIDEO -> Icons.Default.VideoFile to Warning
+        FileType.AUDIO -> Icons.Default.AudioFile to Success
+        FileType.DOCUMENT -> Icons.Default.Description to Primary
+        else -> Icons.Default.InsertDriveFile to TextSecondary
+    }
 
 /** 文件气泡内容（M11.5.3）：名/大小 + 进度条（传输中）/ 状态提示（待保存 / 已保存 / 失败）。 */
 @Composable
