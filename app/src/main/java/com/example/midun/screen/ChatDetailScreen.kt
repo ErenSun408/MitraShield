@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
@@ -613,7 +614,13 @@ private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, conten
             )
             Spacer(Modifier.width(6.dp))
             Column {
-                Text(msg.fileName ?: msg.content, color = contentColor, fontSize = 14.sp)
+                Text(
+                    msg.fileName ?: msg.content,
+                    color = contentColor,
+                    fontSize = 14.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
                 msg.fileSize?.let {
                     Text(formatFileSize(it), color = contentColor.copy(alpha = 0.7f), fontSize = 11.sp)
                 }
@@ -635,10 +642,8 @@ private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, conten
             val isMedia = ft == FileType.IMAGE || ft == FileType.VIDEO
             val (hint, hintColor) = when {
                 msg.status == MessageStatus.FAILED && !msg.isMine -> "接收失败" to Danger
-                // 发送方：自己发的图/视频有卡内副本 → 可预览（已送达 SENT 或离线未送达 FAILED 均可）。
-                msg.isMine && isMedia && msg.localPath != null &&
-                    (msg.status == MessageStatus.SENT || msg.status == MessageStatus.FAILED) ->
-                    "👁 点击预览" to contentColor.copy(alpha = 0.7f)
+                // 发送方自己发的图/视频可点击预览（功能保留），但不再显文字提示。
+                msg.isMine -> null to contentColor
                 !msg.isMine && msg.savedFolderId == null ->
                     (if (isMedia) "👁 点击预览 · 可保存" else "📥 点击保存到文件夹") to Accent
                 msg.savedFolderId != null ->
@@ -835,7 +840,12 @@ private fun ChatBubble(
             Spacer(Modifier.width(8.dp))
         }
 
-        Column(horizontalAlignment = if (msg.isMine) Alignment.End else Alignment.Start) {
+        // weight(fill=false)：气泡最多占用「行宽 - 头像」剩余空间（长文件名不再撑满屏幕挤掉头像），
+        // 内容短时仍贴合内容、不强制铺满。
+        Column(
+            modifier = Modifier.weight(1f, fill = false),
+            horizontalAlignment = if (msg.isMine) Alignment.End else Alignment.Start
+        ) {
             Box {
                 Card(
                     shape = RoundedCornerShape(
