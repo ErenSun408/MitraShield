@@ -38,8 +38,12 @@ class FileRepository @Inject constructor(
     ) = active().importFile(folderId, fileName, size, openStream, onProgress)
         .also { cardManager.refreshCapacity() } // 导入后刷新「已用空间」
 
-    override suspend fun exportFile(fileId: String, fileName: String, output: OutputStream) =
-        active().exportFile(fileId, fileName, output)
+    override suspend fun exportFile(
+        fileId: String,
+        fileName: String,
+        output: OutputStream,
+        onProgress: (written: Long) -> Unit
+    ) = active().exportFile(fileId, fileName, output, onProgress)
 
     override suspend fun readFileBytes(fileId: String) = active().readFileBytes(fileId)
 

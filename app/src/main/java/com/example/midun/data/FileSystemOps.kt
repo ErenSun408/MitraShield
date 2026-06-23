@@ -43,7 +43,12 @@ interface FileSystemOps {
      * 密钥，故「加密拷贝」策略实际也是明文导出——诚实降级）；Mock 无真实字节，写占位说明。返回写出字节数，
      * **不关闭 [output]**（调用方负责）。
      */
-    suspend fun exportFile(fileId: String, fileName: String, output: OutputStream): Result<Long>
+    suspend fun exportFile(
+        fileId: String,
+        fileName: String,
+        output: OutputStream,
+        onProgress: (written: Long) -> Unit = {}
+    ): Result<Long>
 
     /** 读取文件全部字节（图片预览用，内存解密）。真卡读隐藏区明文；Mock 无真实内容 → 失败。 */
     suspend fun readFileBytes(fileId: String): Result<ByteArray>

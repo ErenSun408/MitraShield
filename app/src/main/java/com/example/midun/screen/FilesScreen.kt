@@ -24,8 +24,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ExportProgress
+import com.example.midun.viewmodel.FileByteProgress
 import com.example.midun.viewmodel.FileViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -136,18 +138,62 @@ fun FilesScreen(
     exportProgress?.takeIf { !it.finished }?.let { FolderExportDialog(it) }
 }
 
-/** 文件夹导出进度对话框（M11.5.6）。仅进行中显示，显进度条+计数（不可关）；完成态走 Snackbar。 */
+/** 文件夹导出进度对话框（M11.5.6 + M-files 当前文件字节进度）。仅进行中显示（不可关）；完成态走 Snackbar。 */
 @Composable
 private fun FolderExportDialog(progress: ExportProgress) {
+    val mb = { bytes: Long -> "%.1f MB".format(bytes / 1024f / 1024f) }
     AlertDialog(
         onDismissRequest = { }, // 进行中不可关
         icon = { Icon(Icons.Default.FolderZip, null, tint = Primary) },
         title = { Text("正在导出文件夹") },
         text = {
             Column {
-                LinearProgressIndicator(progress = { progress.fraction }, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(6.dp))
-                Text("已导出 ${progress.done}/${progress.total}", fontSize = 12.sp, color = TextSecondary)
+                Text("已导出 ${progress.done}/${progress.total} 个文件", fontSize = 12.sp, color = TextSecondary)
+                if (progress.currentFile.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(progress.currentFile, fontSize = 13.sp, maxLines = 1)
+                    Spacer(Modifier.height(6.dp))
+                    if (progress.fileTotal > 0) {
+                        LinearProgressIndicator(progress = { progress.fileFraction }, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "${mb(progress.fileWritten)} / ${mb(progress.fileTotal)}",
+                            fontSize = 11.sp, color = TextSecondary
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        },
+        confirmButton = {}
+    )
+}
+
+/** 单文件字节进度对话框（导入/单文件导出共用）。仅进行中显示，不可关。 */
+@Composable
+private fun ByteProgressDialog(title: String, icon: ImageVector, p: FileByteProgress) {
+    val mb = { bytes: Long -> "%.1f MB".format(bytes / 1024f / 1024f) }
+    AlertDialog(
+        onDismissRequest = { },
+        icon = { Icon(icon, null, tint = Primary) },
+        title = { Text(title) },
+        text = {
+            Column {
+                Text(p.fileName, fontSize = 14.sp, maxLines = 1)
+                Spacer(Modifier.height(12.dp))
+                if (p.total > 0) {
+                    LinearProgressIndicator(progress = { p.fraction }, modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "${mb(p.written)} / ${mb(p.total)}（${(p.fraction * 100).toInt()}%）",
+                        fontSize = 12.sp, color = TextSecondary
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    Text("已处理 ${mb(p.written)}", fontSize = 12.sp, color = TextSecondary)
+                }
             }
         },
         confirmButton = {}
@@ -343,12 +389,13 @@ fun FileDetailScreen(
     var fileToExport by remember { mutableStateOf<FileItem?>(null) }
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
         val f = fileToExport
-        if (uri != null && f != null) fileViewModel.exportFileToUri(f.id, f.name, uri)
+        if (uri != null && f != null) fileViewModel.exportFileToUri(f.id, f.name, f.size, uri)
         fileToExport = null
     }
     // 文件夹整体导出：选目标目录 → 建同名子目录写入全部文件（M11.5.6）。
     val exportProgress by fileViewModel.exportProgress.collectAsState()
     val fileExportResult by fileViewModel.fileExportResult.collectAsState()
+    val fileExportProgress by fileViewModel.fileExportProgress.collectAsState()
     val folderExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
         if (treeUri != null && folder != null) fileViewModel.exportFolderToTree(folder.id, folder.name, treeUri)
     }
@@ -565,34 +612,8 @@ fun FileDetailScreen(
         )
     }
 
-    importProgress?.let { p ->
-        val mb = { bytes: Long -> "%.1f MB".format(bytes / 1024f / 1024f) }
-        AlertDialog(
-            onDismissRequest = { }, // 导入中不可取消关闭
-            icon = { Icon(Icons.Default.FileUpload, null, tint = Primary) },
-            title = { Text("正在导入") },
-            text = {
-                Column {
-                    Text(p.fileName, fontSize = 14.sp, maxLines = 1)
-                    Spacer(Modifier.height(12.dp))
-                    if (p.total > 0) {
-                        LinearProgressIndicator(progress = { p.fraction }, modifier = Modifier.fillMaxWidth())
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "${mb(p.written)} / ${mb(p.total)}（${(p.fraction * 100).toInt()}%）",
-                            fontSize = 12.sp,
-                            color = TextSecondary
-                        )
-                    } else {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        Spacer(Modifier.height(6.dp))
-                        Text("已写入 ${mb(p.written)}", fontSize = 12.sp, color = TextSecondary)
-                    }
-                }
-            },
-            confirmButton = {}
-        )
-    }
+    importProgress?.let { ByteProgressDialog("正在导入", Icons.Default.FileUpload, it) }
+    fileExportProgress?.let { ByteProgressDialog("正在导出", Icons.Default.FileDownload, it) }
 
     fileToDelete?.let { file ->
         DeleteConfirmDialog(

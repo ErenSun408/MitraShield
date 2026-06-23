@@ -109,10 +109,11 @@ class RealFileSystem @Inject constructor(
     override suspend fun exportFile(
         fileId: String,
         fileName: String,
-        output: OutputStream
+        output: OutputStream,
+        onProgress: (written: Long) -> Unit
     ): Result<Long> = withContext(Dispatchers.IO) {
         // fileId 即隐藏区完整路径；readFile 对加密用户文件逐块 DEK 解密写出明文（M12.3）。导出==原文。
-        readFile(fileId, output)
+        readFile(fileId, output, onProgress)
     }
 
     override suspend fun readFileBytes(fileId: String): Result<ByteArray> = withContext(Dispatchers.IO) {
@@ -514,35 +515,37 @@ class RealFileSystem @Inject constructor(
      * 用户文件 → 回卷原样读。元数据/缓存侧车（非用户文件路径）一律原始字节，不解密（聊天/日志/keystore/
      * 绑定的 JSON 本就不叠 DEK）。
      */
-    fun readFile(path: String, output: OutputStream): Result<Long> = synchronized(fsShell) {
-        val handle = LibJniFSShell.SFOpen(path)
-        if (handle <= 0) return Result.failure(IllegalStateException("打开文件失败"))
-        try {
-            val dek = cardKeystore.dek()
-            if (isUserFilePath(path) && dek != null) {
-                val head = ByteArray(FileHeader.BYTES)
-                val parsed = if (readFullyFromCard(handle, head)) FileHeader.parse(head) else null
-                if (parsed != null) return decryptTo(handle, parsed, dek, output)
-                LibJniFSShell.SFSeek64(handle, 0, 0) // 旧未加密用户文件：回卷读原始字节
+    fun readFile(path: String, output: OutputStream, onProgress: (Long) -> Unit = {}): Result<Long> =
+        synchronized(fsShell) {
+            val handle = LibJniFSShell.SFOpen(path)
+            if (handle <= 0) return Result.failure(IllegalStateException("打开文件失败"))
+            try {
+                val dek = cardKeystore.dek()
+                if (isUserFilePath(path) && dek != null) {
+                    val head = ByteArray(FileHeader.BYTES)
+                    val parsed = if (readFullyFromCard(handle, head)) FileHeader.parse(head) else null
+                    if (parsed != null) return decryptTo(handle, parsed, dek, output, onProgress)
+                    LibJniFSShell.SFSeek64(handle, 0, 0) // 旧未加密用户文件：回卷读原始字节
+                }
+                var total = 0L
+                val buf = ByteArray(CHUNK)
+                while (true) {
+                    val n = LibJniFSShell.SFRead(handle, buf, 0, CHUNK)
+                    if (n < 0) return Result.failure(IllegalStateException("读取失败 @${total}"))
+                    if (n == 0) break
+                    output.write(buf, 0, n)
+                    total += n
+                    onProgress(total)
+                }
+                Result.success(total)
+            } finally {
+                LibJniFSShell.SFClose(handle)
             }
-            var total = 0L
-            val buf = ByteArray(CHUNK)
-            while (true) {
-                val n = LibJniFSShell.SFRead(handle, buf, 0, CHUNK)
-                if (n < 0) return Result.failure(IllegalStateException("读取失败 @${total}"))
-                if (n == 0) break
-                output.write(buf, 0, n)
-                total += n
-            }
-            Result.success(total)
-        } finally {
-            LibJniFSShell.SFClose(handle)
         }
-    }
 
     /** 逐块 DEK 解密写出（M12.3）。句柄已越过文件头；按 [FileHeader] 的明文大小推每块密文长度。须持 fsShell 锁。 */
     private fun decryptTo(
-        handle: Int, parsed: FileHeader.Parsed, dek: ByteArray, output: OutputStream
+        handle: Int, parsed: FileHeader.Parsed, dek: ByteArray, output: OutputStream, onProgress: (Long) -> Unit
     ): Result<Long> {
         val size = parsed.plaintextSize
         val totalChunks = ((size + CHUNK - 1) / CHUNK).toInt().coerceAtLeast(1)
@@ -557,6 +560,7 @@ class RealFileSystem @Inject constructor(
                 val plain = FileCrypto.decryptChunk(dek, parsed.fileNonce, index, isLast, cipher)
                 output.write(plain)
                 total += plain.size
+                onProgress(total)
             }
             Result.success(total)
         } catch (e: Exception) {

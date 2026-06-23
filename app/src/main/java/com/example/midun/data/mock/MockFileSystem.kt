@@ -83,12 +83,14 @@ class MockFileSystem @Inject constructor() : FileSystemOps {
     override suspend fun exportFile(
         fileId: String,
         fileName: String,
-        output: java.io.OutputStream
+        output: java.io.OutputStream,
+        onProgress: (written: Long) -> Unit
     ): Result<Long> = withContext(Dispatchers.IO) {
         runCatching {
             val bytes = "（模拟数据）$fileName\n当前为模拟模式，无真实文件内容。"
                 .toByteArray(Charsets.UTF_8)
             output.write(bytes)
+            onProgress(bytes.size.toLong())
             bytes.size.toLong()
         }
     }

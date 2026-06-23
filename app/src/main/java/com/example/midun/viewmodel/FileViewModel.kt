@@ -33,8 +33,8 @@ data class FileUiState(
     val isLoading: Boolean = false
 )
 
-/** 文件导入进度（M11.5.1）。`total<=0` 表示来源未报大小，进度不确定。 */
-data class ImportProgress(val fileName: String, val written: Long, val total: Long) {
+/** 单文件字节进度（导入 M11.5.1 / 单文件导出 M-files 共用）。`total<=0` 表示大小未知，进度不确定。 */
+data class FileByteProgress(val fileName: String, val written: Long, val total: Long) {
     val fraction: Float get() = if (total > 0) (written.toFloat() / total).coerceIn(0f, 1f) else 0f
 }
 
@@ -42,15 +42,20 @@ data class ImportProgress(val fileName: String, val written: Long, val total: Lo
 data class ExportResult(val success: Boolean, val message: String)
 
 /**
- * 文件夹导出进度（M11.5.6）。按文件个数计数；[finished] 后 UI 显示 [message] 结果、可关闭。
+ * 文件夹导出进度（M11.5.6 + M-files 增当前文件字节进度）。[done]/[total] 为文件个数计数；[currentFile]/
+ * [fileWritten]/[fileTotal] 为当前正在导出文件的字节进度。[finished] 后 UI 显示 [message] 结果、可关闭。
  */
 data class ExportProgress(
     val done: Int,
     val total: Int,
     val finished: Boolean = false,
-    val message: String = ""
+    val message: String = "",
+    val currentFile: String = "",
+    val fileWritten: Long = 0,
+    val fileTotal: Long = 0
 ) {
     val fraction: Float get() = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else 0f
+    val fileFraction: Float get() = if (fileTotal > 0) (fileWritten.toFloat() / fileTotal).coerceIn(0f, 1f) else 0f
 }
 
 @HiltViewModel
@@ -72,8 +77,12 @@ class FileViewModel @Inject constructor(
     val operationResult: SharedFlow<OperationResult> = _operationResult.asSharedFlow()
 
     /** 非空表示导入进行中，供 UI 显示进度对话框；导入结束（成功/失败）置空。 */
-    private val _importProgress = MutableStateFlow<ImportProgress?>(null)
-    val importProgress: StateFlow<ImportProgress?> = _importProgress.asStateFlow()
+    private val _importProgress = MutableStateFlow<FileByteProgress?>(null)
+    val importProgress: StateFlow<FileByteProgress?> = _importProgress.asStateFlow()
+
+    /** 非空表示单文件导出进行中，供 UI 显示字节进度对话框；结束（成功/失败）置空。 */
+    private val _fileExportProgress = MutableStateFlow<FileByteProgress?>(null)
+    val fileExportProgress: StateFlow<FileByteProgress?> = _fileExportProgress.asStateFlow()
 
     /** 非空表示文件夹导出进行中/已完成（finished=true 显示结果）；由 [clearExportProgress] 关闭。 */
     private val _exportProgress = MutableStateFlow<ExportProgress?>(null)
@@ -133,7 +142,7 @@ class FileViewModel @Inject constructor(
                 _operationResult.emit(OperationResult.Error("文件超过 100MB 上限，无法导入"))
                 return@launch
             }
-            _importProgress.value = ImportProgress(name, 0L, size)
+            _importProgress.value = FileByteProgress(name, 0L, size)
             fileSystem.importFile(
                 folderId = folderId,
                 fileName = name,
@@ -141,7 +150,7 @@ class FileViewModel @Inject constructor(
                 openStream = {
                     context.contentResolver.openInputStream(uri) ?: throw IOException("打开文件失败")
                 },
-                onProgress = { written -> _importProgress.value = ImportProgress(name, written, size) }
+                onProgress = { written -> _importProgress.value = FileByteProgress(name, written, size) }
             ).onSuccess {
                 loadFiles(folderId)
                 operationLog.record(OperationType.FILE_IMPORT, "导入「$name」")
@@ -275,11 +284,14 @@ class FileViewModel @Inject constructor(
      * 把卡内文件 [fileId] 真实导出到系统选取器（`CreateDocument`）返回的 [uri]（M11.5.2）。
      * 真卡读隐藏区明文流式写出；Mock 写占位说明。导出受 UI 拷贝策略门控（NO_COPY 不可见）。
      */
-    fun exportFileToUri(fileId: String, fileName: String, uri: Uri) {
+    fun exportFileToUri(fileId: String, fileName: String, size: Long, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
+            _fileExportProgress.value = FileByteProgress(fileName, 0L, size)
             runCatching {
                 context.contentResolver.openOutputStream(uri)?.use { out ->
-                    fileSystem.exportFile(fileId, fileName, out).getOrThrow()
+                    fileSystem.exportFile(fileId, fileName, out) { written ->
+                        _fileExportProgress.value = FileByteProgress(fileName, written, size)
+                    }.getOrThrow()
                 } ?: throw IOException("无法写入目标位置")
             }.onSuccess {
                 operationLog.record(OperationType.FILE_EXPORT, "导出「$fileName」")
@@ -287,6 +299,7 @@ class FileViewModel @Inject constructor(
             }.onFailure {
                 _fileExportResult.value = ExportResult(false, it.message ?: "导出失败")
             }
+            _fileExportProgress.value = null
         }
     }
 
@@ -315,14 +328,19 @@ class FileViewModel @Inject constructor(
             _exportProgress.value = ExportProgress(0, files.size)
             var ok = 0
             files.forEachIndexed { i, f ->
+                _exportProgress.value = ExportProgress(i, files.size, currentFile = f.name, fileTotal = f.size)
                 runCatching {
                     val target = dir.createFile("application/octet-stream", f.name)
                         ?: throw IOException("创建文件失败：${f.name}")
                     context.contentResolver.openOutputStream(target.uri)?.use { out ->
-                        fileSystem.exportFile(f.id, f.name, out).getOrThrow()
+                        fileSystem.exportFile(f.id, f.name, out) { written ->
+                            _exportProgress.value = ExportProgress(
+                                i, files.size, currentFile = f.name, fileWritten = written, fileTotal = f.size
+                            )
+                        }.getOrThrow()
                     } ?: throw IOException("打开输出失败：${f.name}")
                 }.onSuccess { ok++ }
-                _exportProgress.value = ExportProgress(i + 1, files.size)
+                _exportProgress.value = ExportProgress(i + 1, files.size, currentFile = f.name, fileTotal = f.size)
             }
             operationLog.record(OperationType.FILE_EXPORT, "导出文件夹「$folderName」（$ok 个文件）")
             _exportProgress.value = ExportProgress(
