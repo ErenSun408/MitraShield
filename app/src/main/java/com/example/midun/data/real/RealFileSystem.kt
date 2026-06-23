@@ -3,6 +3,7 @@ package com.example.midun.data.real
 import com.example.midun.crypto.FileCrypto
 import com.example.midun.crypto.FileHeader
 import com.example.midun.data.FileSystemOps
+import com.example.midun.data.FileTypes
 import com.example.midun.data.crypto.CardKeystore
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
@@ -65,13 +66,8 @@ class RealFileSystem @Inject constructor(
         withContext(Dispatchers.IO) {
             listEntries("$folderId/", dirs = false).map { name ->
                 val path = "$folderId/$name"
-                FileItem(
-                    id = path,
-                    name = name,
-                    type = guessFileType(name),
-                    size = fileSize(path),
-                    parentId = folderId
-                )
+                val (size, type) = fileMeta(path) // 一次读文件头拿明文大小 + 类型（M-files）
+                FileItem(id = path, name = name, type = type, size = size, parentId = folderId)
             }
         }
 
@@ -104,8 +100,9 @@ class RealFileSystem @Inject constructor(
             writeFile(path, input, MAX_IMPORT_BYTES, plaintextSize = size, onProgress = onProgress)
         }
         if (result.isFailure) synchronized(fsShell) { LibJniFSShell.SFDelete(path) } // 删半成品
+        // 返回值类型仅占位（UI 成功后重载文件夹，权威类型来自落卡文件头）；扩展名粗判即可。
         result.map {
-            FileItem(id = path, name = fileName, type = guessFileType(fileName), size = it, parentId = folderId)
+            FileItem(id = path, name = fileName, type = FileTypes.fromExtension(fileName), size = it, parentId = folderId)
         }
     }
 
@@ -269,14 +266,9 @@ class RealFileSystem @Inject constructor(
                 }
                 synchronized(fsShell) { LibJniFSShell.SFDelete(fileId) }
             }
+            val (size, type) = fileMeta(newPath) // 移动是密文整体搬运，文件头随之带走 → 读头得正确大小/类型
             Result.success(
-                FileItem(
-                    id = newPath,
-                    name = fileName,
-                    type = guessFileType(fileName),
-                    size = fileSize(newPath),
-                    parentId = targetFolderId
-                )
+                FileItem(id = newPath, name = fileName, type = type, size = size, parentId = targetFolderId)
             )
         }
 
@@ -415,15 +407,21 @@ class RealFileSystem @Inject constructor(
                 blockLen += bytes.size
                 if (blockLen >= IO_CALL) { writeFullyToCard(handle, block, 0, blockLen); blockLen = 0 }
             }
-            appendToBlock(FileHeader.build(size, fileNonce))
+            // 先读首块明文，按内容（magic number）判型——无视文件名 → 对 movie.mp4(3) 等免疫；类型写进文件头。
+            val firstWant = minOf(CHUNK.toLong(), size).toInt().coerceAtLeast(0)
+            val firstPlain = ByteArray(firstWant)
+            if (firstWant > 0) readFully(input, firstPlain)
+            val fileType = FileTypes.detect(firstPlain, path.substringAfterLast('/'))
+            appendToBlock(FileHeader.build(size, fileNonce, fileType))
             var done = 0L
             for (index in 0 until totalChunks) {
-                val want = minOf(CHUNK.toLong(), size - index.toLong() * CHUNK).toInt().coerceAtLeast(0)
-                val plain = ByteArray(want)
-                if (want > 0) readFully(input, plain)
+                val plain = if (index == 0) firstPlain else {
+                    val want = minOf(CHUNK.toLong(), size - index.toLong() * CHUNK).toInt().coerceAtLeast(0)
+                    ByteArray(want).also { if (want > 0) readFully(input, it) }
+                }
                 val isLast = index == totalChunks - 1
                 appendToBlock(FileCrypto.encryptChunk(dek, fileNonce, index, isLast, plain))
-                done += want
+                done += plain.size
                 onProgress(done)
             }
             if (blockLen > 0) writeFullyToCard(handle, block, 0, blockLen) // 冲刷尾块
@@ -584,20 +582,22 @@ class RealFileSystem @Inject constructor(
     }
 
     /**
-     * 读单文件大小（M12.2 大小记账）：`SFGetSize` 只给密文大小，加密用户文件的明文大小存在 [FileHeader] 里
-     * → 读头解析。文件头缺失/MAGIC 不符（未加密的旧文件）回退原始大小。失败回 0。
+     * 读单文件的明文大小 + 类型（M12.2 大小记账 + M-files 类型）：一次读 [FileHeader] 同时拿到两者
+     * （`SFGetSize` 只给密文大小、类型靠后缀易误判，故都存在头里）。文件头缺失/MAGIC 不符（未加密旧文件，
+     * 重导后不应出现）→ 回退原始大小 + 扩展名判型。失败回 (0, OTHER)。
      */
-    private fun fileSize(path: String): Long = synchronized(fsShell) {
+    private fun fileMeta(path: String): Pair<Long, FileType> = synchronized(fsShell) {
         val handle = LibJniFSShell.SFOpen(path)
-        if (handle <= 0) return 0L
+        if (handle <= 0) return 0L to FileType.OTHER
         try {
             val raw = LibJniFSShell.SFGetSize(handle)
-            if (raw < FileHeader.BYTES) return if (raw >= 0) raw else 0L
-            val head = ByteArray(FileHeader.BYTES)
-            if (readFullyFromCard(handle, head)) {
-                FileHeader.parse(head)?.let { return it.plaintextSize }
+            if (raw >= FileHeader.BYTES) {
+                val head = ByteArray(FileHeader.BYTES)
+                if (readFullyFromCard(handle, head)) {
+                    FileHeader.parse(head)?.let { return it.plaintextSize to it.fileType }
+                }
             }
-            raw // 未加密旧文件
+            (if (raw >= 0) raw else 0L) to FileTypes.fromExtension(path.substringAfterLast('/'))
         } finally {
             LibJniFSShell.SFClose(handle)
         }
@@ -658,15 +658,6 @@ class RealFileSystem @Inject constructor(
         val bytes = JSONObject().put("folders", folders).toString().toByteArray(Charsets.UTF_8)
         runCatching { writeFile(META_PATH, bytes.inputStream()) }
     }
-
-    private fun guessFileType(fileName: String): FileType =
-        when (fileName.substringAfterLast('.', "").lowercase()) {
-            "jpg", "jpeg", "png", "gif", "webp" -> FileType.IMAGE
-            "mp4", "mkv", "avi", "mov" -> FileType.VIDEO
-            "mp3", "aac", "wav", "m4a" -> FileType.AUDIO
-            "pdf", "doc", "docx", "txt", "xls", "xlsx" -> FileType.DOCUMENT
-            else -> FileType.OTHER
-        }
 
     private fun fsError(msg: String, code: Int) = IllegalStateException("$msg，错误码=$code")
 

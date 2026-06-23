@@ -849,15 +849,8 @@ private fun SaveToFolderDialog(
     )
 }
 
-/** 按扩展名粗判文件类型（气泡图标 + 是否可预览）。 */
-private fun fileTypeOf(name: String): FileType =
-    when (name.substringAfterLast('.', "").lowercase()) {
-        "jpg", "jpeg", "png", "gif", "webp" -> FileType.IMAGE
-        "mp4", "mkv", "avi", "mov" -> FileType.VIDEO
-        "mp3", "aac", "wav", "m4a" -> FileType.AUDIO
-        "pdf", "doc", "docx", "txt", "xls", "xlsx" -> FileType.DOCUMENT
-        else -> FileType.OTHER
-    }
+/** 按扩展名粗判文件类型（气泡图标 + 是否可预览）。聊天文件无落卡文件头 → 用健壮扩展名解析（剥 `(3)` 等尾巴）。 */
+private fun fileTypeOf(name: String): FileType = com.example.midun.data.FileTypes.fromExtension(name)
 
 /** 从内容 URI 查显示名与大小（OpenableColumns）；查不到名用兜底、大小回 0。 */
 private fun queryNameSize(context: android.content.Context, uri: android.net.Uri): Pair<String, Long> {

@@ -1,6 +1,7 @@
 package com.example.midun.data.mock
 
 import com.example.midun.data.FileSystemOps
+import com.example.midun.data.FileTypes
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
@@ -71,7 +72,7 @@ class MockFileSystem @Inject constructor() : FileSystemOps {
         val file = FileItem(
             id = "file_${System.currentTimeMillis()}",
             name = fileName,
-            type = guessFileType(fileName),
+            type = FileTypes.fromExtension(fileName),
             size = size,
             parentId = folderId
         )
@@ -154,12 +155,4 @@ class MockFileSystem @Inject constructor() : FileSystemOps {
         mockFiles.clear()
     }
 
-    private fun guessFileType(fileName: String): FileType =
-        when (fileName.substringAfterLast('.').lowercase()) {
-            "jpg", "jpeg", "png", "gif", "webp" -> FileType.IMAGE
-            "mp4", "mkv", "avi", "mov" -> FileType.VIDEO
-            "mp3", "aac", "wav", "m4a" -> FileType.AUDIO
-            "pdf", "doc", "docx", "txt", "xls", "xlsx" -> FileType.DOCUMENT
-            else -> FileType.OTHER
-        }
 }

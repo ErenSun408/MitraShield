@@ -1,5 +1,6 @@
 package com.example.midun.crypto
 
+import com.example.midun.data.model.FileType
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -20,7 +21,7 @@ class FileContainerRoundTripTest {
     /** 按写路径拼出卡内字节布局。 */
     private fun buildCardBytes(dek: ByteArray, nonce: ByteArray, plain: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
-        out.write(FileHeader.build(plain.size.toLong(), nonce))
+        out.write(FileHeader.build(plain.size.toLong(), nonce, FileType.VIDEO))
         val total = ((plain.size + chunk - 1) / chunk).coerceAtLeast(1)
         for (i in 0 until total) {
             val start = i * chunk
