@@ -114,7 +114,7 @@ class RealFileSystem @Inject constructor(
         fileName: String,
         output: OutputStream
     ): Result<Long> = withContext(Dispatchers.IO) {
-        // fileId 即隐藏区完整路径；readFile 读出解密后明文（卡内加密存储 → SFRead 已解密）。
+        // fileId 即隐藏区完整路径；readFile 对加密用户文件逐块 DEK 解密写出明文（M12.3）。导出==原文。
         readFile(fileId, output)
     }
 
@@ -154,25 +154,78 @@ class RealFileSystem @Inject constructor(
     fun streamMove(fromPath: String, toPath: String): Boolean =
         synchronized(fsShell) { LibJniFSShell.SFRename(fromPath, toPath) }
 
+    /** 当前 DEK（M12.3：供 [com.example.midun.media.CardFileDataSource] 视频随机读解密用）；未解锁回 null。 */
+    fun currentDek(): ByteArray? = cardKeystore.dek()
+
     /**
      * 打开卡内文件为流式 [InputStream]（M11.5.3：发送隐私文件夹文件时按需读，不把整文件读进内存）。
      * 持有 `SFOpen` 句柄直到 `close()`；调用方须 `use{}`。打开失败抛 [IOException]。
+     *
+     * **M12.3 解密分流**：用户文件（已加密，文件头 MAGIC 命中）返回边读边解密的明文流；元数据/缓存/旧未加密
+     * 文件返回原始字节流（行为同 M11.5.3）。供 P2P 发送隐私文件夹文件时拿到明文（再由会话密钥重新加密上链）。
      */
     fun openCardStream(path: String): InputStream {
         val handle = synchronized(fsShell) { LibJniFSShell.SFOpen(path) }
         if (handle <= 0) throw IOException("打开卡内文件失败：$path")
-        return object : InputStream() {
+        val dek = cardKeystore.dek()
+        if (isUserFilePath(path) && dek != null) {
+            val head = ByteArray(FileHeader.BYTES)
+            val parsed = synchronized(fsShell) {
+                if (readFullyFromCard(handle, head)) FileHeader.parse(head) else null
+            }
+            if (parsed != null) return decryptingCardStream(handle, parsed, dek)
+            synchronized(fsShell) { LibJniFSShell.SFSeek64(handle, 0, 0) } // 旧未加密文件：回卷读原始字节
+        }
+        return rawCardStream(handle)
+    }
+
+    /** 原始字节卡内流（元数据/缓存/旧文件）。 */
+    private fun rawCardStream(handle: Int): InputStream = object : InputStream() {
+        private val single = ByteArray(1)
+        override fun read(): Int = if (read(single, 0, 1) < 0) -1 else single[0].toInt() and 0xFF
+        override fun read(b: ByteArray, off: Int, len: Int): Int =
+            when (val n = streamRead(handle, b, off, len)) {
+                0 -> -1 // EOF
+                in Int.MIN_VALUE..-1 -> throw IOException("读取卡内文件失败")
+                else -> n
+            }
+        override fun close() = streamClose(handle)
+    }
+
+    /** 边读边解密的卡内明文流（M12.3）：逐 64KB 密文块读出 → DEK 解密 → 供明文字节。句柄已越过文件头。 */
+    private fun decryptingCardStream(handle: Int, parsed: FileHeader.Parsed, dek: ByteArray): InputStream =
+        object : InputStream() {
+            private val size = parsed.plaintextSize
+            private val totalChunks = ((size + CHUNK - 1) / CHUNK).toInt().coerceAtLeast(1)
+            private var chunkIndex = 0
+            private var plain = ByteArray(0)
+            private var plainPos = 0
             private val single = ByteArray(1)
+
             override fun read(): Int = if (read(single, 0, 1) < 0) -1 else single[0].toInt() and 0xFF
-            override fun read(b: ByteArray, off: Int, len: Int): Int =
-                when (val n = streamRead(handle, b, off, len)) {
-                    0 -> -1 // EOF
-                    in Int.MIN_VALUE..-1 -> throw IOException("读取卡内文件失败")
-                    else -> n
+
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                if (len == 0) return 0
+                while (plainPos >= plain.size) {
+                    if (chunkIndex >= totalChunks) return -1
+                    val plainLen = minOf(CHUNK.toLong(), size - chunkIndex.toLong() * CHUNK).toInt().coerceAtLeast(0)
+                    val cipher = ByteArray(plainLen + FileCrypto.GCM_TAG_BYTES)
+                    if (!synchronized(fsShell) { readFullyFromCard(handle, cipher) }) {
+                        throw IOException("密文不足 @chunk$chunkIndex")
+                    }
+                    val isLast = chunkIndex == totalChunks - 1
+                    plain = FileCrypto.decryptChunk(dek, parsed.fileNonce, chunkIndex, isLast, cipher)
+                    plainPos = 0
+                    chunkIndex++
                 }
+                val n = minOf(len, plain.size - plainPos)
+                System.arraycopy(plain, plainPos, b, off, n)
+                plainPos += n
+                return n
+            }
+
             override fun close() = streamClose(handle)
         }
-    }
 
     /** 卡内流式复制（[streamMove] 失败时兜底）：64KB 分块读写，不攒整文件在内存。成功回 true。 */
     fun copyWithinCard(fromPath: String, toPath: String): Boolean = synchronized(fsShell) {
@@ -416,12 +469,25 @@ class RealFileSystem @Inject constructor(
         return if (readFile(KEYSTORE_PATH, out).isSuccess) out.toByteArray() else null
     }
 
-    /** 把卡内 [path] 流式读出到 [output]，64KB 分块。返回读出字节数。 */
+    /**
+     * 把卡内 [path] 流式读出到 [output]，64KB 分块。返回读出字节数（加密文件=明文字节数）。
+     *
+     * **M12.3 解密分流**：用户文件且密钥库已解锁 → 读文件头，MAGIC 命中则逐块 DEK 解密写出明文；旧未加密
+     * 用户文件 → 回卷原样读。元数据/缓存侧车（非用户文件路径）一律原始字节，不解密（聊天/日志/keystore/
+     * 绑定的 JSON 本就不叠 DEK）。
+     */
     fun readFile(path: String, output: OutputStream): Result<Long> = synchronized(fsShell) {
         val handle = LibJniFSShell.SFOpen(path)
         if (handle <= 0) return Result.failure(IllegalStateException("打开文件失败"))
-        var total = 0L
         try {
+            val dek = cardKeystore.dek()
+            if (isUserFilePath(path) && dek != null) {
+                val head = ByteArray(FileHeader.BYTES)
+                val parsed = if (readFullyFromCard(handle, head)) FileHeader.parse(head) else null
+                if (parsed != null) return decryptTo(handle, parsed, dek, output)
+                LibJniFSShell.SFSeek64(handle, 0, 0) // 旧未加密用户文件：回卷读原始字节
+            }
+            var total = 0L
             val buf = ByteArray(CHUNK)
             while (true) {
                 val n = LibJniFSShell.SFRead(handle, buf, 0, CHUNK)
@@ -433,6 +499,29 @@ class RealFileSystem @Inject constructor(
             Result.success(total)
         } finally {
             LibJniFSShell.SFClose(handle)
+        }
+    }
+
+    /** 逐块 DEK 解密写出（M12.3）。句柄已越过文件头；按 [FileHeader] 的明文大小推每块密文长度。须持 fsShell 锁。 */
+    private fun decryptTo(
+        handle: Int, parsed: FileHeader.Parsed, dek: ByteArray, output: OutputStream
+    ): Result<Long> {
+        val size = parsed.plaintextSize
+        val totalChunks = ((size + CHUNK - 1) / CHUNK).toInt().coerceAtLeast(1)
+        var total = 0L
+        return try {
+            for (index in 0 until totalChunks) {
+                val plainLen = minOf(CHUNK.toLong(), size - index.toLong() * CHUNK).toInt().coerceAtLeast(0)
+                val cipher = ByteArray(plainLen + FileCrypto.GCM_TAG_BYTES)
+                if (!readFullyFromCard(handle, cipher)) throw IOException("密文不足 @chunk$index")
+                val isLast = index == totalChunks - 1
+                val plain = FileCrypto.decryptChunk(dek, parsed.fileNonce, index, isLast, cipher)
+                output.write(plain)
+                total += plain.size
+            }
+            Result.success(total)
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 

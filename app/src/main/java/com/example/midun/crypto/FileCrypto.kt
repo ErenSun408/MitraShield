@@ -24,8 +24,10 @@ object FileCrypto {
 
     const val KEY_BYTES = 32 // AES-256（DEK / KEK 均 32 字节）
     const val FILE_NONCE_BYTES = 8 // 每文件一份随机前缀，与 chunkIndex 拼成每块 GCM nonce
-    /** 明文分块大小（64KB，与 RealFileSystem.CHUNK 一致；密文每块多 16B GCM tag）。 */
+    /** 明文分块大小（64KB，与 RealFileSystem.CHUNK 一致；密文每块多 [GCM_TAG_BYTES] 的 tag）。 */
     const val CHUNK_PLAIN_BYTES = 64 * 1024
+    /** GCM 认证标签字节数（每块密文 = 明文 + 此）。读路径据此算每块密文长度。 */
+    const val GCM_TAG_BYTES = 16
 
     private const val GCM_IV_BYTES = 12
     private const val GCM_TAG_BITS = 128

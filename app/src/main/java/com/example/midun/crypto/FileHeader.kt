@@ -57,10 +57,8 @@ object FileHeader {
         // 块数按明文大小算（与写入端一致），每块 +16B tag；空文件也有 1 块（纯 tag）。
         val chunks = ((plaintextSize + FileCrypto.CHUNK_PLAIN_BYTES - 1) / FileCrypto.CHUNK_PLAIN_BYTES)
             .coerceAtLeast(1)
-        return cipherSize == BYTES + plaintextSize + chunks * GCM_TAG_BYTES
+        return cipherSize == BYTES + plaintextSize + chunks * FileCrypto.GCM_TAG_BYTES
     }
-
-    private const val GCM_TAG_BYTES = 16
 
     private fun putLongBE(out: ByteArray, off: Int, v: Long) {
         for (i in 0 until 8) out[off + i] = (v ushr (56 - i * 8)).toByte()
