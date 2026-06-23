@@ -65,7 +65,9 @@ class SecurityCardManager @Inject constructor(
      */
     override suspend fun wipeAll() = active().wipeAll().also { if (_useRealCard.value && it.isSuccess) clearRepos() }
     override suspend fun wipeUserData() =
-        active().wipeUserData().also { if (_useRealCard.value && it.isSuccess) clearRepos() }
+        active().wipeUserData().also {
+            if (_useRealCard.value && it.isSuccess) { clearRepos(); real.refreshCapacity() }
+        }
 
     private fun clearRepos() {
         chatRepo.clear()
@@ -101,4 +103,9 @@ class SecurityCardManager @Inject constructor(
 
     /** 真卡序列号（真卡模式下供诊断/后续 P2P deviceSn）。 */
     fun realSerialNumber(): String? = real.getSerialNumber()
+
+    /** 文件增删后刷新真卡「已用空间」（重读 SFGetCapacity → deviceStatus）。模拟模式无操作。 */
+    fun refreshCapacity() {
+        if (_useRealCard.value) real.refreshCapacity()
+    }
 }

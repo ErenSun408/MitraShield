@@ -36,6 +36,7 @@ class FileRepository @Inject constructor(
         openStream: () -> InputStream,
         onProgress: (written: Long) -> Unit
     ) = active().importFile(folderId, fileName, size, openStream, onProgress)
+        .also { cardManager.refreshCapacity() } // 导入后刷新「已用空间」
 
     override suspend fun exportFile(fileId: String, fileName: String, output: OutputStream) =
         active().exportFile(fileId, fileName, output)
@@ -45,9 +46,13 @@ class FileRepository @Inject constructor(
     override suspend fun moveFile(fileId: String, targetFolderId: String) =
         active().moveFile(fileId, targetFolderId)
 
-    override suspend fun deleteFile(fileId: String) = active().deleteFile(fileId)
-    override suspend fun deleteAllFilesInFolder(folderId: String) = active().deleteAllFilesInFolder(folderId)
-    override suspend fun deleteFolder(folderId: String) = active().deleteFolder(folderId)
+    // 删除类操作后刷新「已用空间」（释放了卡内空间）。
+    override suspend fun deleteFile(fileId: String) =
+        active().deleteFile(fileId).also { cardManager.refreshCapacity() }
+    override suspend fun deleteAllFilesInFolder(folderId: String) =
+        active().deleteAllFilesInFolder(folderId).also { cardManager.refreshCapacity() }
+    override suspend fun deleteFolder(folderId: String) =
+        active().deleteFolder(folderId).also { cardManager.refreshCapacity() }
     override suspend fun renameFolder(folderId: String, newName: String) = active().renameFolder(folderId, newName)
     override suspend fun renameFile(fileId: String, newName: String) = active().renameFile(fileId, newName)
 

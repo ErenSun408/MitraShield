@@ -187,6 +187,18 @@ class RealUsbManager @Inject constructor(
         return if (fsShell.SFGetCapacity("0:/", out) == 0) out[0] to out[1] else 0L to 0L
     }
 
+    /**
+     * 重读容量并刷新 deviceStatus 的「已用空间」（导入/删除文件后调用）。容量在登录时读一次后不会自动变，
+     * 故文件增删后须主动刷新，否则首页/设置显示的是登录那一刻的快照。仅在已认证（盘打开）时有效。
+     */
+    fun refreshCapacity() {
+        if (_deviceStatus.value.status != UsbDeviceStatus.AUTHENTICATED) return
+        val (total, free) = readCapacity()
+        if (total > 0) {
+            _deviceStatus.value = _deviceStatus.value.copy(totalBytes = total, freeBytes = free)
+        }
+    }
+
     /** 退出登录：关盘但保留 USB 句柄，状态退回 CONNECTED。 */
     override fun logout() {
         runCatching { fsShell.SFCloseDisk() }
