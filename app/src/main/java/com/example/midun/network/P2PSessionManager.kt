@@ -16,8 +16,10 @@ import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.PrintWriter
 import java.security.MessageDigest
+import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.ServerSocket
@@ -880,22 +882,30 @@ class P2PSessionManager @Inject constructor(
 
     private data class AddressScan(val wifiV4: String?, val globalV6: String?, val all: List<String>)
 
-    /** 单次枚举所有接口，挑出首个 WiFi 私网 IPv4、首个公网 IPv6，并收集全部地址供诊断。 */
+    /**
+     * 单次枚举所有接口，挑出首个 WiFi 私网 IPv4、最优公网 IPv6，并收集全部地址供诊断。
+     *
+     * IPv6 选址（修「二维码地址 ≠ 真实出站地址」）：一个接口在 SLAAC + 隐私扩展(RFC 4941)下会同时挂
+     * 多个全局 IPv6（稳定 EUI-64 + 若干会轮换的临时地址），WiFi/蜂窝双开时还更多。旧逻辑「枚举到第一个
+     * 就用」可能抓到一条系统并不用于出站、运营商也未在路由的地址（现场即「app 显示 240e:576… 而设置/
+     * 出站实为 240e:476…」）。改为优先问内核「出站会用哪条源地址」（[outboundSourceV6]），它与外部/设置
+     * 看到的一致；拿不到（无 IPv6 路由等）才回退到枚举的首个全局单播 IPv6。
+     */
     private fun scanAddresses(): AddressScan {
         var wifiV4: String? = null
-        var globalV6: String? = null
+        var enumeratedV6: String? = null
         val all = mutableListOf<String>()
         NetworkInterface.getNetworkInterfaces()?.toList()?.forEach { iface ->
             val name = iface.name ?: ""
             iface.inetAddresses?.toList()?.forEach { addr ->
                 val host = stripZoneId(addr.hostAddress ?: "?")
                 all += "$name $host"
-                if (addr is Inet6Address && globalV6 == null &&
+                if (addr is Inet6Address && enumeratedV6 == null &&
                     !addr.isLoopbackAddress && !addr.isLinkLocalAddress &&
                     !addr.isSiteLocalAddress && !addr.isMulticastAddress &&
                     !addr.isAnyLocalAddress && isGlobalUnicast(addr)
                 ) {
-                    globalV6 = host
+                    enumeratedV6 = host
                 }
                 if (addr is Inet4Address && wifiV4 == null &&
                     addr.isSiteLocalAddress && isLanInterface(name)
@@ -904,8 +914,31 @@ class P2PSessionManager @Inject constructor(
                 }
             }
         }
-        return AddressScan(wifiV4, globalV6, all)
+        // 内核出站源地址优先（与设置/外部看到的一致）；不可得才回退枚举值。
+        return AddressScan(wifiV4, outboundSourceV6() ?: enumeratedV6, all)
     }
+
+    /**
+     * 问内核：向公网发起 IPv6 连接时会用哪条本机源地址。用一个 [DatagramSocket] `connect()` 一个公网 IPv6
+     * 锚点——UDP connect **不真正发包**，只让内核完成选路由 + 选源地址，随即读 `localAddress` 即得。
+     * 这条地址正是外部服务器/系统设置看到的「真实出站地址」，写进二维码即与对端预期一致。
+     *
+     * 无 IPv6 路由（纯 IPv4/无网）时 connect 抛异常或得到通配地址 → 返回 null，由调用方回退枚举选址。
+     * 锚点用阿里公共 DNS 的 IPv6（[OUTBOUND_PROBE_V6]，国内可达）；端口任意（discard/9，反正不发包）。
+     */
+    private fun outboundSourceV6(): String? = runCatching {
+        DatagramSocket().use { sock ->
+            sock.connect(InetAddress.getByName(OUTBOUND_PROBE_V6), 9)
+            val local = sock.localAddress
+            if (local is Inet6Address && !local.isAnyLocalAddress &&
+                !local.isLoopbackAddress && !local.isLinkLocalAddress && isGlobalUnicast(local)
+            ) {
+                stripZoneId(local.hostAddress ?: return@runCatching null)
+            } else {
+                null
+            }
+        }
+    }.getOrNull()
 
     /**
      * 本机网络诊断快照（M10 真机排障）：UI 在出码/连接失败时显示，一眼定位用哪条路径、对端能否到达。
@@ -949,6 +982,8 @@ class P2PSessionManager @Inject constructor(
         const val BURN_TYPE = "BURN"
         /** TCP 连接超时（ms）：不可达/对方未监听时快速失败。 */
         private const val CONNECT_TIMEOUT_MS = 10_000
+        /** 出站源地址探测锚点：阿里公共 DNS 的 IPv6（国内可达）。UDP connect 不发包，仅用于让内核选源地址。 */
+        private const val OUTBOUND_PROBE_V6 = "2400:3200::1"
         /** 文件分块大小（64KB，与 RealFileSystem.writeFile 分块一致）。 */
         private const val FILE_CHUNK_BYTES = 64 * 1024
         /** 文件传输上限（100MB，需求）。 */
