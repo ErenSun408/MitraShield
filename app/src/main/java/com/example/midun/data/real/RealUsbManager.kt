@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import com.example.midun.data.UsbCardOps
+import com.example.midun.data.crypto.CardKeystore
 import com.example.midun.data.model.DeviceInfo
 import com.example.midun.data.model.UsbDeviceStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -39,7 +40,9 @@ import seczure.fsudisk.fsshell.LibJniFSShell
 @Singleton
 class RealUsbManager @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val realFileSystem: RealFileSystem
+    private val realFileSystem: RealFileSystem,
+    // App 层文件密钥库（M12.1）：init 生成落卡、auth 解锁载入 DEK、登出/拔卡/恢复出厂锁定清零。
+    private val cardKeystore: CardKeystore
 ) : UsbCardOps {
 
     private val fsShell: LibJniFSShell = FSShellInstance.getLibFSShellInstance()
@@ -125,9 +128,13 @@ class RealUsbManager @Inject constructor(
             }
             // 绑定（M11.6.6）：选中绑定则写卡内 0:/.bind = 本机 androidId（需盘已打开）。
             val boundId = if (bindDevice) androidId().also { writeBoundId(it) } else null
+            // App 层密钥库（M12.1）：生成全新 DEK/KEK，原始落卡 0:/.midun_keystore（盘已打开、关盘前）。
+            // DEK 同时入内存，但本次 init 完会关盘+清会话 → 登录时再由 authenticate 载入。
+            realFileSystem.saveKeystoreRaw(cardKeystore.createNew())
             val sn = readSn() // 盘已打开，补读真实 SN
             // 关盘，回到「已初始化、未认证」态 → 登录页用新密码 SFOpenDiskEx 重新干净开盘。
             runCatching { fsShell.SFCloseDisk() }
+            cardKeystore.lock() // init 后即关盘，DEK 不应留存——登录时重新载入
             sessionPwdHash = null
             _deviceStatus.value = _deviceStatus.value.copy(
                 isInitialized = true,
@@ -155,6 +162,9 @@ class RealUsbManager @Inject constructor(
             return@withContext Result.failure(IllegalStateException("此卡已绑定其他设备，无法在本机登录"))
         }
         sessionPwdHash = sha256(password)
+        // App 层密钥库（M12.1）：开盘后载入 keystore、解出 DEK 驻内存。旧卡无 keystore → load 返回 false、
+        // 保持锁定（M12.4 决定旧卡处置：清旧文件 + 建 keystore）。不阻断登录。
+        cardKeystore.load(realFileSystem.loadKeystoreRaw())
         val sn = readSn() // 盘已打开，补读真实 SN（已初始化卡在 connectUsb 阶段读不到）
         val (total, free) = readCapacity()
         _deviceStatus.value = _deviceStatus.value.copy(
@@ -181,6 +191,7 @@ class RealUsbManager @Inject constructor(
     override fun logout() {
         runCatching { fsShell.SFCloseDisk() }
         sessionPwdHash = null
+        cardKeystore.lock() // 锁定后清内存 DEK（M12.1）
         _deviceStatus.value = _deviceStatus.value.copy(status = UsbDeviceStatus.CONNECTED)
     }
 
@@ -191,6 +202,7 @@ class RealUsbManager @Inject constructor(
         usbHelper = null
         diskName = null
         sessionPwdHash = null
+        cardKeystore.lock() // 拔卡清内存 DEK（M12.1）
         _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
         Result.success(Unit)
     }
@@ -238,6 +250,7 @@ class RealUsbManager @Inject constructor(
     private fun finishReset() {
         runCatching { fsShell.SFCloseDisk() }
         sessionPwdHash = null
+        cardKeystore.lock() // 恢复出厂：keystore 已被格式化/清除，清内存 DEK（M12.1），下次 init 重生成
         _deviceStatus.value = DeviceInfo(
             isInitialized = false,
             status = UsbDeviceStatus.CONNECTED,

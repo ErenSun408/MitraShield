@@ -311,6 +311,20 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
         }
     }
 
+    // —— App 层密钥库 raw I/O（M12.1）——
+    // keystore 存 DEK/KEK，必须以**原始字节**落卡/读卡：它本身就是「解密用户文件的密钥」，绝不能再被 DEK
+    // 加密（鸡生蛋）。M12.2 给 writeFile/readFile 加 DEK 透明加解密时，[KEYSTORE_PATH] 必须在排除名单内。
+
+    /** 原始写 keystore blob 到 `0:/.midun_keystore`（不经 DEK 加密）。需盘已打开。 */
+    fun saveKeystoreRaw(bytes: ByteArray): Boolean =
+        writeFile(KEYSTORE_PATH, bytes.inputStream()).isSuccess
+
+    /** 原始读 keystore blob；不存在（旧卡未初始化此格式）返回 null。需盘已打开。 */
+    fun loadKeystoreRaw(): ByteArray? {
+        val out = ByteArrayOutputStream()
+        return if (readFile(KEYSTORE_PATH, out).isSuccess) out.toByteArray() else null
+    }
+
     /** 把卡内 [path] 流式读出到 [output]，64KB 分块。返回读出字节数。 */
     fun readFile(path: String, output: OutputStream): Result<Long> = synchronized(fsShell) {
         val handle = LibJniFSShell.SFOpen(path)
@@ -418,6 +432,7 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
     private companion object {
         const val ROOT = "0:/"
         const val META_PATH = "0:/.midun_meta.json"
+        const val KEYSTORE_PATH = "0:/.midun_keystore" // App 层 DEK/KEK 密钥库（raw，永不 DEK 加密）
         const val CHUNK = 64 * 1024
         const val MAX_IMPORT_BYTES = 100L * 1024 * 1024 // 100MB 导入上限（需求）
 
