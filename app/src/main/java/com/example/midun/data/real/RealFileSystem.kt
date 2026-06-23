@@ -197,6 +197,7 @@ class RealFileSystem @Inject constructor(
         object : InputStream() {
             private val size = parsed.plaintextSize
             private val totalChunks = ((size + CHUNK - 1) / CHUNK).toInt().coerceAtLeast(1)
+            private val reader = BufferedCardReader(handle, IO_CALL) // 大块读卡，逐块解密
             private var chunkIndex = 0
             private var plain = ByteArray(0)
             private var plainPos = 0
@@ -210,7 +211,7 @@ class RealFileSystem @Inject constructor(
                     if (chunkIndex >= totalChunks) return -1
                     val plainLen = minOf(CHUNK.toLong(), size - chunkIndex.toLong() * CHUNK).toInt().coerceAtLeast(0)
                     val cipher = ByteArray(plainLen + FileCrypto.GCM_TAG_BYTES)
-                    if (!synchronized(fsShell) { readFullyFromCard(handle, cipher) }) {
+                    if (!synchronized(fsShell) { reader.readExact(cipher) }) {
                         throw IOException("密文不足 @chunk$chunkIndex")
                     }
                     val isLast = chunkIndex == totalChunks - 1
@@ -405,18 +406,27 @@ class RealFileSystem @Inject constructor(
         if (handle <= 0) return Result.failure(fsError("创建文件失败", handle))
         try {
             val fileNonce = FileCrypto.newFileNonce()
-            writeFullyToCard(handle, FileHeader.build(size, fileNonce))
             val totalChunks = ((size + CHUNK - 1) / CHUNK).toInt().coerceAtLeast(1)
+            // 攒批写卡：加密块先进缓冲，满 IO_CALL 再一次性下发，把 SFWrite 次数从「每 16KB 一次」降到「每 64KB 一次」。
+            val block = ByteArray(IO_CALL + CHUNK + FileCrypto.GCM_TAG_BYTES)
+            var blockLen = 0
+            fun appendToBlock(bytes: ByteArray) {
+                System.arraycopy(bytes, 0, block, blockLen, bytes.size)
+                blockLen += bytes.size
+                if (blockLen >= IO_CALL) { writeFullyToCard(handle, block, 0, blockLen); blockLen = 0 }
+            }
+            appendToBlock(FileHeader.build(size, fileNonce))
             var done = 0L
             for (index in 0 until totalChunks) {
                 val want = minOf(CHUNK.toLong(), size - index.toLong() * CHUNK).toInt().coerceAtLeast(0)
                 val plain = ByteArray(want)
                 if (want > 0) readFully(input, plain)
                 val isLast = index == totalChunks - 1
-                writeFullyToCard(handle, FileCrypto.encryptChunk(dek, fileNonce, index, isLast, plain))
+                appendToBlock(FileCrypto.encryptChunk(dek, fileNonce, index, isLast, plain))
                 done += want
                 onProgress(done)
             }
+            if (blockLen > 0) writeFullyToCard(handle, block, 0, blockLen) // 冲刷尾块
             Result.success(size)
         } catch (e: Exception) {
             Result.failure(e)
@@ -445,13 +455,43 @@ class RealFileSystem @Inject constructor(
         }
     }
 
-    /** 把 [bytes] 全量写入卡句柄（SFWrite 可能短写）；失败/无进展抛 [IOException]。须在 fsShell 锁内调用。 */
-    private fun writeFullyToCard(handle: Int, bytes: ByteArray) {
-        var off = 0
-        while (off < bytes.size) {
-            val w = LibJniFSShell.SFWrite(handle, bytes, off, bytes.size - off)
-            if (w <= 0) throw IOException("写入卡失败/无进展 @$off/${bytes.size}")
-            off += w
+    /** 把 [bytes] 的 [off,off+len) 全量写入卡句柄；每次 SFWrite 不超过 [IO_CALL]（沿用真机验证的单调用大小，
+     * 避免给原生传超大 len）。SFWrite 可能短写故循环。失败/无进展抛 [IOException]。须在 fsShell 锁内调用。 */
+    private fun writeFullyToCard(handle: Int, bytes: ByteArray, off: Int = 0, len: Int = bytes.size) {
+        var p = off
+        val end = off + len
+        while (p < end) {
+            val w = LibJniFSShell.SFWrite(handle, bytes, p, minOf(end - p, IO_CALL))
+            if (w <= 0) throw IOException("写入卡失败/无进展 @$p/$end")
+            p += w
+        }
+    }
+
+    /**
+     * 缓冲读卡（M12.3 优化）：按 [IO_CALL] 大块 SFRead 进内部缓冲，逐次取出小加密块——把 SFRead 次数从
+     * 「每 16KB 一次」降到「每 64KB 一次」，导出/发送等顺序读不因小分块而变慢。每个实例独占一个卡句柄、
+     * 顺序消费；[readExact] 须在 fsShell 锁内调用。
+     */
+    private class BufferedCardReader(private val handle: Int, capacity: Int) {
+        private val buf = ByteArray(capacity)
+        private var pos = 0
+        private var lim = 0
+
+        /** 从卡精确取满 [out]；卡内剩余不足返回 false。 */
+        fun readExact(out: ByteArray): Boolean {
+            var o = 0
+            while (o < out.size) {
+                if (pos >= lim) {
+                    val n = LibJniFSShell.SFRead(handle, buf, 0, buf.size)
+                    if (n <= 0) return false
+                    pos = 0; lim = n
+                }
+                val take = minOf(out.size - o, lim - pos)
+                System.arraycopy(buf, pos, out, o, take)
+                pos += take
+                o += take
+            }
+            return true
         }
     }
 
@@ -508,12 +548,13 @@ class RealFileSystem @Inject constructor(
     ): Result<Long> {
         val size = parsed.plaintextSize
         val totalChunks = ((size + CHUNK - 1) / CHUNK).toInt().coerceAtLeast(1)
+        val reader = BufferedCardReader(handle, IO_CALL) // 大块读卡，逐块解密（少 SFRead 次数）
         var total = 0L
         return try {
             for (index in 0 until totalChunks) {
                 val plainLen = minOf(CHUNK.toLong(), size - index.toLong() * CHUNK).toInt().coerceAtLeast(0)
                 val cipher = ByteArray(plainLen + FileCrypto.GCM_TAG_BYTES)
-                if (!readFullyFromCard(handle, cipher)) throw IOException("密文不足 @chunk$index")
+                if (!reader.readExact(cipher)) throw IOException("密文不足 @chunk$index")
                 val isLast = index == totalChunks - 1
                 val plain = FileCrypto.decryptChunk(dek, parsed.fileNonce, index, isLast, cipher)
                 output.write(plain)
@@ -636,6 +677,10 @@ class RealFileSystem @Inject constructor(
         // 加密分块大小取 FileCrypto 的单一来源（消除「写/读两个 64KB 常量须保持一致」的隐患）；同时复用作
         // 原始拷贝/读写的 I/O 缓冲（缓冲大小非格式关键，取同值即可）。
         const val CHUNK = FileCrypto.CHUNK_PLAIN_BYTES
+        // 卡 I/O 块大小（与加密块解耦）：单次 SFRead/SFWrite 上限 + 加密读写的攒批阈值。16KB 加密块若每块各
+        // 调一次 SFRead/SFWrite，USB 来回次数会是 64KB 块的 4 倍 → 导入/导出变慢；攒够 64KB 再下发即恢复原速，
+        // 而拖拽仍只读单个 16KB 块。64KB 沿用 M11.5 已在真机验证的单调用大小。
+        const val IO_CALL = 64 * 1024
         const val MAX_IMPORT_BYTES = 100L * 1024 * 1024 // 100MB 导入上限（需求）
 
     }
