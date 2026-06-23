@@ -1,6 +1,9 @@
 package com.example.midun.data.real
 
+import com.example.midun.crypto.FileCrypto
+import com.example.midun.crypto.FileHeader
 import com.example.midun.data.FileSystemOps
+import com.example.midun.data.crypto.CardKeystore
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
@@ -35,7 +38,10 @@ import seczure.fsudisk.fsshell.LibJniFSShell
  * 中文文件名编码经 `GetFileList` 走 UTF-16LE，写入路径直传 String（同官方 Demo），编码兼容性留真机确认。
  */
 @Singleton
-class RealFileSystem @Inject constructor() : FileSystemOps {
+class RealFileSystem @Inject constructor(
+    // App 层文件密钥库（M12.2）：用户文件写路径用其 DEK 加密；锁定/旧卡（dek=null）回退原始字节。
+    private val cardKeystore: CardKeystore
+) : FileSystemOps {
 
     private val fsShell: LibJniFSShell = FSShellInstance.getLibFSShellInstance()
 
@@ -93,7 +99,10 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
     ): Result<FileItem> = withContext(Dispatchers.IO) {
         val path = "$folderId/$fileName"
         // M11.5.1：真实字节流式导入——64KB 分块写入隐藏区，100MB 上限兜底。
-        val result = openStream().use { input -> writeFile(path, input, MAX_IMPORT_BYTES, onProgress) }
+        // M12.2：用户文件路径 → writeFile 用 DEK 加密落卡（需明文大小写文件头，传 plaintextSize）。
+        val result = openStream().use { input ->
+            writeFile(path, input, MAX_IMPORT_BYTES, plaintextSize = size, onProgress = onProgress)
+        }
         if (result.isFailure) synchronized(fsShell) { LibJniFSShell.SFDelete(path) } // 删半成品
         result.map {
             FileItem(id = path, name = fileName, type = guessFileType(fileName), size = it, parentId = folderId)
@@ -280,12 +289,33 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
     /**
      * 把 [input] 流式写入卡内 [path]，64KB 分块，[onProgress] 回报累计字节。超 [maxBytes] 则中止、删半成品
      * 并失败（导入 100MB 上限兜底）。返回写入字节数。**不负责关闭 [input]**（调用方 `use`）。
+     *
+     * **M12.2 加密分流**：若 [path] 是用户文件（[isUserFilePath]）且密钥库已解锁（DEK 在内存），走
+     * [writeEncrypted] 用 DEK 加密落卡——此时必须传 [plaintextSize]（写文件头）。否则（元数据/缓存侧车、
+     * 旧卡未解锁）走原始字节写入，行为同 M11.5。
      */
     fun writeFile(
         path: String,
         input: InputStream,
         maxBytes: Long = Long.MAX_VALUE,
+        plaintextSize: Long? = null,
         onProgress: (Long) -> Unit = {}
+    ): Result<Long> {
+        val dek = cardKeystore.dek()
+        if (dek != null && isUserFilePath(path)) {
+            val size = plaintextSize
+                ?: return Result.failure(IllegalStateException("加密写入缺少明文大小（plaintextSize）"))
+            if (size > maxBytes) {
+                return Result.failure(IllegalStateException("文件超过上限 ${maxBytes / (1024 * 1024)}MB"))
+            }
+            return writeEncrypted(path, input, size, dek, onProgress)
+        }
+        return writeRaw(path, input, maxBytes, onProgress)
+    }
+
+    /** 原始字节写入（元数据/缓存侧车、未解锁旧卡）：64KB 分块直写，不加密。 */
+    private fun writeRaw(
+        path: String, input: InputStream, maxBytes: Long, onProgress: (Long) -> Unit
     ): Result<Long> = synchronized(fsShell) {
         val handle = LibJniFSShell.SFCreate(path)
         if (handle <= 0) return Result.failure(fsError("创建文件失败", handle))
@@ -308,6 +338,67 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
             Result.success(total)
         } finally {
             LibJniFSShell.SFClose(handle)
+        }
+    }
+
+    /**
+     * 加密写入（M12.2）：写 [FileHeader]（含明文大小 + fileNonce），再逐 64KB 明文块用 DEK 做 AES-GCM 分块
+     * 加密落卡。返回**明文字节数**（供 FileItem.size 用）。源流提前结束（实际 < [size]）则失败。
+     */
+    private fun writeEncrypted(
+        path: String, input: InputStream, size: Long, dek: ByteArray, onProgress: (Long) -> Unit
+    ): Result<Long> = synchronized(fsShell) {
+        val handle = LibJniFSShell.SFCreate(path)
+        if (handle <= 0) return Result.failure(fsError("创建文件失败", handle))
+        try {
+            val fileNonce = FileCrypto.newFileNonce()
+            writeFullyToCard(handle, FileHeader.build(size, fileNonce))
+            val totalChunks = ((size + CHUNK - 1) / CHUNK).toInt().coerceAtLeast(1)
+            var done = 0L
+            for (index in 0 until totalChunks) {
+                val want = minOf(CHUNK.toLong(), size - index.toLong() * CHUNK).toInt().coerceAtLeast(0)
+                val plain = ByteArray(want)
+                if (want > 0) readFully(input, plain)
+                val isLast = index == totalChunks - 1
+                writeFullyToCard(handle, FileCrypto.encryptChunk(dek, fileNonce, index, isLast, plain))
+                done += want
+                onProgress(done)
+            }
+            Result.success(size)
+        } catch (e: Exception) {
+            Result.failure(e)
+        } finally {
+            LibJniFSShell.SFClose(handle)
+        }
+    }
+
+    /** 用户文件判别（M12.2 加密范围）：`0:/<文件夹>/<名>` 且名非 `.` 前缀 = 用户文件（需加密）；
+     * 根级 `.` 前缀文件（keystore/meta/bind/chat/oplog 及 .recv_/.sent_ 缓存）一律原始字节、不加密。 */
+    private fun isUserFilePath(path: String): Boolean {
+        if (!path.startsWith(ROOT)) return false
+        val rel = path.removePrefix(ROOT)
+        if (!rel.contains('/')) return false // 根级文件（含全部元数据/缓存侧车）
+        val name = rel.substringAfterLast('/')
+        return name.isNotEmpty() && !name.startsWith(".")
+    }
+
+    /** 从 [input] 精确读满 [buf]（read 可能短读）；流提前结束抛 [IOException]。 */
+    private fun readFully(input: InputStream, buf: ByteArray) {
+        var off = 0
+        while (off < buf.size) {
+            val n = input.read(buf, off, buf.size - off)
+            if (n < 0) throw IOException("源流提前结束 @$off/${buf.size}")
+            off += n
+        }
+    }
+
+    /** 把 [bytes] 全量写入卡句柄（SFWrite 可能短写）；失败/无进展抛 [IOException]。须在 fsShell 锁内调用。 */
+    private fun writeFullyToCard(handle: Int, bytes: ByteArray) {
+        var off = 0
+        while (off < bytes.size) {
+            val w = LibJniFSShell.SFWrite(handle, bytes, off, bytes.size - off)
+            if (w <= 0) throw IOException("写入卡失败/无进展 @$off/${bytes.size}")
+            off += w
         }
     }
 
@@ -362,15 +453,35 @@ class RealFileSystem @Inject constructor() : FileSystemOps {
         }
     }
 
-    /** `SFOpen` → `SFGetSize` → `SFClose` 读单文件大小；失败回 0。 */
+    /**
+     * 读单文件大小（M12.2 大小记账）：`SFGetSize` 只给密文大小，加密用户文件的明文大小存在 [FileHeader] 里
+     * → 读头解析。文件头缺失/MAGIC 不符（未加密的旧文件）回退原始大小。失败回 0。
+     */
     private fun fileSize(path: String): Long = synchronized(fsShell) {
         val handle = LibJniFSShell.SFOpen(path)
         if (handle <= 0) return 0L
         try {
-            LibJniFSShell.SFGetSize(handle)
+            val raw = LibJniFSShell.SFGetSize(handle)
+            if (raw < FileHeader.BYTES) return if (raw >= 0) raw else 0L
+            val head = ByteArray(FileHeader.BYTES)
+            if (readFullyFromCard(handle, head)) {
+                FileHeader.parse(head)?.let { return it.plaintextSize }
+            }
+            raw // 未加密旧文件
         } finally {
             LibJniFSShell.SFClose(handle)
         }
+    }
+
+    /** 从卡句柄精确读满 [buf]（SFRead 可能短读，0=EOF/<0=失败即停）。读满回 true。须在 fsShell 锁内调用。 */
+    private fun readFullyFromCard(handle: Int, buf: ByteArray): Boolean {
+        var off = 0
+        while (off < buf.size) {
+            val n = LibJniFSShell.SFRead(handle, buf, off, buf.size - off)
+            if (n <= 0) return false
+            off += n
+        }
+        return true
     }
 
     // —— 拷贝策略侧车（落卡）——
