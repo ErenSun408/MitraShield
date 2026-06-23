@@ -47,9 +47,10 @@ class FileHeaderTest {
 
     @Test
     fun cipherToPlaintextSize_matchesLayout() {
-        // 明文 200KB → 4 块（64+64+64+8KB），每块 +16B tag，加 21B 头。
+        // 明文 200KB → ceil(200KB/块) 块，每块 +16B tag，加 21B 头。块大小取单一来源，避免随之改动失配。
         val plain = 200L * 1024
-        val chunks = 4L
+        val chunkSize = FileCrypto.CHUNK_PLAIN_BYTES
+        val chunks = (plain + chunkSize - 1) / chunkSize
         val cipher = FileHeader.BYTES + plain + chunks * 16
         assertTrue(FileHeader.cipherToPlaintextSize(cipher, plain))
         assertFalse("少一字节应不匹配", FileHeader.cipherToPlaintextSize(cipher - 1, plain))

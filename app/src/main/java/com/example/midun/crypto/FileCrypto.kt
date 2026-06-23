@@ -24,8 +24,12 @@ object FileCrypto {
 
     const val KEY_BYTES = 32 // AES-256（DEK / KEK 均 32 字节）
     const val FILE_NONCE_BYTES = 8 // 每文件一份随机前缀，与 chunkIndex 拼成每块 GCM nonce
-    /** 明文分块大小（64KB，与 RealFileSystem.CHUNK 一致；密文每块多 [GCM_TAG_BYTES] 的 tag）。 */
-    const val CHUNK_PLAIN_BYTES = 64 * 1024
+    /**
+     * 落卡加密分块大小（**单一来源**：RealFileSystem.CHUNK / CardFileDataSource / FileHeader 全取此值）。
+     * 取 16KB：视频拖拽时任意一次随机读只需读+解一整块（16KB），比 64KB 少读 3/4 数据 → seek 更快；每块多
+     * [GCM_TAG_BYTES] 的 tag（16KB 块开销约 0.1%，可忽略）。**改此值会改变落卡格式**，旧加密文件需重导。
+     */
+    const val CHUNK_PLAIN_BYTES = 16 * 1024
     /** GCM 认证标签字节数（每块密文 = 明文 + 此）。读路径据此算每块密文长度。 */
     const val GCM_TAG_BYTES = 16
 

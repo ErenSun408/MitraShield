@@ -633,7 +633,9 @@ class RealFileSystem @Inject constructor(
         const val ROOT = "0:/"
         const val META_PATH = "0:/.midun_meta.json"
         const val KEYSTORE_PATH = "0:/.midun_keystore" // App 层 DEK/KEK 密钥库（raw，永不 DEK 加密）
-        const val CHUNK = 64 * 1024
+        // 加密分块大小取 FileCrypto 的单一来源（消除「写/读两个 64KB 常量须保持一致」的隐患）；同时复用作
+        // 原始拷贝/读写的 I/O 缓冲（缓冲大小非格式关键，取同值即可）。
+        const val CHUNK = FileCrypto.CHUNK_PLAIN_BYTES
         const val MAX_IMPORT_BYTES = 100L * 1024 * 1024 // 100MB 导入上限（需求）
 
     }
