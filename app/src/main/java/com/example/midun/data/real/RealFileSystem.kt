@@ -679,8 +679,8 @@ class RealFileSystem @Inject constructor(
         const val CHUNK = FileCrypto.CHUNK_PLAIN_BYTES
         // 卡 I/O 块大小（与加密块解耦）：单次 SFRead/SFWrite 上限 + 加密读写的攒批阈值。16KB 加密块若每块各
         // 调一次 SFRead/SFWrite，USB 来回次数会是 64KB 块的 4 倍 → 导入/导出变慢；攒够 64KB 再下发即恢复原速，
-        // 而拖拽仍只读单个 16KB 块。64KB 沿用 M11.5 已在真机验证的单调用大小。
-        const val IO_CALL = 64 * 1024
+        // 而拖拽仍只读单个 16KB 块。实验：128KB（原 64KB，沿用 M11.5 已验证值）——测导入/导出是否更快。
+        const val IO_CALL = 128 * 1024
         const val MAX_IMPORT_BYTES = 100L * 1024 * 1024 // 100MB 导入上限（需求）
 
     }
