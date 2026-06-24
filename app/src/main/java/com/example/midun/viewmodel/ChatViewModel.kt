@@ -461,14 +461,16 @@ class ChatViewModel @Inject constructor(
         val diag = p2pManager.networkDiagnostics()
         val cause = when (e) {
             is java.net.SocketTimeoutException ->
-                "连接超时：10 秒内目标无响应。SYN 已发出但对方未回——多为对方入站被防火墙拦截，或对方未在监听。"
+                //SYN 已发出但对方未回——多为对方入站被防火墙拦截，或对方未在监听。
+                "连接超时：目标未响应。"
             else ->
-                "连接失败：本机路由到不了目标地址。跨蜂窝网络的公网 IPv6 常被运营商挡死；请两台手机连同一 WiFi 再试。"
+                //跨蜂窝网络的公网 IPv6 常被运营商挡死；同一 WiFi 下不受影响。"
+                "连接失败：本机路由无法抵达目标地址。"
         }
         return buildString {
             appendLine(cause)
             appendLine("· 目标地址：${info.ipv6}")
-            appendLine("· 本机地址：${diag.selectedAddress}（${diag.kind}）")
+            appendLine("· 本机地址：${diag.selectedAddress}")
             append("· 底层异常：${e.javaClass.simpleName}: ${e.message ?: "无附加信息"}")
         }
     }

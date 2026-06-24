@@ -735,8 +735,8 @@ private fun ExportPassphraseDialog(isFolder: Boolean, onConfirm: (String) -> Uni
         text = {
             Column {
                 Text(
-                    "设置导出口令。文件会加密成 .midun 容器，拿口令在别处用本 App 可解。" +
-                        "口令是唯一钥匙，忘记将无法找回；口令越强越安全。",
+                    "设置导出口令。文件将只可使用密盾解密。" +
+                        "请妥善记录口令密钥，忘记将无法找回。",
                     fontSize = 12.sp, color = TextSecondary
                 )
                 Spacer(Modifier.height(12.dp))

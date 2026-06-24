@@ -1001,8 +1001,6 @@ class P2PSessionManager @Inject constructor(
     data class NetworkDiagnostics(
         /** [getLocalReachableAddress] 选中、写进二维码/出站用的地址；`::1` = 本机无可用直连地址。 */
         val selectedAddress: String,
-        /** 选中地址的类型描述（WiFi 局域网直连 / 公网 IPv6 / 无可用直连地址）。 */
-        val kind: String,
         /** 全部接口地址（`iface 地址` 形式，含 IPv4/IPv6），供进一步人工排查。 */
         val allAddresses: List<String>
     )
@@ -1010,12 +1008,8 @@ class P2PSessionManager @Inject constructor(
     /** 采集本机网络诊断信息（同步、轻量，可在主线程调用）。 */
     fun networkDiagnostics(): NetworkDiagnostics {
         val s = scanAddresses()
-        val (addr, kind) = when {
-            s.wifiV4 != null -> s.wifiV4!! to "WiFi 局域网直连（同路由器可达）"
-            s.globalV6 != null -> s.globalV6!! to "公网 IPv6（跨网络，运营商允许时才通）"
-            else -> "::1" to "无可用直连地址"
-        }
-        return NetworkDiagnostics(addr, kind, s.all)
+        val addr = s.wifiV4 ?: s.globalV6 ?: "::1"
+        return NetworkDiagnostics(addr, s.all)
     }
 
     /** 去掉 IPv6 的 zone id（如 fe80::1%wlan0 → fe80::1），跨设备连接时 scope 无意义。 */

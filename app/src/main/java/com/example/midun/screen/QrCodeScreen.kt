@@ -333,16 +333,6 @@ fun QrCodeScreen(
                                     fontWeight = FontWeight.Medium,
                                     color = if (noRoute) Danger else Success
                                 )
-                                Spacer(Modifier.height(4.dp))
-                                Text(
-                                    if (noRoute) {
-                                        "本机无可用直连地址 → 对方扫码必报「网络不可达」。请连 WiFi，或改用移动数据。"
-                                    } else {
-                                        "路径：${d.kind}。两台手机连同一 WiFi 时走局域网直连最稳。"
-                                    },
-                                    fontSize = 11.sp,
-                                    color = TextSecondary
-                                )
                                 if (d.allAddresses.isNotEmpty()) {
                                     Spacer(Modifier.height(6.dp))
                                     Text(
