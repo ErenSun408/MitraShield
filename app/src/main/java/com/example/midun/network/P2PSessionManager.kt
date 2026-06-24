@@ -30,6 +30,7 @@ import javax.inject.Singleton
 import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -141,6 +142,18 @@ class P2PSessionManager @Inject constructor(
     private var listenerKeyPair: KeyPair? = null
 
     /**
+     * 心跳保活（`[network]`，2026-06-24）：聊天 socket 上每 [HEARTBEAT_INTERVAL_MS] 发一帧 PING，对端回 PONG。
+     * 目的 ①保活——周期性发包维持路由器/运营商 NAT 映射,挡住「空闲 TCP 被回收」(切到别的 App 快速切回不掉线);
+     * ②探活——任何入站帧都刷新 [lastInboundAt],超 [HEARTBEAT_TIMEOUT_MS] 无入站=连接已死(含 readLine 卡在半开
+     * socket 的情形)→关 socket 打断接收循环、走既有 [onPeerDisconnected] 归位。**仅前台/进程存活时有效**:息屏久
+     * 或被 OEM 杀后台时进程没了,任何应用层手段都救不回(用户 2026-06-24 决策走 A 方案、不引入前台服务)。
+     */
+    private var heartbeatJob: Job? = null
+
+    /** 最近一次收到对端任意帧的时刻(epoch ms);心跳探活用。@Volatile:接收循环写、心跳协程读。 */
+    @Volatile private var lastInboundAt = 0L
+
+    /**
      * 文件传输通道（M11.5.3 / `[file-transfer]`）：与聊天 socket 物理隔离的第二条二进制 TCP。
      * [fileServerSocket] 仅 A 侧用（提前绑定 [FileTransferChannel.FILE_PORT]）；[fileChannel] 是握手后
      * 建立的双工通道（A accept / B connect），TCP 全双工 → 双向发文件复用同一条。建立失败不影响聊天会话。
@@ -203,7 +216,7 @@ class P2PSessionManager @Inject constructor(
                 // 文件通道端口提前绑定：B 握手后会立即 connect，提前 bind 让其入 backlog、避免 accept 时序竞态。
                 fileServerSocket = ServerSocket(FileTransferChannel.FILE_PORT)
                 _connectionState.value = ConnectionState.LISTENING
-                val socket = server.accept() // 阻塞；disconnect() 关闭 server 会以异常打断
+                val socket = server.accept().apply { keepAlive = true } // 阻塞；disconnect() 关闭 server 会以异常打断
                 val session = performListenerHandshake(socket)
                 _activeSession.value = session
                 _connectionState.value = ConnectionState.CONNECTED
@@ -231,6 +244,7 @@ class P2PSessionManager @Inject constructor(
             try {
                 // 显式连接超时：不可达/对方未监听时快速失败（默认无超时会卡到系统级 ~分钟）。
                 val socket = Socket().apply {
+                    keepAlive = true
                     connect(InetSocketAddress(info.ipv6, port), CONNECT_TIMEOUT_MS)
                 }
                 val handshaken = performConnectorHandshake(socket, info.tempPublicKey)
@@ -551,10 +565,32 @@ class P2PSessionManager @Inject constructor(
         }
     }
 
-    /** 握手完成后：启动接收循环 + 主动发送本机身份帧（供对端建联系人/绑定会话）。 */
+    /** 握手完成后：启动接收循环 + 心跳保活 + 主动发送本机身份帧（供对端建联系人/绑定会话）。 */
     private fun onSessionEstablished(session: P2PSession) {
         startReceiveLoop(session)
+        startHeartbeat(session)
         scope.launch { runCatching { writeFrame(session, generateMessageId(), IDENTITY_TYPE, currentDeviceSn()) } }
+    }
+
+    /** 心跳保活循环（`[network]`）：周期发 PING 维持 NAT、监测入站超时判死。见 [heartbeatJob] 说明。 */
+    private fun startHeartbeat(session: P2PSession) {
+        heartbeatJob?.cancel()
+        lastInboundAt = System.currentTimeMillis()
+        heartbeatJob = scope.launch {
+            while (true) {
+                delay(HEARTBEAT_INTERVAL_MS)
+                if (_activeSession.value !== session) break // 会话已换/已断,本协程退场
+                if (System.currentTimeMillis() - lastInboundAt > HEARTBEAT_TIMEOUT_MS) {
+                    runCatching { session.socket.close() } // 长时间无入站=连接已死→关 socket 打断 readLine
+                    break
+                }
+                // 发心跳;写失败=连接已断→关 socket,由接收循环 finally 归位状态
+                if (runCatching { writeFrame(session, generateMessageId(), PING_TYPE, "") }.isFailure) {
+                    runCatching { session.socket.close() }
+                    break
+                }
+            }
+        }
     }
 
     // —— 文件传输通道（M11.5.3 / `[file-transfer]`）——
@@ -564,7 +600,7 @@ class P2PSessionManager @Inject constructor(
         scope.launch {
             var channel: FileTransferChannel? = null
             try {
-                val sock = fileServerSocket?.accept() ?: return@launch
+                val sock = (fileServerSocket?.accept() ?: return@launch).apply { keepAlive = true }
                 channel = FileTransferChannel(sock).also { fileChannel = it }
                 channel.receiveLoop { type, payload -> handleFileFrame(type, payload) }
             } catch (_: Exception) {
@@ -582,6 +618,7 @@ class P2PSessionManager @Inject constructor(
             var channel: FileTransferChannel? = null
             try {
                 val sock = Socket().apply {
+                    keepAlive = true
                     connect(InetSocketAddress(host, FileTransferChannel.FILE_PORT), CONNECT_TIMEOUT_MS)
                 }
                 channel = FileTransferChannel(sock).also { fileChannel = it }
@@ -736,6 +773,7 @@ class P2PSessionManager @Inject constructor(
             try {
                 while (true) {
                     val line = session.reader.readLine() ?: break // null = 对端关闭
+                    lastInboundAt = System.currentTimeMillis() // 任意入站帧都视为存活（含 PING/PONG）
                     handleIncoming(line)
                 }
             } catch (_: Exception) {
@@ -785,6 +823,8 @@ class P2PSessionManager @Inject constructor(
                 chatRepo.markBurned(plaintext, contactId)
                 _incomingMessages.emit(contactId)
             }
+            PING_TYPE -> runCatching { writeFrame(session, generateMessageId(), PONG_TYPE, "") } // 心跳：回 PONG
+            PONG_TYPE -> {} // 心跳应答：收到即存活（lastInboundAt 已在接收循环刷新），无需处理
             else -> {
                 val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
                 val type = runCatching { MessageType.valueOf(frame.type) }.getOrDefault(MessageType.TEXT)
@@ -824,6 +864,7 @@ class P2PSessionManager @Inject constructor(
     /** 接收循环结束（对端断开）：若非主动 disconnect，归位为 DISCONNECTED 并抹密钥。 */
     private fun onPeerDisconnected() {
         if (_connectionState.value == ConnectionState.CONNECTED) {
+            heartbeatJob?.cancel(); heartbeatJob = null
             _activeSession.value?.sessionKey?.fill(0)
             _activeSession.value = null
             _connectionState.value = ConnectionState.DISCONNECTED
@@ -834,6 +875,7 @@ class P2PSessionManager @Inject constructor(
 
     /** 断开连接并清理：销毁会话密钥（v4 验收「断开后会话密钥清除」）+ 清临时私钥。 */
     fun disconnect() {
+        heartbeatJob?.cancel(); heartbeatJob = null
         _activeSession.value?.let { session ->
             session.sessionKey.fill(0) // 抹掉内存中的会话密钥
             runCatching { session.socket.close() }
@@ -972,6 +1014,13 @@ class P2PSessionManager @Inject constructor(
         const val BURN_TYPE = "BURN"
         /** TCP 连接超时（ms）：不可达/对方未监听时快速失败。 */
         private const val CONNECT_TIMEOUT_MS = 10_000
+        /** 心跳帧（`[network]` 保活）：本端探活发 PING，对端回 PONG；payload 为空。 */
+        private const val PING_TYPE = "PING"
+        private const val PONG_TYPE = "PONG"
+        /** 心跳发送间隔（ms）：20s 足以维持多数 NAT 映射、又不费电。 */
+        private const val HEARTBEAT_INTERVAL_MS = 20_000L
+        /** 入站静默判死阈值（ms）：超 60s 无任何入站帧即认连接已死（约 3 个心跳周期容错）。 */
+        private const val HEARTBEAT_TIMEOUT_MS = 60_000L
         /** 出站源地址探测锚点：阿里公共 DNS 的 IPv6（国内可达）。UDP connect 不发包，仅用于让内核选源地址。 */
         private const val OUTBOUND_PROBE_V6 = "2400:3200::1"
         /** 文件分块大小（64KB，与 RealFileSystem.writeFile 分块一致）。 */
