@@ -25,8 +25,6 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.navigation.compose.rememberNavController
 import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.navigation.NavGraph
-import com.example.midun.navigation.Screen
-import com.example.midun.screen.DevControlPanel
 import com.example.midun.screen.UsbDisconnectedOverlay
 import com.example.midun.ui.theme.MiDunTheme
 import com.example.midun.viewmodel.DeviceViewModel
@@ -76,14 +74,11 @@ class MainActivity : ComponentActivity() {
             registerReceiver(usbReceiver, filter)
         }
 
+        // 启动时若已插着卡，立即连接（USB 插拔广播只覆盖启动后的新插入）。无卡则保持 DISCONNECTED
+        // → 由 UsbDisconnectedOverlay 提示插卡。
         val usbManager = getSystemService(USB_SERVICE) as UsbManager
         if (usbManager.deviceList.isNotEmpty()) {
             deviceViewModel.onUsbAttached(usbManager.deviceList.values.first())
-        } else {
-            // Mock-phase convenience: emulator has no real USB, so seed CONNECTED
-            // state so UsbDisconnectedOverlay doesn't fire at every launch.
-            // DELETE this else branch when the real FSShell SDK lands in M10.
-            deviceViewModel.onUsbAttached(null)
         }
 
         lifecycle.addObserver(object : DefaultLifecycleObserver {
@@ -96,7 +91,6 @@ class MainActivity : ComponentActivity() {
                 val navController = rememberNavController()
                 val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
                 val isConnected = deviceStatus.status != UsbDeviceStatus.DISCONNECTED
-                val useRealCard by deviceViewModel.useRealCard.collectAsState()
 
                 Box(modifier = Modifier.fillMaxSize()) {
                     NavGraph(navController = navController)
@@ -117,33 +111,6 @@ class MainActivity : ComponentActivity() {
                             })
                         }
                     }
-
-                    // DEV-only: jump into Init/Login by faking card state then
-                    // re-routing through Splash (real routing path). Remove with SDK in M10.
-                    DevControlPanel(
-                        isConnected = isConnected,
-                        useRealCard = useRealCard,
-                        onToggle = { deviceViewModel.debugToggleUsb() },
-                        onSimUninitInsert = {
-                            deviceViewModel.debugSimulateFirstInsert()
-                            navController.navigate(Screen.Splash.route) {
-                                popUpTo(0) { inclusive = true }
-                            }
-                        },
-                        onSimInitInsert = {
-                            deviceViewModel.debugSimulateInitializedInsert()
-                            navController.navigate(Screen.Splash.route) {
-                                popUpTo(0) { inclusive = true }
-                            }
-                        },
-                        onSetRealCard = { real ->
-                            deviceViewModel.setUseRealCard(real)
-                            // 切换后重走 Splash 路由，按真卡/模拟的设备状态落到 Init/Login。
-                            navController.navigate(Screen.Splash.route) {
-                                popUpTo(0) { inclusive = true }
-                            }
-                        }
-                    )
                 }
             }
         }

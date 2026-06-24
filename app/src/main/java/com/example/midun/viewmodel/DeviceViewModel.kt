@@ -36,11 +36,6 @@ class DeviceViewModel @Inject constructor(
 
     val deviceStatus = cardManager.deviceStatus
 
-    /** 真卡/模拟模式开关（M11.3）：DevControlPanel 切换；切到真卡即尝试连接已插入的卡。 */
-    val useRealCard = cardManager.useRealCard
-    fun setUseRealCard(useReal: Boolean) = cardManager.setUseRealCard(useReal)
-    fun realSerialNumber(): String? = cardManager.realSerialNumber()
-
     val isUsbConnected: StateFlow<Boolean> = deviceStatus.map {
         it.status != UsbDeviceStatus.DISCONNECTED
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
@@ -138,19 +133,6 @@ class DeviceViewModel @Inject constructor(
      * 此处保留为额外的进程内敏感态清理挂钩（当前无新增项）。
      */
     private fun clearSensitiveMemory() {
-    }
-
-    fun debugToggleUsb() {
-        if (isUsbConnected.value) cardManager.simulateRemove()
-        else cardManager.simulateInsert()
-    }
-
-    fun debugSimulateFirstInsert() {
-        cardManager.simulateFirstInsert()
-    }
-
-    fun debugSimulateInitializedInsert() {
-        cardManager.simulateInsert()
     }
 
     private var inactivityJob: Job? = null

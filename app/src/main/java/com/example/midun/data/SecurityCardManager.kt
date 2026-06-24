@@ -1,109 +1,76 @@
 package com.example.midun.data
 
-import com.example.midun.data.mock.MockUsbManager
 import com.example.midun.data.model.DeviceInfo
 import com.example.midun.data.real.RealUsbManager
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /**
- * 安全卡门面（M11.3，facade 运行时切换）。持有 [MockUsbManager]（模拟）与 [RealUsbManager]（真卡）
- * 两套实现 + `useRealCard` 开关，上层（`AuthViewModel`/`DeviceViewModel`）统一注入本类，按开关把
- * 业务方法 / 设备状态 / USB 插拔事件路由到对应实现。
+ * 安全卡门面。App 只面向真卡（FSShell），本类把 [UsbCardOps] 业务方法 / 设备状态 / USB 插拔事件统一转发到
+ * [RealUsbManager]，并在 wipe 成功后清共享聊天/日志仓库（真卡的文件清在 [RealUsbManager]）。
  *
- * 默认 **模拟模式**（`useRealCard=false`）——保留全部 mock 开发流（模拟器、无卡也能跑 UI）；真卡是
- * 增量叠加，由 DevControlPanel 的「模拟/真卡」开关切换，切到真卡时立即尝试 [RealUsbManager.connectUsb]。
+ * 历史：曾持有 Mock/Real 两套实现 + `useRealCard` 运行时开关（模拟器/无卡开发流），2026-06-24 砍掉模拟模式
+ * 后收成真卡单路径，见 docs/design-deviations.md。
  */
-@OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
 class SecurityCardManager @Inject constructor(
-    /** 暴露给 DevControlPanel 调 DEV 专属 simulate*（真卡无对应概念）。 */
-    val mock: MockUsbManager,
     private val real: RealUsbManager,
-    // 真卡 wipe 时清共享聊天/日志仓库（真卡的文件清在 RealUsbManager；mock 的三者由 MockUsbManager 自清）。
+    // wipe 成功后清共享聊天/日志仓库（写穿空到卡 / 清内存明文）。
     private val chatRepo: ChatRepository,
     private val operationLog: OperationLogRepository
 ) : UsbCardOps {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val _useRealCard = MutableStateFlow(false)
+    /** 恒真：App 只有真卡一条路径。保留供尚未清理的调用点（P2P/Chat/Preview）过渡，S4 一并移除。 */
+    private val _useRealCard = MutableStateFlow(true)
     val useRealCard: StateFlow<Boolean> = _useRealCard.asStateFlow()
 
-    private fun active(): UsbCardOps = if (_useRealCard.value) real else mock
+    override val deviceStatus: StateFlow<DeviceInfo> = real.deviceStatus
 
-    /** 设备状态随开关切换到对应实现的状态流。 */
-    override val deviceStatus: StateFlow<DeviceInfo> =
-        _useRealCard
-            .flatMapLatest { useReal -> if (useReal) real.deviceStatus else mock.deviceStatus }
-            .stateIn(scope, SharingStarted.Eagerly, DeviceInfo())
-
-    // —— UsbCardOps 路由 ——
+    // —— UsbCardOps 路由（全转发真卡）——
     override suspend fun initDevice(password: String, bindDevice: Boolean) =
-        active().initDevice(password, bindDevice)
+        real.initDevice(password, bindDevice)
 
-    override suspend fun authenticate(password: String) = active().authenticate(password)
-    override fun verifyPassword(password: String) = active().verifyPassword(password)
-    override fun logout() = active().logout()
+    override suspend fun authenticate(password: String) = real.authenticate(password)
+    override fun verifyPassword(password: String) = real.verifyPassword(password)
+    override fun logout() = real.logout()
 
     /**
-     * 恢复出厂 / 一键清理（M11.6.5）：mock 模式下 [MockUsbManager] 已自清文件+聊天+日志；真卡模式 [RealUsbManager]
-     * 清卡内文件（wipeUserData）或 SFFormat 强擦（wipeAll），此处补清共享聊天/日志仓库（写穿空到卡 / 内存）。
+     * 恢复出厂 / 一键清理：[RealUsbManager] 清卡内文件（wipeUserData）或 SFFormat 强擦（wipeAll），
+     * 此处补清共享聊天/日志仓库（写穿空到卡 / 内存）。
      */
-    override suspend fun wipeAll() = active().wipeAll().also { if (_useRealCard.value && it.isSuccess) clearRepos() }
+    override suspend fun wipeAll() = real.wipeAll().also { if (it.isSuccess) clearRepos() }
     override suspend fun wipeUserData() =
-        active().wipeUserData().also {
-            if (_useRealCard.value && it.isSuccess) { clearRepos(); real.refreshCapacity() }
-        }
+        real.wipeUserData().also { if (it.isSuccess) { clearRepos(); real.refreshCapacity() } }
 
     private fun clearRepos() {
         chatRepo.clear()
         operationLog.clear()
     }
-    override suspend fun updateBinding(bind: Boolean) = active().updateBinding(bind)
-    override suspend fun updateKey() = active().updateKey()
 
-    // —— 模式切换 ——
-    /**
-     * 切换真卡/模拟。切到真卡：尝试连接已插入的卡（无新插入广播时也能连）；切回模拟：释放真卡。
-     */
-    fun setUseRealCard(useReal: Boolean) {
-        if (_useRealCard.value == useReal) return
-        _useRealCard.value = useReal
-        if (useReal) scope.launch { real.connectUsb() }
-        else scope.launch { real.closeDevice() }
-    }
+    override suspend fun updateBinding(bind: Boolean) = real.updateBinding(bind)
+    override suspend fun updateKey() = real.updateKey()
 
     // —— USB 插拔事件路由（来自 MainActivity 广播，经 DeviceViewModel）——
     fun onUsbAttached() {
-        if (_useRealCard.value) scope.launch { real.connectUsb() } else mock.simulateInsert()
+        scope.launch { real.connectUsb() }
     }
 
     fun onUsbDetached() {
-        if (_useRealCard.value) scope.launch { real.closeDevice() } else mock.simulateRemove()
+        scope.launch { real.closeDevice() }
     }
 
-    // —— DEV 专属（仅模拟模式有意义）——
-    fun simulateInsert() = mock.simulateInsert()
-    fun simulateRemove() = mock.simulateRemove()
-    fun simulateFirstInsert() = mock.simulateFirstInsert()
-
-    /** 真卡序列号（真卡模式下供诊断/后续 P2P deviceSn）。 */
+    /** 真卡序列号（诊断 / 后续 P2P deviceSn）。 */
     fun realSerialNumber(): String? = real.getSerialNumber()
 
-    /** 文件增删后刷新真卡「已用空间」（重读 SFGetCapacity → deviceStatus）。模拟模式无操作。 */
-    fun refreshCapacity() {
-        if (_useRealCard.value) real.refreshCapacity()
-    }
+    /** 文件增删后刷新「已用空间」（重读 SFGetCapacity → deviceStatus）。 */
+    fun refreshCapacity() = real.refreshCapacity()
 }
