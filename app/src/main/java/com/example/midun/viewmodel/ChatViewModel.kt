@@ -12,6 +12,7 @@ import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.network.ConnectionInfo
 import com.example.midun.network.P2PSessionManager
+import java.io.File
 import java.io.InputStream
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -201,7 +202,8 @@ class ChatViewModel @Inject constructor(
      */
     fun sendFile(
         fileName: String, size: Long, mime: String, openStream: () -> InputStream,
-        sourceCardPath: String? = null, onError: (String) -> Unit = {}
+        sourceCardPath: String? = null, durationSec: Int = 0,
+        onError: (String) -> Unit = {}, onComplete: () -> Unit = {}
     ) {
         val contactId = _currentContactId.value ?: return
         viewModelScope.launch {
@@ -209,16 +211,31 @@ class ChatViewModel @Inject constructor(
             val online = session != null && session.contactId == contactId
             val result = if (online) {
                 // 有活动会话：走文件通道分块加密真发送。
-                p2pManager.sendFile(fileName, size, mime, sourceCardPath, openStream)
+                p2pManager.sendFile(fileName, size, mime, sourceCardPath, durationSec, openStream)
             } else {
                 // 无连接：与文字离线发送对称——本地标「未送达」+ 留发送方预览副本，对方收不到。
-                p2pManager.sendFileOffline(contactId, fileName, size, mime, sourceCardPath, openStream)
+                p2pManager.sendFileOffline(contactId, fileName, size, mime, sourceCardPath, durationSec, openStream)
             }
             // 离线发送同样插一条「去建立连接」提示（与文字一致；文件重发暂不支持）。
             if (!online) chatRepo.addConnectPromptIfNeeded(contactId)
             result.onFailure { onError("发送失败：${it.message ?: "未知错误"}") }
+            onComplete()
             reloadCurrent(contactId)
         }
+    }
+
+    /**
+     * 发送语音消息（`[chat-voice]`）：录音临时文件（手机来源）走文件管线分块加密发送，标 AUDIO 气泡。
+     * 发送完删手机临时文件——回放副本已由发送层写到卡内 `0:/.sent_<id>`（手机来源逻辑），无需保留手机端原文件。
+     */
+    fun sendVoice(file: File, durationSec: Int, onError: (String) -> Unit = {}) {
+        sendFile(
+            fileName = file.name, size = file.length(), mime = "audio/mp4",
+            openStream = { file.inputStream() },
+            durationSec = durationSec,
+            onError = onError,
+            onComplete = { file.delete() }
+        )
     }
 
     /** 刷新文件夹列表（保存对话框 / 隐私文件夹发送来源共用）。 */

@@ -332,7 +332,8 @@ class P2PSessionManager @Inject constructor(
      * `isLast` 由 totalChunks（据 [size] 算）确定，收端用同一 totalChunks 复算 → 两端一致。
      */
     suspend fun sendFile(
-        fileName: String, size: Long, mime: String, sourceCardPath: String? = null, openStream: () -> InputStream
+        fileName: String, size: Long, mime: String, sourceCardPath: String? = null,
+        durationSec: Int = 0, openStream: () -> InputStream
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val session = _activeSession.value
             ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
@@ -344,8 +345,14 @@ class P2PSessionManager @Inject constructor(
             return@withContext Result.failure(IllegalStateException("文件超过 100MB 上限，无法发送"))
         }
         // 串行化文件发送：一条通道上 BEGIN/CHUNK/END 必须不被另一文件穿插，收端单文件状态机才成立。
-        fileSendMutex.withLock { doSendFile(channel, session, contactId, fileName, size, mime, sourceCardPath, openStream) }
+        fileSendMutex.withLock {
+            doSendFile(channel, session, contactId, fileName, size, mime, sourceCardPath, durationSec, openStream)
+        }
     }
+
+    /** 音频 mime（语音消息）→ AUDIO 气泡（即收即播、不进选文件夹保存）；其余 → FILE。 */
+    private fun fileMessageType(mime: String): MessageType =
+        if (mime.startsWith("audio/")) MessageType.AUDIO else MessageType.FILE
 
     /**
      * @param sourceCardPath 隐私文件夹来源=源文件卡内路径（已在卡上、发送方直接据此预览，不另留副本）；
@@ -353,7 +360,8 @@ class P2PSessionManager @Inject constructor(
      */
     private suspend fun doSendFile(
         channel: FileTransferChannel, session: P2PSession, contactId: String,
-        fileName: String, size: Long, mime: String, sourceCardPath: String?, openStream: () -> InputStream
+        fileName: String, size: Long, mime: String, sourceCardPath: String?, durationSec: Int,
+        openStream: () -> InputStream
     ): Result<Unit> {
         val key = session.sessionKey
         val msgId = generateMessageId()
@@ -365,7 +373,10 @@ class P2PSessionManager @Inject constructor(
         val copyHandle = sentCopyPath?.let { realFileSystem.streamCreate(it).takeIf { h -> h > 0 } }
 
         // 隐私文件夹来源即刻可预览（文件已在卡上）→ 起始就带 localPath；手机来源成功后再补。
-        chatRepo.addFileMessage(contactId, msgId, isMine = true, fileName, size, MessageStatus.SENDING, localPath = sourceCardPath)
+        chatRepo.addFileMessage(
+            contactId, msgId, isMine = true, fileName, size, MessageStatus.SENDING, localPath = sourceCardPath,
+            type = fileMessageType(mime), audioDurationSec = durationSec
+        )
         setProgress(msgId, 0f)
         _incomingMessages.emit(contactId)
         sendCancelled = false
@@ -377,6 +388,7 @@ class P2PSessionManager @Inject constructor(
                 put("mime", mime)
                 put("nonce", Base64.encodeToString(fileNonce, Base64.NO_WRAP))
                 put("chunks", totalChunks)
+                if (durationSec > 0) put("durationSec", durationSec) // 语音消息时长（接收端建 AUDIO 气泡用）
             }.toString()
             channel.sendFrame(FileTransferChannel.FILE_BEGIN, P2PCrypto.encrypt(key, beginJson))
 
@@ -439,7 +451,7 @@ class P2PSessionManager @Inject constructor(
      */
     suspend fun sendFileOffline(
         contactId: String, fileName: String, size: Long, mime: String,
-        sourceCardPath: String? = null, openStream: () -> InputStream
+        sourceCardPath: String? = null, durationSec: Int = 0, openStream: () -> InputStream
     ): Result<Unit> = withContext(Dispatchers.IO) {
         if (size > MAX_FILE_BYTES) {
             return@withContext Result.failure(IllegalStateException("文件超过 100MB 上限，无法发送"))
@@ -449,7 +461,10 @@ class P2PSessionManager @Inject constructor(
         val sentCopyPath = if (sourceCardPath == null) FileCachePaths.sent(msgId) else null
         // 有副本要写 → 起始 SENDING 显进度；无副本 → 直接 FAILED 未送达。
         val initialStatus = if (sentCopyPath != null) MessageStatus.SENDING else MessageStatus.FAILED
-        chatRepo.addFileMessage(contactId, msgId, isMine = true, fileName, size, initialStatus, localPath = sourceCardPath)
+        chatRepo.addFileMessage(
+            contactId, msgId, isMine = true, fileName, size, initialStatus, localPath = sourceCardPath,
+            type = fileMessageType(mime), audioDurationSec = durationSec
+        )
         _incomingMessages.emit(contactId)
         if (sentCopyPath == null) return@withContext Result.success(Unit)
 
@@ -656,10 +671,15 @@ class P2PSessionManager @Inject constructor(
         val fileSize = json.getLong("fileSize")
         val fileNonce = Base64.decode(json.getString("nonce"), Base64.NO_WRAP)
         val totalChunks = json.getInt("chunks")
+        val msgType = fileMessageType(json.optString("mime"))
+        val durationSec = json.optInt("durationSec")
         val stagingPath = FileCachePaths.recv(msgId)
         val handle = realFileSystem.streamCreate(stagingPath)
         if (handle <= 0) {
-            chatRepo.addFileMessage(contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.FAILED)
+            chatRepo.addFileMessage(
+                contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.FAILED,
+                type = msgType, audioDurationSec = durationSec
+            )
             _incomingMessages.emit(contactId)
             return
         }
@@ -667,7 +687,10 @@ class P2PSessionManager @Inject constructor(
             msgId, contactId, fileName, fileSize, fileNonce, totalChunks, stagingPath, handle,
             MessageDigest.getInstance("SHA-256")
         )
-        chatRepo.addFileMessage(contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.RECEIVED)
+        chatRepo.addFileMessage(
+            contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.RECEIVED,
+            type = msgType, audioDurationSec = durationSec
+        )
         setProgress(msgId, 0f)
         _incomingMessages.emit(contactId)
     }
