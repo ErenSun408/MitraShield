@@ -34,16 +34,18 @@ class FileRepository @Inject constructor(
         fileName: String,
         size: Long,
         openStream: () -> InputStream,
+        isCancelled: () -> Boolean,
         onProgress: (written: Long) -> Unit
-    ) = active().importFile(folderId, fileName, size, openStream, onProgress)
-        .also { cardManager.refreshCapacity() } // 导入后刷新「已用空间」
+    ) = active().importFile(folderId, fileName, size, openStream, isCancelled, onProgress)
+        .also { cardManager.refreshCapacity() } // 导入后刷新「已用空间」（取消时半成品已删，刷新也对）
 
     override suspend fun exportFile(
         fileId: String,
         fileName: String,
         output: OutputStream,
+        isCancelled: () -> Boolean,
         onProgress: (written: Long) -> Unit
-    ) = active().exportFile(fileId, fileName, output, onProgress)
+    ) = active().exportFile(fileId, fileName, output, isCancelled, onProgress)
 
     override suspend fun readFileBytes(fileId: String) = active().readFileBytes(fileId)
 

@@ -7,6 +7,7 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.FileRepository
+import com.example.midun.data.TransferCancelledException
 import com.example.midun.data.mock.MockOperationLog
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
@@ -92,6 +93,18 @@ class FileViewModel @Inject constructor(
     private val _fileExportResult = MutableStateFlow<ExportResult?>(null)
     val fileExportResult: StateFlow<ExportResult?> = _fileExportResult.asStateFlow()
 
+    /**
+     * 用户取消标志（M-files Stage3）。底层读写循环每块查 `isCancelled` 回调，命中即以
+     * [TransferCancelledException] 收尾、清半成品。同一时刻 UI 只有一个传输弹窗（导入/单导出/文件夹导出互斥），
+     * 故共用一个标志即可。每次传输开始前由各入口重置为 false。`@Volatile`：传输跑在 IO 线程，取消由主线程置位。
+     */
+    @Volatile private var transferCancelled = false
+
+    /** 取消进行中的导入/导出（进度弹窗「取消」按钮）。仅置标志，传输协程下一块自然收尾并清理。 */
+    fun cancelTransfer() {
+        transferCancelled = true
+    }
+
     init {
         loadFolders()
     }
@@ -142,6 +155,7 @@ class FileViewModel @Inject constructor(
                 _operationResult.emit(OperationResult.Error("文件超过 100MB 上限，无法导入"))
                 return@launch
             }
+            transferCancelled = false
             _importProgress.value = FileByteProgress(name, 0L, size)
             fileSystem.importFile(
                 folderId = folderId,
@@ -150,13 +164,16 @@ class FileViewModel @Inject constructor(
                 openStream = {
                     context.contentResolver.openInputStream(uri) ?: throw IOException("打开文件失败")
                 },
+                isCancelled = { transferCancelled },
                 onProgress = { written -> _importProgress.value = FileByteProgress(name, written, size) }
             ).onSuccess {
                 loadFiles(folderId)
                 operationLog.record(OperationType.FILE_IMPORT, "导入「$name」")
                 _operationResult.emit(OperationResult.Success("文件导入成功"))
             }.onFailure {
-                _operationResult.emit(OperationResult.Error(it.message ?: "导入失败"))
+                // 取消：半成品已由 RealFileSystem.importFile 删除，仅提示「已取消」（非错误）。
+                if (it is TransferCancelledException) _operationResult.emit(OperationResult.Success("已取消导入"))
+                else _operationResult.emit(OperationResult.Error(it.message ?: "导入失败"))
             }
             _importProgress.value = null
         }
@@ -286,10 +303,11 @@ class FileViewModel @Inject constructor(
      */
     fun exportFileToUri(fileId: String, fileName: String, size: Long, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
+            transferCancelled = false
             _fileExportProgress.value = FileByteProgress(fileName, 0L, size)
             runCatching {
                 context.contentResolver.openOutputStream(uri)?.use { out ->
-                    fileSystem.exportFile(fileId, fileName, out) { written ->
+                    fileSystem.exportFile(fileId, fileName, out, isCancelled = { transferCancelled }) { written ->
                         _fileExportProgress.value = FileByteProgress(fileName, written, size)
                     }.getOrThrow()
                 } ?: throw IOException("无法写入目标位置")
@@ -297,7 +315,13 @@ class FileViewModel @Inject constructor(
                 operationLog.record(OperationType.FILE_EXPORT, "导出「$fileName」")
                 _fileExportResult.value = ExportResult(true, "已导出「$fileName」到所选位置")
             }.onFailure {
-                _fileExportResult.value = ExportResult(false, it.message ?: "导出失败")
+                if (it is TransferCancelledException) {
+                    // 取消：删半成品 SAF 文档（系统选取器已先建空文档），提示「已取消」。
+                    runCatching { DocumentFile.fromSingleUri(context, uri)?.delete() }
+                    _fileExportResult.value = ExportResult(false, "已取消导出")
+                } else {
+                    _fileExportResult.value = ExportResult(false, it.message ?: "导出失败")
+                }
             }
             _fileExportProgress.value = null
         }
@@ -325,27 +349,40 @@ class FileViewModel @Inject constructor(
             }
             // 在选定目录下建同名子目录；失败（如同名已存在受限）则退回直接写选定目录。
             val dir = tree.createDirectory(folderName) ?: tree
+            transferCancelled = false
             _exportProgress.value = ExportProgress(0, files.size)
             var ok = 0
-            files.forEachIndexed { i, f ->
+            var cancelled = false
+            for ((i, f) in files.withIndex()) {
+                if (transferCancelled) { cancelled = true; break }
                 _exportProgress.value = ExportProgress(i, files.size, currentFile = f.name, fileTotal = f.size)
+                // 先建目标文档，留引用以便取消时删半成品。
+                val target = dir.createFile("application/octet-stream", f.name)
                 runCatching {
-                    val target = dir.createFile("application/octet-stream", f.name)
-                        ?: throw IOException("创建文件失败：${f.name}")
+                    (target ?: throw IOException("创建文件失败：${f.name}"))
                     context.contentResolver.openOutputStream(target.uri)?.use { out ->
-                        fileSystem.exportFile(f.id, f.name, out) { written ->
+                        fileSystem.exportFile(f.id, f.name, out, isCancelled = { transferCancelled }) { written ->
                             _exportProgress.value = ExportProgress(
                                 i, files.size, currentFile = f.name, fileWritten = written, fileTotal = f.size
                             )
                         }.getOrThrow()
                     } ?: throw IOException("打开输出失败：${f.name}")
                 }.onSuccess { ok++ }
+                    .onFailure {
+                        if (it is TransferCancelledException) {
+                            runCatching { target?.delete() } // 删当前半成品
+                            cancelled = true
+                        }
+                    }
+                if (cancelled) break
                 _exportProgress.value = ExportProgress(i + 1, files.size, currentFile = f.name, fileTotal = f.size)
             }
-            operationLog.record(OperationType.FILE_EXPORT, "导出文件夹「$folderName」（$ok 个文件）")
+            val summary =
+                if (cancelled) "已取消，已导出 $ok/${files.size} 个文件到「$folderName」"
+                else "已导出 $ok/${files.size} 个文件到「$folderName」"
+            operationLog.record(OperationType.FILE_EXPORT, "导出文件夹「$folderName」（$summary）")
             _exportProgress.value = ExportProgress(
-                files.size, files.size, finished = true,
-                message = "已导出 $ok/${files.size} 个文件到「$folderName」"
+                files.size, files.size, finished = true, message = summary
             )
         }
     }

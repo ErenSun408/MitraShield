@@ -2,6 +2,7 @@ package com.example.midun.data.mock
 
 import com.example.midun.data.FileSystemOps
 import com.example.midun.data.FileTypes
+import com.example.midun.data.TransferCancelledException
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
@@ -54,14 +55,16 @@ class MockFileSystem @Inject constructor() : FileSystemOps {
         fileName: String,
         size: Long,
         openStream: () -> InputStream,
+        isCancelled: () -> Boolean,
         onProgress: (written: Long) -> Unit
     ): Result<FileItem> = withContext(Dispatchers.IO) {
         // Mock 无真实存储：消费流以驱动真实进度，但只记内存元数据。
-        runCatching {
+        val consumed = runCatching {
             openStream().use { input ->
                 val buf = ByteArray(64 * 1024)
                 var total = 0L
                 while (true) {
+                    if (isCancelled()) throw TransferCancelledException()
                     val n = input.read(buf)
                     if (n < 0) break
                     total += n
@@ -69,6 +72,7 @@ class MockFileSystem @Inject constructor() : FileSystemOps {
                 }
             }
         }
+        consumed.exceptionOrNull()?.let { if (it is TransferCancelledException) return@withContext Result.failure(it) }
         val file = FileItem(
             id = "file_${System.currentTimeMillis()}",
             name = fileName,
@@ -84,6 +88,7 @@ class MockFileSystem @Inject constructor() : FileSystemOps {
         fileId: String,
         fileName: String,
         output: java.io.OutputStream,
+        isCancelled: () -> Boolean,
         onProgress: (written: Long) -> Unit
     ): Result<Long> = withContext(Dispatchers.IO) {
         runCatching {

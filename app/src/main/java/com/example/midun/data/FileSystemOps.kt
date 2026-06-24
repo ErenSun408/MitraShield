@@ -2,8 +2,16 @@ package com.example.midun.data
 
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+
+/**
+ * 用户主动取消导入/导出的哨兵异常（M-files Stage3）。与真实 IO 错误区分：底层读写循环每块检查
+ * [FileSystemOps.importFile]/[FileSystemOps.exportFile] 的 `isCancelled` 回调，命中即以本异常结束（经
+ * `Result.failure` 上抛），上层据此显示「已取消」而非报错，并清理半成品。
+ */
+class TransferCancelledException : IOException("已取消")
 
 /**
  * 隐私文件夹文件系统的统一抽象（M11.4）。由 [com.example.midun.data.mock.MockFileSystem]（模拟）与
@@ -29,12 +37,16 @@ interface FileSystemOps {
      * 流式导入一个文件（M11.5.1）：从 [openStream] 取字节、64KB 分块写入目标文件夹，[onProgress] 回报已写
      * 字节数。真卡实现落隐藏区（`writeFile`）；Mock 实现消费流更新进度但只记内存元数据。[size] 用于
      * UI 显示与 100MB 上限校验（调用方先校验，真卡层再兜底）。文件名冲突等错误经 [Result] 返回。
+     *
+     * [isCancelled] 每块检查一次（M-files Stage3）：返回 true 即中止、删半成品，并以
+     * [TransferCancelledException] 失败返回。
      */
     suspend fun importFile(
         folderId: String,
         fileName: String,
         size: Long,
         openStream: () -> InputStream,
+        isCancelled: () -> Boolean = { false },
         onProgress: (written: Long) -> Unit
     ): Result<FileItem>
 
@@ -42,11 +54,15 @@ interface FileSystemOps {
      * 把文件字节导出到 [output]（M11.5.2）。真卡读隐藏区**解密后明文**（卡内本就加密存储，App 层无独立
      * 密钥，故「加密拷贝」策略实际也是明文导出——诚实降级）；Mock 无真实字节，写占位说明。返回写出字节数，
      * **不关闭 [output]**（调用方负责）。
+     *
+     * [isCancelled] 每块检查一次（M-files Stage3）：返回 true 即以 [TransferCancelledException] 失败返回
+     * （半成品的 SAF 文档由调用方删除）。
      */
     suspend fun exportFile(
         fileId: String,
         fileName: String,
         output: OutputStream,
+        isCancelled: () -> Boolean = { false },
         onProgress: (written: Long) -> Unit = {}
     ): Result<Long>
 

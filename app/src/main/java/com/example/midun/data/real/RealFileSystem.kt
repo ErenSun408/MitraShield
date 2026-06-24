@@ -4,6 +4,7 @@ import com.example.midun.crypto.FileCrypto
 import com.example.midun.crypto.FileHeader
 import com.example.midun.data.FileSystemOps
 import com.example.midun.data.FileTypes
+import com.example.midun.data.TransferCancelledException
 import com.example.midun.data.crypto.CardKeystore
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
@@ -91,15 +92,16 @@ class RealFileSystem @Inject constructor(
         fileName: String,
         size: Long,
         openStream: () -> InputStream,
+        isCancelled: () -> Boolean,
         onProgress: (written: Long) -> Unit
     ): Result<FileItem> = withContext(Dispatchers.IO) {
         val path = "$folderId/$fileName"
         // M11.5.1：真实字节流式导入——64KB 分块写入隐藏区，100MB 上限兜底。
         // M12.2：用户文件路径 → writeFile 用 DEK 加密落卡（需明文大小写文件头，传 plaintextSize）。
         val result = openStream().use { input ->
-            writeFile(path, input, MAX_IMPORT_BYTES, plaintextSize = size, onProgress = onProgress)
+            writeFile(path, input, MAX_IMPORT_BYTES, plaintextSize = size, isCancelled = isCancelled, onProgress = onProgress)
         }
-        if (result.isFailure) synchronized(fsShell) { LibJniFSShell.SFDelete(path) } // 删半成品
+        if (result.isFailure) synchronized(fsShell) { LibJniFSShell.SFDelete(path) } // 删半成品（含取消）
         // 返回值类型仅占位（UI 成功后重载文件夹，权威类型来自落卡文件头）；扩展名粗判即可。
         result.map {
             FileItem(id = path, name = fileName, type = FileTypes.fromExtension(fileName), size = it, parentId = folderId)
@@ -110,10 +112,11 @@ class RealFileSystem @Inject constructor(
         fileId: String,
         fileName: String,
         output: OutputStream,
+        isCancelled: () -> Boolean,
         onProgress: (written: Long) -> Unit
     ): Result<Long> = withContext(Dispatchers.IO) {
         // fileId 即隐藏区完整路径；readFile 对加密用户文件逐块 DEK 解密写出明文（M12.3）。导出==原文。
-        readFile(fileId, output, onProgress)
+        readFile(fileId, output, isCancelled, onProgress)
     }
 
     override suspend fun readFileBytes(fileId: String): Result<ByteArray> = withContext(Dispatchers.IO) {
@@ -346,6 +349,7 @@ class RealFileSystem @Inject constructor(
         input: InputStream,
         maxBytes: Long = Long.MAX_VALUE,
         plaintextSize: Long? = null,
+        isCancelled: () -> Boolean = { false },
         onProgress: (Long) -> Unit = {}
     ): Result<Long> {
         val dek = cardKeystore.dek()
@@ -355,14 +359,14 @@ class RealFileSystem @Inject constructor(
             if (size > maxBytes) {
                 return Result.failure(IllegalStateException("文件超过上限 ${maxBytes / (1024 * 1024)}MB"))
             }
-            return writeEncrypted(path, input, size, dek, onProgress)
+            return writeEncrypted(path, input, size, dek, isCancelled, onProgress)
         }
-        return writeRaw(path, input, maxBytes, onProgress)
+        return writeRaw(path, input, maxBytes, isCancelled, onProgress)
     }
 
     /** 原始字节写入（元数据/缓存侧车、未解锁旧卡）：64KB 分块直写，不加密。 */
     private fun writeRaw(
-        path: String, input: InputStream, maxBytes: Long, onProgress: (Long) -> Unit
+        path: String, input: InputStream, maxBytes: Long, isCancelled: () -> Boolean, onProgress: (Long) -> Unit
     ): Result<Long> = synchronized(fsShell) {
         val handle = LibJniFSShell.SFCreate(path)
         if (handle <= 0) return Result.failure(fsError("创建文件失败", handle))
@@ -370,6 +374,7 @@ class RealFileSystem @Inject constructor(
         try {
             val buf = ByteArray(CHUNK)
             while (true) {
+                if (isCancelled()) return Result.failure(TransferCancelledException()) // 半成品由调用方删
                 val n = input.read(buf)
                 if (n < 0) break
                 total += n
@@ -393,7 +398,8 @@ class RealFileSystem @Inject constructor(
      * 加密落卡。返回**明文字节数**（供 FileItem.size 用）。源流提前结束（实际 < [size]）则失败。
      */
     private fun writeEncrypted(
-        path: String, input: InputStream, size: Long, dek: ByteArray, onProgress: (Long) -> Unit
+        path: String, input: InputStream, size: Long, dek: ByteArray,
+        isCancelled: () -> Boolean, onProgress: (Long) -> Unit
     ): Result<Long> = synchronized(fsShell) {
         val handle = LibJniFSShell.SFCreate(path)
         if (handle <= 0) return Result.failure(fsError("创建文件失败", handle))
@@ -416,6 +422,7 @@ class RealFileSystem @Inject constructor(
             appendToBlock(FileHeader.build(size, fileNonce, fileType))
             var done = 0L
             for (index in 0 until totalChunks) {
+                if (isCancelled()) throw TransferCancelledException() // 经下方 catch → 失败返回；半成品由调用方删
                 val plain = if (index == 0) firstPlain else {
                     val want = minOf(CHUNK.toLong(), size - index.toLong() * CHUNK).toInt().coerceAtLeast(0)
                     ByteArray(want).also { if (want > 0) readFully(input, it) }
@@ -515,7 +522,10 @@ class RealFileSystem @Inject constructor(
      * 用户文件 → 回卷原样读。元数据/缓存侧车（非用户文件路径）一律原始字节，不解密（聊天/日志/keystore/
      * 绑定的 JSON 本就不叠 DEK）。
      */
-    fun readFile(path: String, output: OutputStream, onProgress: (Long) -> Unit = {}): Result<Long> =
+    fun readFile(
+        path: String, output: OutputStream,
+        isCancelled: () -> Boolean = { false }, onProgress: (Long) -> Unit = {}
+    ): Result<Long> =
         synchronized(fsShell) {
             val handle = LibJniFSShell.SFOpen(path)
             if (handle <= 0) return Result.failure(IllegalStateException("打开文件失败"))
@@ -524,12 +534,13 @@ class RealFileSystem @Inject constructor(
                 if (isUserFilePath(path) && dek != null) {
                     val head = ByteArray(FileHeader.BYTES)
                     val parsed = if (readFullyFromCard(handle, head)) FileHeader.parse(head) else null
-                    if (parsed != null) return decryptTo(handle, parsed, dek, output, onProgress)
+                    if (parsed != null) return decryptTo(handle, parsed, dek, output, isCancelled, onProgress)
                     LibJniFSShell.SFSeek64(handle, 0, 0) // 旧未加密用户文件：回卷读原始字节
                 }
                 var total = 0L
                 val buf = ByteArray(CHUNK)
                 while (true) {
+                    if (isCancelled()) return Result.failure(TransferCancelledException()) // 半成品 SAF 文档由调用方删
                     val n = LibJniFSShell.SFRead(handle, buf, 0, CHUNK)
                     if (n < 0) return Result.failure(IllegalStateException("读取失败 @${total}"))
                     if (n == 0) break
@@ -545,7 +556,8 @@ class RealFileSystem @Inject constructor(
 
     /** 逐块 DEK 解密写出（M12.3）。句柄已越过文件头；按 [FileHeader] 的明文大小推每块密文长度。须持 fsShell 锁。 */
     private fun decryptTo(
-        handle: Int, parsed: FileHeader.Parsed, dek: ByteArray, output: OutputStream, onProgress: (Long) -> Unit
+        handle: Int, parsed: FileHeader.Parsed, dek: ByteArray, output: OutputStream,
+        isCancelled: () -> Boolean, onProgress: (Long) -> Unit
     ): Result<Long> {
         val size = parsed.plaintextSize
         val totalChunks = ((size + CHUNK - 1) / CHUNK).toInt().coerceAtLeast(1)
@@ -553,6 +565,7 @@ class RealFileSystem @Inject constructor(
         var total = 0L
         return try {
             for (index in 0 until totalChunks) {
+                if (isCancelled()) throw TransferCancelledException() // 经下方 catch → 失败返回
                 val plainLen = minOf(CHUNK.toLong(), size - index.toLong() * CHUNK).toInt().coerceAtLeast(0)
                 val cipher = ByteArray(plainLen + FileCrypto.GCM_TAG_BYTES)
                 if (!reader.readExact(cipher)) throw IOException("密文不足 @chunk$index")

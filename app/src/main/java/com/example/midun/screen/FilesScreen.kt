@@ -135,15 +135,18 @@ fun FilesScreen(
     }
 
     // 仅「进行中」显进度弹窗；完成态由上面的 LaunchedEffect 转 Snackbar。
-    exportProgress?.takeIf { !it.finished }?.let { FolderExportDialog(it) }
+    exportProgress?.takeIf { !it.finished }?.let {
+        FolderExportDialog(it, onCancel = { fileViewModel.cancelTransfer() })
+    }
 }
 
-/** 文件夹导出进度对话框（M11.5.6 + M-files 当前文件字节进度）。仅进行中显示（不可关）；完成态走 Snackbar。 */
+/** 文件夹导出进度对话框（M11.5.6 + M-files 当前文件字节进度）。仅进行中显示（不可关）；完成态走 Snackbar。
+ *  [onCancel]：点「取消」中止导出（已导出的文件保留，当前半成品删除）。 */
 @Composable
-private fun FolderExportDialog(progress: ExportProgress) {
+private fun FolderExportDialog(progress: ExportProgress, onCancel: () -> Unit) {
     val mb = { bytes: Long -> "%.1f MB".format(bytes / 1024f / 1024f) }
     AlertDialog(
-        onDismissRequest = { }, // 进行中不可关
+        onDismissRequest = { }, // 进行中不可关（仅「取消」按钮可中止）
         icon = { Icon(Icons.Default.FolderZip, null, tint = Primary) },
         title = { Text("正在导出文件夹") },
         text = {
@@ -166,13 +169,15 @@ private fun FolderExportDialog(progress: ExportProgress) {
                 }
             }
         },
-        confirmButton = {}
+        confirmButton = {
+            TextButton(onClick = onCancel) { Text("取消", color = TextSecondary) }
+        }
     )
 }
 
-/** 单文件字节进度对话框（导入/单文件导出共用）。仅进行中显示，不可关。 */
+/** 单文件字节进度对话框（导入/单文件导出共用）。仅进行中显示，不可关；[onCancel] 中止并清半成品。 */
 @Composable
-private fun ByteProgressDialog(title: String, icon: ImageVector, p: FileByteProgress) {
+private fun ByteProgressDialog(title: String, icon: ImageVector, p: FileByteProgress, onCancel: () -> Unit) {
     val mb = { bytes: Long -> "%.1f MB".format(bytes / 1024f / 1024f) }
     AlertDialog(
         onDismissRequest = { },
@@ -196,7 +201,9 @@ private fun ByteProgressDialog(title: String, icon: ImageVector, p: FileByteProg
                 }
             }
         },
-        confirmButton = {}
+        confirmButton = {
+            TextButton(onClick = onCancel) { Text("取消", color = TextSecondary) }
+        }
     )
 }
 
@@ -612,8 +619,12 @@ fun FileDetailScreen(
         )
     }
 
-    importProgress?.let { ByteProgressDialog("正在导入", Icons.Default.FileUpload, it) }
-    fileExportProgress?.let { ByteProgressDialog("正在导出", Icons.Default.FileDownload, it) }
+    importProgress?.let {
+        ByteProgressDialog("正在导入", Icons.Default.FileUpload, it, onCancel = { fileViewModel.cancelTransfer() })
+    }
+    fileExportProgress?.let {
+        ByteProgressDialog("正在导出", Icons.Default.FileDownload, it, onCancel = { fileViewModel.cancelTransfer() })
+    }
 
     fileToDelete?.let { file ->
         DeleteConfirmDialog(
@@ -640,7 +651,9 @@ fun FileDetailScreen(
     }
 
     // 仅「进行中」显进度弹窗；完成态由上面的 LaunchedEffect 转 Snackbar。
-    exportProgress?.takeIf { !it.finished }?.let { FolderExportDialog(it) }
+    exportProgress?.takeIf { !it.finished }?.let {
+        FolderExportDialog(it, onCancel = { fileViewModel.cancelTransfer() })
+    }
 
     previewFile?.let { FilePreviewDialog(file = it, onClose = { previewFile = null }) }
 }
