@@ -4,11 +4,8 @@ import com.example.midun.data.model.DeviceInfo
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * USB 安全卡业务操作接口（M11.3）。`MockUsbManager`（模拟）与 `RealUsbManager`（真卡 FSShell）
- * 都实现它，由 `SecurityCardManager` facade 按运行时开关路由。
- *
- * **不含 DEV 专属方法**（`simulateInsert/Remove/FirstInsert`）——那些是 Mock 模拟插拔卡用的，
- * 真卡靠 USB 广播 + `RealUsbManager.connectUsb`，故只 Mock 有、不进接口。
+ * USB 安全卡业务操作接口（M11.3）。由 `RealUsbManager`（真卡 FSShell）实现，`SecurityCardManager`
+ * facade 转发到它。USB 连接靠系统插拔广播 + `RealUsbManager.connectUsb`（非接口方法）。
  */
 interface UsbCardOps {
     /** 设备状态流（连接/认证态、设备 ID、绑定、是否已初始化）。 */

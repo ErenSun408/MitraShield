@@ -23,9 +23,9 @@ data class ChatSnapshot(
  * 聊天记录的真卡持久化后端（M11.5.5）。把 [com.example.midun.data.ChatRepository] 的内存联系人
  * 与消息序列化为隐藏区侧车 [CHAT_PATH] 的 JSON，使聊天跨会话留存于安全卡。
  *
- * 活动条件 / 依赖选型同 [OperationLogStore]：判据 = [RealUsbManager] AUTHENTICATED（真卡模式 + 盘已打开），
- * 依赖 `RealUsbManager` 叶子而非 `SecurityCardManager`（避免经 MockUsbManager 反向依赖成 DI 环）。
- * 非活动态（模拟模式 / 未认证）下 [load] 回 null、[save] no-op，保留 mock 种子数据开发流。
+ * 活动条件 / 依赖选型同 [OperationLogStore]：判据 = [RealUsbManager] AUTHENTICATED（盘已打开）。
+ * 依赖 `RealUsbManager` 叶子而非 `SecurityCardManager`（后者注入 [ChatRepository]→本类，注入会成 DI 环）。
+ * 未认证态下 [load] 回 null、[save] no-op（仅内存）。
  */
 @Singleton
 class ChatStore @Inject constructor(

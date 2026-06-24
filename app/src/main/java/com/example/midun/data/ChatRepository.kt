@@ -21,10 +21,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 聊天仓库（联系人 + 消息，内存版 + 真卡持久化）。
+ * 聊天仓库（联系人 + 消息，内存态 + 真卡持久化）。
  *
- * **持久化（M11.5.5）**：经 [ChatStore] 落安全卡隐藏区。模拟模式下 store 非活动 → 保留内存种子数据
- * 开发流；真卡模式下认证成功即从卡加载历史（替换内存种子）、每次变更写穿到卡。模式判据/依赖选型见 [ChatStore]。
+ * **持久化（M11.5.5）**：内存态空启动；真卡认证成功即经 [ChatStore] 从卡加载历史、每次变更写穿到卡；
+ * 锁定/拔卡清内存明文。依赖选型见 [ChatStore]。
  */
 @Singleton
 class ChatRepository @Inject constructor(
@@ -36,8 +36,8 @@ class ChatRepository @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
-        // 真卡认证成功（盘已打开）→ 从卡加载聊天，替换内存种子；锁定/拔卡（离开 AUTHENTICATED）→ 清内存明文。
-        // 模拟模式 Real 永不认证 → wasAuthed 恒 false，初始 false 不误清种子（M11.6.3 安全加固）。
+        // 真卡认证成功（盘已打开）→ 从卡加载聊天；锁定/拔卡（离开 AUTHENTICATED）→ 清内存明文。
+        // wasAuthed 守卫：初始 false 的首个发射不触发清理，仅真正离开认证态才清（M11.6.3 安全加固）。
         scope.launch {
             var wasAuthed = false
             realUsbManager.deviceStatus
@@ -64,7 +64,7 @@ class ChatRepository @Inject constructor(
      */
     private fun sweepExpiredCache() {
         val cutoff = System.currentTimeMillis() - CACHE_TTL_MS
-        mockMessages.values.flatten().forEach { m ->
+        messages.values.flatten().forEach { m ->
             if (m.type == MessageType.FILE && m.timestamp < cutoff) {
                 realFileSystem.streamDelete(FileCachePaths.recv(m.id))
                 realFileSystem.streamDelete(FileCachePaths.sent(m.id))
@@ -74,11 +74,11 @@ class ChatRepository @Inject constructor(
 
     /** 所有 FILE 消息推出的候选缓存路径（.recv_ + .sent_；是否存在由调用方判断）。 */
     private fun cachePaths(): List<String> =
-        mockMessages.values.flatten()
+        messages.values.flatten()
             .filter { it.type == MessageType.FILE }
             .flatMap { listOf(FileCachePaths.recv(it.id), FileCachePaths.sent(it.id)) }
 
-    /** 现存文件预览缓存统计（设置页展示）：返回 (文件数, 总字节)。仅真卡认证态有意义，模拟模式恒 (0,0)。 */
+    /** 现存文件预览缓存统计（设置页展示）：返回 (文件数, 总字节)。仅认证态有缓存，未认证恒 (0,0)。 */
     suspend fun cacheStats(): Pair<Int, Long> = withContext(Dispatchers.IO) {
         var count = 0
         var bytes = 0L
@@ -99,31 +99,16 @@ class ChatRepository @Inject constructor(
         freed
     }
 
-    private val mockContacts = mutableListOf(
-        Contact("c1", "DEVICE_ABC123", "张三", "好的，文件已收到", System.currentTimeMillis() - 3600000, isOnline = true),
-        Contact("c2", "DEVICE_DEF456", "李四（工作）", "明天再说", System.currentTimeMillis() - 86400000, isOnline = false, unreadCount = 3),
-        Contact("c3", "DEVICE_GHI789", "王五", "收到", System.currentTimeMillis() - 172800000, isOnline = false),
-    )
+    // 内存态联系人/消息：空启动，真卡认证后由 [ChatStore] 从卡加载替换（无种子数据）。
+    private val contacts = mutableListOf<Contact>()
+    private val messages = mutableMapOf<String, MutableList<ChatMessage>>()
 
-    private val mockMessages = mutableMapOf<String, MutableList<ChatMessage>>(
-        "c1" to mutableListOf(
-            ChatMessage("m1", "c1", "你好，我是张三", isMine = false, timestamp = System.currentTimeMillis() - 7200000),
-            ChatMessage("m2", "c1", "你好！", isMine = true, timestamp = System.currentTimeMillis() - 7100000),
-            ChatMessage("m3", "c1", "文件发给你了", isMine = false, timestamp = System.currentTimeMillis() - 3700000, type = MessageType.FILE, fileName = "合同.pdf", fileSize = 2048000),
-            ChatMessage("m4", "c1", "好的，文件已收到", isMine = true, timestamp = System.currentTimeMillis() - 3600000),
-        ),
-        "c2" to mutableListOf(
-            ChatMessage("m5", "c2", "这个方案怎么样", isMine = true, timestamp = System.currentTimeMillis() - 90000000),
-            ChatMessage("m6", "c2", "明天再说", isMine = false, timestamp = System.currentTimeMillis() - 86400000),
-        )
-    )
-
-    fun getContacts(): List<Contact> = mockContacts.sortedWith(
+    fun getContacts(): List<Contact> = contacts.sortedWith(
         compareByDescending<Contact> { it.isPinned }.thenByDescending { it.lastMessageTime }
     )
 
     fun getMessages(contactId: String): List<ChatMessage> =
-        mockMessages[contactId]?.toList() ?: emptyList()
+        messages[contactId]?.toList() ?: emptyList()
 
     suspend fun sendMessage(
         contactId: String,
@@ -148,7 +133,7 @@ class ChatRepository @Inject constructor(
             burnAfterRead = burnAfterRead,
             burnTtl = burnTtl
         )
-        mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
+        messages.getOrPut(contactId) { mutableListOf() }.add(msg)
         updateContactPreview(contactId)
         persist()
         return Result.success(msg)
@@ -156,7 +141,7 @@ class ChatRepository @Inject constructor(
 
     suspend fun deleteMessage(messageId: String, contactId: String): Result<Unit> {
         delay(100)
-        mockMessages[contactId]?.removeAll { it.id == messageId }
+        messages[contactId]?.removeAll { it.id == messageId }
         updateContactPreview(contactId)
         persist()
         return Result.success(Unit)
@@ -167,7 +152,7 @@ class ChatRepository @Inject constructor(
      * 渲染为「已撤回」墓碑。安全考量：撤回须让内容从存储消失，不只是 UI 隐藏。
      */
     fun markRecalled(messageId: String, contactId: String) {
-        val list = mockMessages[contactId] ?: return
+        val list = messages[contactId] ?: return
         val idx = list.indexOfFirst { it.id == messageId }
         if (idx < 0) return
         list[idx] = list[idx].copy(
@@ -194,7 +179,7 @@ class ChatRepository @Inject constructor(
             isMine = false,
             status = MessageStatus.RECEIVED
         )
-        mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
+        messages.getOrPut(contactId) { mutableListOf() }.add(msg)
         updateContactPreview(contactId)
         persist()
     }
@@ -205,7 +190,7 @@ class ChatRepository @Inject constructor(
      * 已有的提示则先移除——再在末尾新插一条。效果 = 每个断连段始终只有一条、且永远在最新消息之下。
      */
     fun addConnectPromptIfNeeded(contactId: String) {
-        val list = mockMessages.getOrPut(contactId) { mutableListOf() }
+        val list = messages.getOrPut(contactId) { mutableListOf() }
         val iter = list.listIterator(list.size)
         while (iter.hasPrevious()) {
             val m = iter.previous()
@@ -234,7 +219,7 @@ class ChatRepository @Inject constructor(
      * 与 markRecalled 同为「原地把真实消息变残骸」——保 id 与时间位置，供 BURN 帧按 id 双端引用。
      */
     fun markBurned(messageId: String, contactId: String) {
-        val list = mockMessages[contactId] ?: return
+        val list = messages[contactId] ?: return
         val idx = list.indexOfFirst { it.id == messageId }
         if (idx < 0) return
         list[idx] = list[idx].copy(
@@ -252,7 +237,7 @@ class ChatRepository @Inject constructor(
 
     suspend fun clearMessages(contactId: String): Result<Unit> {
         delay(300)
-        mockMessages[contactId]?.clear()
+        messages[contactId]?.clear()
         updateContactPreview(contactId)
         persist()
         return Result.success(Unit)
@@ -260,29 +245,29 @@ class ChatRepository @Inject constructor(
 
     suspend fun deleteContact(contactId: String): Result<Unit> {
         delay(500)
-        mockMessages.remove(contactId)
-        mockContacts.removeAll { it.id == contactId }
+        messages.remove(contactId)
+        contacts.removeAll { it.id == contactId }
         persist()
         return Result.success(Unit)
     }
 
     /** 扫码建联：新增一个联系人。由 P2PSessionManager 建联系人时调用。 */
     fun addContact(contact: Contact) {
-        mockContacts.add(contact)
+        contacts.add(contact)
         persist()
     }
 
     /** 修改联系人备注（用户在联系人资料页编辑）。由 ChatViewModel.updateRemark 调用。 */
     fun updateRemark(contactId: String, remark: String) {
-        mockContacts.indexOfFirst { it.id == contactId }
+        contacts.indexOfFirst { it.id == contactId }
             .takeIf { it >= 0 }
-            ?.let { idx -> mockContacts[idx] = mockContacts[idx].copy(remark = remark) }
+            ?.let { idx -> contacts[idx] = contacts[idx].copy(remark = remark) }
         persist()
     }
 
     /** 是否已存在该 deviceId 的联系人（P2PSessionManager 身份交换去重用）。 */
     fun findContactByDevice(deviceId: String): Contact? =
-        mockContacts.firstOrNull { it.deviceId == deviceId }
+        contacts.firstOrNull { it.deviceId == deviceId }
 
     /**
      * 收到对端消息入库（isMine=false）+ 未读 +1 + 刷新预览。由 P2PSessionManager 接收循环调用（M10.4）。
@@ -307,10 +292,10 @@ class ChatRepository @Inject constructor(
             burnAfterRead = burnAfterRead,
             burnTtl = burnTtl
         )
-        mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
-        val idx = mockContacts.indexOfFirst { it.id == contactId }
+        messages.getOrPut(contactId) { mutableListOf() }.add(msg)
+        val idx = contacts.indexOfFirst { it.id == contactId }
         if (idx >= 0) {
-            mockContacts[idx] = mockContacts[idx].copy(unreadCount = mockContacts[idx].unreadCount + 1)
+            contacts[idx] = contacts[idx].copy(unreadCount = contacts[idx].unreadCount + 1)
         }
         updateContactPreview(contactId)
         persist()
@@ -345,10 +330,10 @@ class ChatRepository @Inject constructor(
             savedFolderId = savedFolderId,
             localPath = localPath
         )
-        mockMessages.getOrPut(contactId) { mutableListOf() }.add(msg)
+        messages.getOrPut(contactId) { mutableListOf() }.add(msg)
         if (!isMine) {
-            val idx = mockContacts.indexOfFirst { it.id == contactId }
-            if (idx >= 0) mockContacts[idx] = mockContacts[idx].copy(unreadCount = mockContacts[idx].unreadCount + 1)
+            val idx = contacts.indexOfFirst { it.id == contactId }
+            if (idx >= 0) contacts[idx] = contacts[idx].copy(unreadCount = contacts[idx].unreadCount + 1)
         }
         updateContactPreview(contactId)
         persist()
@@ -360,7 +345,7 @@ class ChatRepository @Inject constructor(
      * 隐私文件夹来源在 addFileMessage 时即带 localPath，无需此设。按 id 原地改。
      */
     fun setFileLocalPath(messageId: String, contactId: String, localPath: String) {
-        val list = mockMessages[contactId] ?: return
+        val list = messages[contactId] ?: return
         val idx = list.indexOfFirst { it.id == messageId }
         if (idx < 0) return
         list[idx] = list[idx].copy(localPath = localPath)
@@ -369,7 +354,7 @@ class ChatRepository @Inject constructor(
 
     /** 更新文件消息状态（发送 SENDING→SENT/FAILED；接收完成/失败）。按 id 原地改。 */
     fun updateFileStatus(messageId: String, contactId: String, status: MessageStatus) {
-        val list = mockMessages[contactId] ?: return
+        val list = messages[contactId] ?: return
         val idx = list.indexOfFirst { it.id == messageId }
         if (idx < 0) return
         list[idx] = list[idx].copy(status = status)
@@ -381,7 +366,7 @@ class ChatRepository @Inject constructor(
      * [finalFileName] 为实际落地文件名（冲突避让后可能加了序号）→ 同步更新 fileName/content，保证预览路径正确。
      */
     fun setFileSaved(messageId: String, contactId: String, savedFolderId: String, finalFileName: String) {
-        val list = mockMessages[contactId] ?: return
+        val list = messages[contactId] ?: return
         val idx = list.indexOfFirst { it.id == messageId }
         if (idx < 0) return
         list[idx] = list[idx].copy(savedFolderId = savedFolderId, fileName = finalFileName, content = finalFileName)
@@ -390,56 +375,56 @@ class ChatRepository @Inject constructor(
 
     /** 切换联系人置顶状态。由 ChatViewModel.togglePin 调用；置顶项在 getContacts 中排在最前。 */
     fun togglePin(contactId: String) {
-        mockContacts.indexOfFirst { it.id == contactId }
+        contacts.indexOfFirst { it.id == contactId }
             .takeIf { it >= 0 }
-            ?.let { idx -> mockContacts[idx] = mockContacts[idx].copy(isPinned = !mockContacts[idx].isPinned) }
+            ?.let { idx -> contacts[idx] = contacts[idx].copy(isPinned = !contacts[idx].isPinned) }
         persist()
     }
 
     /** 进入会话时清除该联系人的未读计数。由 ChatViewModel.markRead 调用。 */
     fun markContactRead(contactId: String) {
-        mockContacts.indexOfFirst { it.id == contactId }
+        contacts.indexOfFirst { it.id == contactId }
             .takeIf { it >= 0 }
-            ?.let { idx -> mockContacts[idx] = mockContacts[idx].copy(unreadCount = 0) }
+            ?.let { idx -> contacts[idx] = contacts[idx].copy(unreadCount = 0) }
         persist()
     }
 
-    /** 整卡擦除时调用：清空所有联系人与消息。由 MockUsbManager.wipeAll() 统一触发。 */
+    /** 整卡擦除时调用：清空所有联系人与消息。由 SecurityCardManager.wipeAll()/wipeUserData() 统一触发。 */
     fun clear() {
-        mockContacts.clear()
-        mockMessages.clear()
+        contacts.clear()
+        messages.clear()
         persist()
     }
 
     /** 仅清内存（锁定/拔卡时；卡内数据已写穿，不再持久化，重认证后重载）。 */
     private fun clearInMemory() {
-        mockContacts.clear()
-        mockMessages.clear()
+        contacts.clear()
+        messages.clear()
     }
 
     /** 用卡内快照替换内存（真卡认证后加载）。 */
     private fun applySnapshot(s: ChatSnapshot) {
-        mockContacts.clear()
-        mockContacts.addAll(s.contacts)
-        mockMessages.clear()
-        s.messages.forEach { (cid, list) -> mockMessages[cid] = list.toMutableList() }
+        contacts.clear()
+        contacts.addAll(s.contacts)
+        messages.clear()
+        s.messages.forEach { (cid, list) -> messages[cid] = list.toMutableList() }
     }
 
-    /** 写穿到隐藏区（store 内部判活动态：模拟模式 no-op、真卡模式整表覆盖写）。 */
+    /** 写穿到隐藏区（store 内部判活动态：未认证 no-op、认证态整表覆盖写）。 */
     private fun persist() {
-        scope.launch { store.save(ChatSnapshot(mockContacts.toList(), mockMessages.mapValues { it.value.toList() })) }
+        scope.launch { store.save(ChatSnapshot(contacts.toList(), messages.mapValues { it.value.toList() })) }
     }
 
     private fun updateContactPreview(contactId: String) {
-        val index = mockContacts.indexOfFirst { it.id == contactId }
+        val index = contacts.indexOfFirst { it.id == contactId }
         if (index == -1) return
 
         // 预览取最后一条**非系统**消息（系统行如「去建立连接」/焚毁开关不应作为会话列表预览）。
-        val lastMessage = mockMessages[contactId]
+        val lastMessage = messages[contactId]
             ?.filter { it.type != MessageType.SYSTEM }
             ?.maxByOrNull { it.timestamp }
 
-        mockContacts[index] = mockContacts[index].copy(
+        contacts[index] = contacts[index].copy(
             lastMessage = when {
                 lastMessage == null -> ""
                 lastMessage.recalled -> "[消息已撤回]"

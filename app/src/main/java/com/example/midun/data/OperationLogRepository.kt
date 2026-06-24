@@ -23,8 +23,8 @@ import kotlinx.coroutines.launch
  *
  * 以 [StateFlow] 暴露，首页可响应式刷新。最新记录在头部，上限 [MAX_ENTRIES] 条。
  *
- * **持久化（M11.5.4）**：经 [OperationLogStore] 落安全卡隐藏区。模拟模式下 store 非活动 → 退化为
- * 纯内存（进程重启即清空，贴合「不留痕」）；真卡模式下认证成功即从卡加载历史、每次变更写穿到卡。
+ * **持久化（M11.5.4）**：经 [OperationLogStore] 落安全卡隐藏区。内存态空启动；真卡认证成功即从卡加载历史、
+ * 每次变更写穿到卡；未认证时 store no-op（仅内存，进程重启即清空，贴合「不留痕」）。
  */
 @Singleton
 class OperationLogRepository @Inject constructor(
@@ -39,7 +39,7 @@ class OperationLogRepository @Inject constructor(
 
     init {
         // 真卡认证成功（盘已打开）→ 从卡加载历史日志；锁定/拔卡（离开 AUTHENTICATED）→ 清内存明文。
-        // 模拟模式 Real 永不认证 → wasAuthed 恒 false，初始 false 不误清种子（M11.6.3 安全加固）。
+        // wasAuthed 守卫：初始 false 的首个发射不触发清理，仅真正离开认证态才清（M11.6.3 安全加固）。
         scope.launch {
             var wasAuthed = false
             realUsbManager.deviceStatus
@@ -64,13 +64,13 @@ class OperationLogRepository @Inject constructor(
         persist()
     }
 
-    /** 清空日志。由一键清理 / 恢复出厂触发（MockUsbManager.wipeUserData / wipeAll）。 */
+    /** 清空日志。由一键清理 / 恢复出厂触发（SecurityCardManager.wipeUserData / wipeAll）。 */
     fun clear() {
         _logs.value = emptyList()
         persist()
     }
 
-    /** 写穿到隐藏区（store 内部判活动态：模拟模式 no-op、真卡模式整表覆盖写）。 */
+    /** 写穿到隐藏区（store 内部判活动态：未认证 no-op、认证态整表覆盖写）。 */
     private fun persist() {
         scope.launch { store.save(_logs.value) }
     }

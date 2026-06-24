@@ -15,10 +15,9 @@ import org.json.JSONObject
  * 操作日志的真卡持久化后端（M11.5.4）。把 [com.example.midun.data.OperationLogRepository] 的内存日志
  * 序列化为隐藏区侧车 [LOG_PATH] 的 JSON，使日志跨会话/重启留存于安全卡。
  *
- * **活动条件 = [RealUsbManager] 认证态**：真卡只在 `useRealCard` 且盘已打开（`SFOpenDiskEx` 成功）时
- * 进入 AUTHENTICATED，故此即「真卡模式 + 隐藏区可读写」的精确判据。**有意不注入 `SecurityCardManager`**
- * ——它经 `MockUsbManager` 反向依赖 `OperationLogRepository`，注入会成 DI 环；`RealUsbManager` 是叶子、无环。
- * 非活动态（模拟模式 / 未认证）下 [load] 回 null、[save] no-op，保留 mock 内存日志开发流。
+ * **活动条件 = [RealUsbManager] 认证态**：盘已打开（`SFOpenDiskEx` 成功）即进入 AUTHENTICATED，是
+ * 「隐藏区可读写」的精确判据。**有意不注入 `SecurityCardManager`**——它注入 [OperationLogRepository]→本类，
+ * 注入会成 DI 环；`RealUsbManager` 是叶子、无环。未认证态下 [load] 回 null、[save] no-op（仅内存）。
  */
 @Singleton
 class OperationLogStore @Inject constructor(
