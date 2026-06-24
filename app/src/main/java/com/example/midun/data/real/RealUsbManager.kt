@@ -14,6 +14,7 @@ import java.security.MessageDigest
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,7 +46,10 @@ class RealUsbManager @Inject constructor(
     private val cardKeystore: CardKeystore
 ) : UsbCardOps {
 
-    private val fsShell: LibJniFSShell = FSShellInstance.getLibFSShellInstance()
+    // 懒加载：getLibFSShellInstance() 会 System.loadLibrary ~15MB native 库。@Singleton 在启动构建依赖图时
+    // 就会造出本类——若饿汉初始化,这次 loadLibrary 落在主线程 onCreate 上 → 拉长启动白屏。改 by lazy 推迟到
+    // 首次真正用卡(connectUsb 在 IO 线程)才加载,把它移出启动主线程路径。
+    private val fsShell: LibJniFSShell by lazy { FSShellInstance.getLibFSShellInstance() }
     private var usbHelper: USBStorageHelper? = null
     /** USB Open 成功后拼好的「外部设备」diskName，供 SFOpenDiskEx 复用。 */
     private var diskName: String? = null
@@ -75,12 +79,18 @@ class RealUsbManager @Inject constructor(
                 return@withContext Result.failure(IllegalStateException("未找到 USB 设备"))
             }
             val name = list.GetName(0)
-            if (!helper.Open(name)) {
+            // SDK 怪癖（javap 核实 RequestPermission）：未授权时首次 Open 会异步弹授权框、但**立即返回 false**
+            // （返回的是请求前的旧 hasPermission）。故首次失败后等授权结果：授权了再 Open 一次即成功（此时
+            // hasPermission 已被系统缓存为 true）；拒绝/超时/真·打开失败 → 保持 DISCONNECTED（白屏等待、不退出）。
+            if (!helper.Open(name) && !awaitPermissionAndReopen(helper, name)) {
                 _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
                 return@withContext Result.failure(
-                    IllegalStateException("打开 USB 失败（可能未授权，请在系统弹框中允许后重试）")
+                    IllegalStateException("打开 USB 失败（未授权或被拒绝）")
                 )
             }
+            // 授权通过、设备已打开 → 进入「检测中」：UI 据此显 Splash 检测页，再跑下面的 native 探测。
+            _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.CONNECTING)
+
             val dn = buildExternalDiskName(helper, name).also { diskName = it }
 
             // SFDiskGetSN 需盘已打开才能读。先试免密直读（部分卡可经 USB 句柄读硬件序列号）；读不到则在
@@ -102,6 +112,21 @@ class RealUsbManager @Inject constructor(
             _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
             Result.failure(e)
         }
+    }
+
+    /**
+     * 首次 [USBStorageHelper.Open] 失败后等待 USB 授权结果并重试一次（SDK 怪癖见 [connectUsb]）。
+     * SDK 的 onReceive 在收到授权广播时设公共标志：`FReceivePermission`（已收到结果）/`FGrantedPermission`
+     * （是否授权）。仅当确实发起了授权请求（`FRequestingPermission` 或已收到结果）才等待，避免「真·打开失败」
+     * 时空等满超时；轮询到结果后,授权通过则再 Open 一次。拒绝/超时/再次失败 → false。
+     */
+    private suspend fun awaitPermissionAndReopen(helper: USBStorageHelper, name: String): Boolean {
+        if (!helper.FRequestingPermission && !helper.FReceivePermission) return false // 非权限问题=真失败
+        var waited = 0
+        while (!helper.FReceivePermission && waited < PERMISSION_TIMEOUT_MS) {
+            delay(PERMISSION_POLL_MS.toLong()); waited += PERMISSION_POLL_MS
+        }
+        return helper.FGrantedPermission && helper.Open(name)
     }
 
     /** 读真卡 SN（`SFDiskGetSN` 需盘已打开；打开后 driveName 参数被忽略，传 ""）。读不到回空串。 */
@@ -360,6 +385,9 @@ class RealUsbManager @Inject constructor(
 
     private companion object {
         const val DEFAULT_PASSWORD = "123456"
+        /** 等 USB 授权结果的轮询间隔/超时（首次 Open 怪癖重试用）。120s 足够用户在弹框上操作。 */
+        const val PERMISSION_POLL_MS = 200
+        const val PERMISSION_TIMEOUT_MS = 120_000
         const val ROOT = "0:/"
         const val BIND_PATH = "0:/.bind"
         const val CHAT_SIDECAR = "0:/.midun_chat.json"

@@ -50,7 +50,9 @@ fun SplashScreen(
     LaunchedEffect(animationDone, deviceStatus) {
         if (!animationDone) return@LaunchedEffect
         val target = when {
-            deviceStatus.status == UsbDeviceStatus.DISCONNECTED -> null
+            // DISCONNECTED 不会进到这（MainActivity 在无卡时不渲染 NavGraph）；CONNECTING=正在检测卡 → 停留显本页。
+            deviceStatus.status == UsbDeviceStatus.DISCONNECTED ||
+                deviceStatus.status == UsbDeviceStatus.CONNECTING -> null
             !deviceStatus.isInitialized -> Screen.Init.route
             deviceStatus.status == UsbDeviceStatus.AUTHENTICATED -> Screen.Main.route
             else -> Screen.Login.route

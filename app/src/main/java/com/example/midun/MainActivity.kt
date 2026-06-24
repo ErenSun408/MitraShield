@@ -15,8 +15,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -90,12 +94,24 @@ class MainActivity : ComponentActivity() {
             MiDunTheme {
                 val navController = rememberNavController()
                 val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
-                val isConnected = deviceStatus.status != UsbDeviceStatus.DISCONNECTED
+                val status = deviceStatus.status
+
+                // 本会话是否连过卡：连过一次后再拔卡才触发「5秒退出遮罩」；从没连过(刚开 App 没插卡)只白屏等待。
+                var hasConnectedBefore by remember { mutableStateOf(false) }
+                LaunchedEffect(status) {
+                    if (status == UsbDeviceStatus.CONNECTED || status == UsbDeviceStatus.AUTHENTICATED) {
+                        hasConnectedBefore = true
+                    }
+                }
 
                 Box(modifier = Modifier.fillMaxSize()) {
-                    NavGraph(navController = navController)
+                    // 无卡(DISCONNECTED)时不渲染主导航：从没连过 → 纯白等待(下方什么都不画)；连过又拔 → 退出遮罩。
+                    // 有卡(CONNECTING 检测中 / CONNECTED / AUTHENTICATED)才渲染 NavGraph(Splash 自显「检测中」并路由)。
+                    if (status != UsbDeviceStatus.DISCONNECTED) {
+                        NavGraph(navController = navController)
+                    }
 
-                    if (!isConnected) {
+                    if (status == UsbDeviceStatus.DISCONNECTED && hasConnectedBefore) {
                         // 放进独立全屏 Dialog 窗口，确保拔卡锁定层盖在所有 AlertDialog（删除确认/选取等）之上——
                         // Compose 的 AlertDialog 是独立平台窗口，若遮罩只画在 Activity 内容里会被这些 dialog 盖住。
                         Dialog(

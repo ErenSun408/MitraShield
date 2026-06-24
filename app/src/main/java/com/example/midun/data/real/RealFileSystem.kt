@@ -46,7 +46,9 @@ class RealFileSystem @Inject constructor(
     private val cardKeystore: CardKeystore
 ) : FileSystemOps {
 
-    private val fsShell: LibJniFSShell = FSShellInstance.getLibFSShellInstance()
+    // 懒加载：getLibFSShellInstance() 会 System.loadLibrary native 库。@Singleton 在启动构建依赖图时即被造出,
+    // 饿汉初始化会把 loadLibrary 压到主线程 onCreate → 拉长启动白屏。改 by lazy 推迟到首次卡操作(IO 线程)。
+    private val fsShell: LibJniFSShell by lazy { FSShellInstance.getLibFSShellInstance() }
 
     /** 文件夹路径 → 拷贝策略（侧车缓存，懒加载）。 */
     private var folderPolicies: MutableMap<String, CopyPolicy>? = null
