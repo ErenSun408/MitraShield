@@ -283,6 +283,18 @@ class ChatViewModel @Inject constructor(
         withContext(Dispatchers.IO) { fileRepository.cardFileExists(path) }
 
     /**
+     * 读语音消息的音频字节（`[chat-voice]` 播放用）：发送方读卡内 `.sent_`/源副本（[ChatMessage.localPath]），
+     * 接收方读 `.recv_` 暂存。缓存可能已被 7 天 TTL 清理 → 返回 null（UI 提示语音已过期）。语音 clip 小，整读即可。
+     */
+    suspend fun readVoiceBytes(msg: ChatMessage): ByteArray? {
+        val path = if (msg.isMine) msg.localPath else p2pManager.stagingPathFor(msg.id)
+        if (path.isNullOrBlank()) return null
+        return withContext(Dispatchers.IO) {
+            runCatching { fileRepository.openFileStream(path).use { it.readBytes() } }.getOrNull()
+        }
+    }
+
+    /**
      * 接收方把暂存文件保存到隐私文件夹：转发 P2PSessionManager.saveReceivedFile（卡内复制暂存→文件夹，暂存保留作缓存）。
      * 成功后刷新会话（气泡转「已保存」、可预览）。
      */

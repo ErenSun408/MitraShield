@@ -1,5 +1,7 @@
 package com.example.midun.screen
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -8,6 +10,13 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.core.content.ContextCompat
+import com.example.midun.audio.VoicePlayer
+import com.example.midun.audio.VoiceRecorder
+import java.io.File
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -128,6 +137,28 @@ fun ChatDetailScreen(
             )
         }
     }
+
+    // —— 语音消息（[chat-voice]，按住说话）——
+    val voiceRecorder = remember { VoiceRecorder(context) }
+    val voicePlayer = remember { VoicePlayer() }
+    var voiceMode by remember { mutableStateOf(false) }              // true=语音输入态，false=文字输入
+    var recording by remember { mutableStateOf(false) }              // 正在录音
+    var cancelArmed by remember { mutableStateOf(false) }            // 上滑进入取消区（松手则取消）
+    var recordSeconds by remember { mutableIntStateOf(0) }           // 录音时长（按钮内实时显示）
+    var playingVoiceId by remember { mutableStateOf<String?>(null) } // 正在播放的语音消息 id
+    val hasMicPermission = {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+    val audioPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (!granted) scope.launch { snackbarHostState.showSnackbar("需要麦克风权限才能发送语音") }
+    }
+    // 录音计时（按钮内显示秒数）。
+    LaunchedEffect(recording) {
+        while (recording) { recordSeconds = voiceRecorder.elapsedSec(); delay(200) }
+    }
+    // 离开会话页：停播放、弃在录的音（避免泄漏 MediaRecorder/Player 与临时文件）。
+    DisposableEffect(Unit) { onDispose { voicePlayer.stop(); voiceRecorder.cancel() } }
 
     // 搜索词非空时按内容/文件名过滤；空时用原始消息流。messages 变化时重算。
     val displayMessages = remember(messages, searchQuery) {
@@ -273,26 +304,95 @@ fun ChatDetailScreen(
                             )
                         }
                     }
-                    OutlinedTextField(
-                        value = inputText,
-                        onValueChange = { inputText = it },
-                        placeholder = { Text("输入消息...", fontSize = 14.sp) },
-                        modifier = Modifier.weight(1f).heightIn(max = 120.dp),
-                        shape = RoundedCornerShape(20.dp),
-                        maxLines = 4
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    FilledIconButton(
-                        onClick = {
-                            if (inputText.isNotBlank()) {
-                                chatViewModel.sendMessage(inputText.trim())
-                                inputText = ""
-                            }
-                        },
-                        enabled = inputText.isNotBlank(),
-                        colors = IconButtonDefaults.filledIconButtonColors(containerColor = Primary)
-                    ) {
-                        Icon(Icons.Default.Send, "发送")
+                    IconButton(onClick = {
+                        voiceMode = !voiceMode
+                        if (voiceMode) voicePlayer.stop()
+                    }) {
+                        Icon(
+                            if (voiceMode) Icons.Default.Keyboard else Icons.Default.Mic,
+                            if (voiceMode) "切换键盘" else "切换语音",
+                            tint = Primary
+                        )
+                    }
+                    if (voiceMode) {
+                        // 按住说话（微信式）：按下开始录音、松手发送、上滑取消。录音/取消反馈直接显示在按钮内。
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(if (recording && !cancelArmed) PrimaryLight else Surface)
+                                .pointerInput(voiceMode) {
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown()
+                                        if (!hasMicPermission()) {
+                                            audioPermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                            do { val e = awaitPointerEvent() } while (e.changes.any { it.pressed })
+                                            return@awaitEachGesture
+                                        }
+                                        if (!voiceRecorder.start()) {
+                                            scope.launch { snackbarHostState.showSnackbar("无法开始录音") }
+                                            do { val e = awaitPointerEvent() } while (e.changes.any { it.pressed })
+                                            return@awaitEachGesture
+                                        }
+                                        recording = true; cancelArmed = false; recordSeconds = 0
+                                        var cancel = false
+                                        try {
+                                            while (true) {
+                                                val event = awaitPointerEvent()
+                                                val change = event.changes.firstOrNull { it.id == down.id }
+                                                    ?: event.changes.first()
+                                                cancel = (change.position.y - down.position.y) < -120f
+                                                cancelArmed = cancel
+                                                if (!change.pressed) break
+                                            }
+                                        } finally {
+                                            recording = false; cancelArmed = false
+                                            if (cancel) {
+                                                voiceRecorder.cancel()
+                                            } else {
+                                                val rec = voiceRecorder.stop()
+                                                if (rec != null) chatViewModel.sendVoice(rec.file, rec.durationSec) {
+                                                    scope.launch { snackbarHostState.showSnackbar(it) }
+                                                } else scope.launch { snackbarHostState.showSnackbar("说话时间太短") }
+                                            }
+                                        }
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                when {
+                                    recording && cancelArmed -> "松开手指 · 取消发送"
+                                    recording -> "● ${recordSeconds}″   松开发送 · 上滑取消"
+                                    else -> "按住 说话"
+                                },
+                                fontSize = 14.sp,
+                                color = if (cancelArmed) Danger else TextPrimary
+                            )
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = inputText,
+                            onValueChange = { inputText = it },
+                            placeholder = { Text("输入消息...", fontSize = 14.sp) },
+                            modifier = Modifier.weight(1f).heightIn(max = 120.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            maxLines = 4
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        FilledIconButton(
+                            onClick = {
+                                if (inputText.isNotBlank()) {
+                                    chatViewModel.sendMessage(inputText.trim())
+                                    inputText = ""
+                                }
+                            },
+                            enabled = inputText.isNotBlank(),
+                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Primary)
+                        ) {
+                            Icon(Icons.Default.Send, "发送")
+                        }
                     }
                 }
             }
@@ -356,6 +456,25 @@ fun ChatDetailScreen(
                             scope.launch { snackbarHostState.showSnackbar("发送超过两分钟的消息不支持撤回") }
                         },
                         onResend = { resendTarget = msg },
+                        audioPlaying = playingVoiceId == msg.id,
+                        onAudioTap = {
+                            if (playingVoiceId == msg.id) {
+                                voicePlayer.stop(); playingVoiceId = null
+                            } else scope.launch {
+                                val bytes = chatViewModel.readVoiceBytes(msg)
+                                if (bytes == null) {
+                                    snackbarHostState.showSnackbar("语音不可用，可能已过期")
+                                    return@launch
+                                }
+                                val tmp = File(context.cacheDir, "voice_play.m4a")
+                                tmp.writeBytes(bytes)
+                                playingVoiceId = msg.id
+                                if (!voicePlayer.play(tmp) { playingVoiceId = null }) {
+                                    playingVoiceId = null
+                                    snackbarHostState.showSnackbar("语音播放失败")
+                                }
+                            }
+                        },
                         onFileTap = {
                             val transferring = transferProgress[msg.id] != null
                             val ft = fileTypeOf(msg.fileName ?: "")
@@ -928,7 +1047,9 @@ private fun ChatBubble(
     onRecall: () -> Unit,
     onRecallBlocked: () -> Unit = {},
     onResend: () -> Unit = {},
-    onFileTap: () -> Unit = {}
+    onFileTap: () -> Unit = {},
+    onAudioTap: () -> Unit = {},
+    audioPlaying: Boolean = false
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val isFile = msg.type == MessageType.FILE
@@ -975,7 +1096,9 @@ private fun ChatBubble(
                     border = if (isBurn) BorderStroke(1.dp, Warning) else null,
                     // 遮罩态点击揭示并启动倒计时；文件气泡点击触发保存/预览；其余点击无操作，长按弹菜单。
                     modifier = Modifier.combinedClickable(
-                        onClick = { if (masked) onReveal() else if (isFile) onFileTap() },
+                        onClick = {
+                            if (masked) onReveal() else if (isFile) onFileTap() else if (isAudio) onAudioTap()
+                        },
                         onLongClick = { showMenu = true }
                     )
                 ) {
@@ -1016,10 +1139,24 @@ private fun ChatBubble(
                                 Text(msg.content, color = contentColor, fontSize = 14.sp)
                             }
                             isAudio -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.GraphicEq, null, tint = if (msg.isMine) Accent else Primary,
-                                    modifier = Modifier.size(20.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text(msg.content.ifBlank { "语音消息" }, color = contentColor, fontSize = 14.sp)
+                                // 播放/暂停图标 + 时长；气泡宽度随时长递增（微信式），点击播放（onAudioTap）。
+                                Icon(
+                                    if (audioPlaying) Icons.Default.PauseCircle else Icons.Default.PlayCircle,
+                                    "播放语音",
+                                    tint = if (msg.isMine) Accent else Primary,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Icon(Icons.Default.GraphicEq, null, tint = contentColor.copy(alpha = 0.8f),
+                                    modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "${msg.audioDurationSec.coerceAtLeast(1)}″",
+                                    color = contentColor, fontSize = 14.sp,
+                                    modifier = Modifier.widthIn(
+                                        min = (20 + msg.audioDurationSec.coerceIn(1, 60) * 2).dp
+                                    )
+                                )
                             }
                             else -> Text(msg.content, color = contentColor, fontSize = 14.sp)
                         }

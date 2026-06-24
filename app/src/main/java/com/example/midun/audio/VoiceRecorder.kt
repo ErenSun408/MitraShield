@@ -30,6 +30,7 @@ class VoiceRecorder(private val context: Context) {
             rec.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             rec.setAudioEncodingBitRate(64_000)
             rec.setAudioSamplingRate(44_100)
+            rec.setMaxDuration(MAX_DURATION_SEC * 1000) // 硬件侧 60s 封顶，到点自动停止编码
             rec.setOutputFile(file.absolutePath)
             rec.prepare()
             rec.start()
