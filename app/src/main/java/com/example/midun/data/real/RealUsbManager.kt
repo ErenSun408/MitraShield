@@ -130,7 +130,12 @@ class RealUsbManager @Inject constructor(
             val boundId = if (bindDevice) androidId().also { writeBoundId(it) } else null
             // App 层密钥库（M12.1）：生成全新 DEK/KEK，原始落卡 0:/.midun_keystore（盘已打开、关盘前）。
             // DEK 同时入内存，但本次 init 完会关盘+清会话 → 登录时再由 authenticate 载入。
-            realFileSystem.saveKeystoreRaw(cardKeystore.createNew())
+            // M12.4：落盘失败必须让 init 失败——否则会留下「已初始化却无 keystore」的卡 → 后续静默明文。
+            if (!realFileSystem.saveKeystoreRaw(cardKeystore.createNew())) {
+                runCatching { fsShell.SFCloseDisk() }
+                cardKeystore.lock()
+                return@withContext Result.failure(IllegalStateException("密钥库写入失败，请恢复出厂后重试"))
+            }
             val sn = readSn() // 盘已打开，补读真实 SN
             // 关盘，回到「已初始化、未认证」态 → 登录页用新密码 SFOpenDiskEx 重新干净开盘。
             runCatching { fsShell.SFCloseDisk() }
@@ -161,10 +166,15 @@ class RealUsbManager @Inject constructor(
             runCatching { fsShell.SFCloseDisk() }
             return@withContext Result.failure(IllegalStateException("此卡已绑定其他设备，无法在本机登录"))
         }
+        // App 层密钥库（M12.1）：开盘后载入 keystore、解出 DEK 驻内存。
+        // M12.4：keystore 缺失/损坏 → 拒登并关盘，**不静默跑明文**。正常卡（恢复出厂 + 重新 init）必有 keystore；
+        // 走到这里 = 异常卡（旧卡未重置 / keystore 损坏），提示恢复出厂重新初始化。
+        if (!cardKeystore.load(realFileSystem.loadKeystoreRaw())) {
+            runCatching { fsShell.SFCloseDisk() }
+            cardKeystore.lock()
+            return@withContext Result.failure(IllegalStateException("密钥库缺失或损坏，请恢复出厂后重新初始化"))
+        }
         sessionPwdHash = sha256(password)
-        // App 层密钥库（M12.1）：开盘后载入 keystore、解出 DEK 驻内存。旧卡无 keystore → load 返回 false、
-        // 保持锁定（M12.4 决定旧卡处置：清旧文件 + 建 keystore）。不阻断登录。
-        cardKeystore.load(realFileSystem.loadKeystoreRaw())
         val sn = readSn() // 盘已打开，补读真实 SN（已初始化卡在 connectUsb 阶段读不到）
         val (total, free) = readCapacity()
         _deviceStatus.value = _deviceStatus.value.copy(
