@@ -940,4 +940,27 @@ M11.5 较大，按子子阶段拆分逐个提交（[[feedback-commit-per-substag
 - **导航**：QR 屏 `onScanConnected()`（popBackStack）→ `onOpenChat(contactId)`；NavGraph `navigate(ChatDetail)` + `popUpTo(QrCode, inclusive)`，从会话返回回到上一层而非二维码页。
 - ⚠️ 真双端流程（A 弹框/B 弹框/重连不弹）需两机同 WiFi 验；单机仅验不崩。
 
+## 清理：砍掉模拟（mock）模式，收成真卡-only（2026-06-24，前缀 `[cleanup]`）
+
+M11 之前 App 一直保留「模拟模式」开发流（模拟器/无卡也能跑 UI），经 `SecurityCardManager.useRealCard`
+运行时开关在 Mock/Real 两套实现间路由，DevControlPanel 悬浮菜单切换。M11 真卡跑通、开发已全程插真卡后，
+该模式只剩维护负担与「双重实现」认知噪音，用户拍板删除。分 4 个 `[cleanup]` commit：
+
+- **S1 改名**（`7c90a97`）：`data.mock.MockChatRepository`→`data.ChatRepository`、`MockOperationLog`→
+  `OperationLogRepository`。这两个并非「mock」——它们是**生产**聊天/日志仓库（delegate 到真 `ChatStore`/
+  `OperationLogStore`、双模式都用），只是历史命名误导。纯改名 + 移包，零行为变更。
+- **S2 收 facade**（`0086570`）：`SecurityCardManager`/`FileRepository` 删 Mock/Real 双路由 → 全转发真卡；
+  删 DevControlPanel 悬浮菜单（模拟插拔 / 模式切换）、`DeviceViewModel.debug*`/`setUseRealCard`、MainActivity
+  里「无卡时 `onUsbAttached(null)` 假连」分支。启动连卡沿用既有逻辑（onCreate 检测 `usbManager.deviceList`
+  非空 → `onUsbAttached` → `connectUsb`）；无卡则保持 DISCONNECTED + 拔卡遮罩。
+- **S3 删死桩 + 剥种子**（`b6d696e`，−489 行）：删 `MockUsbManager`/`MockFileSystem`/`MockData`（后者含 M0
+  遗留重复类型 `SecureFolder`/`SecureFile`/同名 `Contact`/`FileType` 等，均已无引用）；`data.mock` 包清空删除。
+  `ChatRepository` 去掉演示种子联系人/消息（内存态空启动、认证后从卡加载，行为同前）。
+- **S4 清恒真标志**（`eedceb3`）：删模拟模式后 `useRealCard` 恒 true，移除该标志并简化所有分支调用者
+  （P2P 设备 SN / sent 副本 / 接收落卡、ChatViewModel.realCardMode + 发文件门控弹框、PreviewViewModel.isRealCard
+  + 视频预览门控）——全是「always-true 分支」的无行为变更简化。
+
+**诚实小字**：删模拟模式不改变任何保密性，只是去掉一条开发期辅助路径；App 行为对真卡用户完全不变。
+唯一新约束 = **必须插真卡才能跑**（无卡只能看到拔卡遮罩）。
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
