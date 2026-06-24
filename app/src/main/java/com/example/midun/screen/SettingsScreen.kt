@@ -113,7 +113,7 @@ fun SettingsScreen(
                     "绑定状态",
                     if (deviceStatus.boundPhoneId != null) "已绑定本机" else "未绑定"
                 )
-                // 真卡容量（M11.6.1，SFGetCapacity）；模拟模式 totalBytes=0 → 显占位。
+                // 真卡容量（M11.6.1，SFGetCapacity）；未认证 totalBytes=0 → 显占位。
                 val total = deviceStatus.totalBytes
                 val used = (total - deviceStatus.freeBytes).coerceAtLeast(0L)
                 SettingsInfoItem(

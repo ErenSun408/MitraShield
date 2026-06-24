@@ -127,19 +127,15 @@ class P2PSessionManager @Inject constructor(
     private val _burnTimers = MutableStateFlow<Map<String, Long>>(emptyMap())
     val burnTimers: StateFlow<Map<String, Long>> = _burnTimers.asStateFlow()
 
-    /** 模拟模式 / 真 SN 不可用时的回退 SN：每进程随机一个，保证两机可区分。 */
+    /** 真 SN 不可用（未认证 / 读取失败）时的回退 SN：每进程随机一个，保证两机可区分。 */
     private val fallbackSn: String = "DEV-${generateRandomHex(4)}"
 
     /**
-     * 本机设备 SN（M11.6.2）：真卡模式下取安全卡真实 SN（`SFDiskGetSN`，全球唯一公开标识）→ 二维码据此
-     * 做「弱来源标识」；模拟模式 / 未认证 / 读取失败回退 [fallbackSn]。每次取用即读，避免认证前后过期。
+     * 本机设备 SN（M11.6.2）：取安全卡真实 SN（`SFDiskGetSN`，全球唯一公开标识）→ 二维码据此做「弱来源
+     * 标识」；未认证 / 读取失败回退 [fallbackSn]。每次取用即读，避免认证前后过期。
      */
-    private fun currentDeviceSn(): String {
-        if (cardManager.useRealCard.value) {
-            cardManager.realSerialNumber()?.takeIf { it.isNotBlank() }?.let { return it }
-        }
-        return fallbackSn
-    }
+    private fun currentDeviceSn(): String =
+        cardManager.realSerialNumber()?.takeIf { it.isNotBlank() } ?: fallbackSn
 
     /** A 侧临时密钥对：generateConnectionInfo 生成、startListening 握手时消费。 */
     private var listenerKeyPair: KeyPair? = null
@@ -351,7 +347,7 @@ class P2PSessionManager @Inject constructor(
         val totalChunks = ((size + FILE_CHUNK_BYTES - 1) / FILE_CHUNK_BYTES).toInt().coerceAtLeast(1)
 
         // 发送方预览副本：手机来源在真卡模式下边发边落 `.sent_<msgId>`；落不成则不留（localPath 保持 null）。
-        val sentCopyPath = if (sourceCardPath == null && cardManager.useRealCard.value) FileCachePaths.sent(msgId) else null
+        val sentCopyPath = if (sourceCardPath == null) FileCachePaths.sent(msgId) else null
         val copyHandle = sentCopyPath?.let { realFileSystem.streamCreate(it).takeIf { h -> h > 0 } }
 
         // 隐私文件夹来源即刻可预览（文件已在卡上）→ 起始就带 localPath；手机来源成功后再补。
@@ -436,7 +432,7 @@ class P2PSessionManager @Inject constructor(
         }
         val msgId = generateMessageId()
         // 手机来源真卡模式下落副本；隐私文件夹来源（sourceCardPath 非 null）复用源路径，不另留副本。
-        val sentCopyPath = if (sourceCardPath == null && cardManager.useRealCard.value) FileCachePaths.sent(msgId) else null
+        val sentCopyPath = if (sourceCardPath == null) FileCachePaths.sent(msgId) else null
         // 有副本要写 → 起始 SENDING 显进度；无副本 → 直接 FAILED 未送达。
         val initialStatus = if (sentCopyPath != null) MessageStatus.SENDING else MessageStatus.FAILED
         chatRepo.addFileMessage(contactId, msgId, isMine = true, fileName, size, initialStatus, localPath = sourceCardPath)
@@ -623,12 +619,6 @@ class P2PSessionManager @Inject constructor(
         val fileSize = json.getLong("fileSize")
         val fileNonce = Base64.decode(json.getString("nonce"), Base64.NO_WRAP)
         val totalChunks = json.getInt("chunks")
-        // 文件接收=真卡专属：无真卡无法落卡 → 诚实降级为一条 FAILED 文件气泡。
-        if (!cardManager.useRealCard.value) {
-            chatRepo.addFileMessage(contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.FAILED)
-            _incomingMessages.emit(contactId)
-            return
-        }
         val stagingPath = FileCachePaths.recv(msgId)
         val handle = realFileSystem.streamCreate(stagingPath)
         if (handle <= 0) {

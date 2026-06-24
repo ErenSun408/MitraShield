@@ -107,7 +107,7 @@ fun HomeScreen(
                 Divider(color = Color.White.copy(0.15f))
                 Spacer(Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    // 真卡容量（M11.6.1，SFGetCapacity）；模拟模式 totalBytes=0 → 显占位。
+                    // 真卡容量（M11.6.1，SFGetCapacity）；未认证 totalBytes=0 → 显占位。
                     val total = device.totalBytes
                     val used = (device.totalBytes - device.freeBytes).coerceAtLeast(0L)
                     StatusItem("存储容量", if (total > 0) formatStorage(total) else "--")

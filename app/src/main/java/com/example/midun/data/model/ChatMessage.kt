@@ -24,7 +24,7 @@ data class ChatMessage(
     // null + type=FILE + isMine=false = 已收到、暂存在卡内 0:/.recv_<id>、待用户点击选文件夹保存。
     val savedFolderId: String? = null,
     // 发送方自己可预览的卡内路径（file-transfer 阶段2）：手机来源=发送时留的副本 0:/.sent_<id>，
-    // 隐私文件夹来源=源文件卡内路径。null=无副本（模拟模式/非媒体/留副本失败）→ 发送方不可预览。
+    // 隐私文件夹来源=源文件卡内路径。null=无副本（非媒体/留副本失败）→ 发送方不可预览。
     val localPath: String? = null,
     // 「去建立连接」系统提示行（type=SYSTEM 时有效）：未建立会话时发送消息后插入的一条提示，
     // 渲染为带可点链接的居中系统行；每个断连段只插一条、作为历史记录保留。

@@ -166,10 +166,6 @@ private fun ZoomableImage(image: ImageBitmap, contentDesc: String) {
 @OptIn(UnstableApi::class)
 @Composable
 private fun VideoPreview(file: FileItem, vm: PreviewViewModel) {
-    if (!vm.isRealCard) {
-        CenterMessage("模拟模式无法预览真实视频（需真卡）")
-        return
-    }
     val context = LocalContext.current
     // 视频预览期间放开屏幕方向（App 平时锁竖屏）→ 支持横屏看视频；关闭时还原。
     val activity = context.findActivity()

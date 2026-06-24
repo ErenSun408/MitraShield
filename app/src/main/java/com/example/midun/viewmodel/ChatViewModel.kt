@@ -3,7 +3,6 @@ package com.example.midun.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.FileRepository
-import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.ChatRepository
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
@@ -31,15 +30,11 @@ import kotlinx.coroutines.withContext
 class ChatViewModel @Inject constructor(
     private val chatRepo: ChatRepository,
     private val p2pManager: P2PSessionManager,
-    private val fileRepository: FileRepository,
-    cardManager: SecurityCardManager
+    private val fileRepository: FileRepository
 ) : ViewModel() {
 
     /** 文件传输进度（M11.5.3）：messageId → 0f..1f；转发 P2PSessionManager 单例，气泡据此画进度条。 */
     val transferProgress: StateFlow<Map<String, Float>> = p2pManager.transferProgress
-
-    /** 真卡模式（M11.5.3 收尾）：文件传输=真卡专属，模拟模式发送按钮诚实降级提示。 */
-    val realCardMode: StateFlow<Boolean> = cardManager.useRealCard
 
     /** 文件夹列表（接收保存 / 隐私文件夹发送来源 共用）。打开对话框时 loadFolders 刷新。 */
     private val _saveFolders = MutableStateFlow<List<FileItem>>(emptyList())

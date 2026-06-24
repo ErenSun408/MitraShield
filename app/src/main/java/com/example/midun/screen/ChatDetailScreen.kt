@@ -95,7 +95,6 @@ fun ChatDetailScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     val transferProgress by chatViewModel.transferProgress.collectAsState()
-    val realCardMode by chatViewModel.realCardMode.collectAsState()   // 文件传输=真卡专属
     var fileToSave by remember { mutableStateOf<ChatMessage?>(null) } // 接收方点「保存」时选文件夹的目标消息
     var previewFile by remember { mutableStateOf<FileItem?>(null) }   // 预览中的文件（暂存区或已保存文件夹）
     var previewSaveTarget by remember { mutableStateOf<ChatMessage?>(null) } // 免保存预览时可「保存到文件夹」的接收消息
@@ -113,7 +112,6 @@ fun ChatDetailScreen(
             }
         }
     }
-    var sendGateMsg by remember { mutableStateOf<String?>(null) }     // 不能发文件时的提示文案（非真卡/未连接）
     var cancelTarget by remember { mutableStateOf<ChatMessage?>(null) } // 取消在途发送的目标消息
     var resendTarget by remember { mutableStateOf<ChatMessage?>(null) } // 点「未送达」重发的目标消息
     var showSourceMenu by remember { mutableStateOf(false) }          // 发送来源菜单（手机/隐私文件夹）
@@ -252,14 +250,11 @@ fun ChatDetailScreen(
                 ) {
                     Box {
                         IconButton(onClick = {
-                            // 文件传输=真卡专属（模拟模式无卡可落副本）。未连接时与文字一致：仍可发，
-                            // 本地标「未送达」+ 留发送方预览副本，对方收不到（纯 P2P 无服务器、不补发）。
-                            when {
-                                !realCardMode -> sendGateMsg = "文件传输需在真卡模式下使用（当前为模拟模式）。"
-                                else -> showSourceMenu = true
-                            }
+                            // 未连接时与文字一致：仍可发，本地标「未送达」+ 留发送方预览副本，
+                            // 对方收不到（纯 P2P 无服务器、不补发）。
+                            showSourceMenu = true
                         }) {
-                            Icon(Icons.Default.AttachFile, "发送文件", tint = if (realCardMode) Primary else TextSecondary)
+                            Icon(Icons.Default.AttachFile, "发送文件", tint = Primary)
                         }
                         DropdownMenu(expanded = showSourceMenu, onDismissRequest = { showSourceMenu = false }) {
                             DropdownMenuItem(
@@ -461,19 +456,6 @@ fun ChatDetailScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showClearConfirm = false }) { Text("取消", color = TextSecondary) }
-            }
-        )
-    }
-
-    // 不能发文件时的提示（仅非真卡模式；未连接现已允许发送=未送达，不再拦截）。
-    sendGateMsg?.let { msg ->
-        AlertDialog(
-            onDismissRequest = { sendGateMsg = null },
-            icon = { Icon(Icons.Default.AttachFile, null, tint = Primary) },
-            title = { Text("发送文件") },
-            text = { Text(msg, color = TextSecondary) },
-            confirmButton = {
-                TextButton(onClick = { sendGateMsg = null }) { Text("知道了", color = Primary) }
             }
         )
     }

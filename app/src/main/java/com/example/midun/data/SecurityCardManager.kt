@@ -7,9 +7,7 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -28,10 +26,6 @@ class SecurityCardManager @Inject constructor(
 ) : UsbCardOps {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    /** 恒真：App 只有真卡一条路径。保留供尚未清理的调用点（P2P/Chat/Preview）过渡，S4 一并移除。 */
-    private val _useRealCard = MutableStateFlow(true)
-    val useRealCard: StateFlow<Boolean> = _useRealCard.asStateFlow()
 
     override val deviceStatus: StateFlow<DeviceInfo> = real.deviceStatus
 
