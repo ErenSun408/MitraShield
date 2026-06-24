@@ -963,4 +963,59 @@ M11 之前 App 一直保留「模拟模式」开发流（模拟器/无卡也能�
 **诚实小字**：删模拟模式不改变任何保密性，只是去掉一条开发期辅助路径；App 行为对真卡用户完全不变。
 唯一新约束 = **必须插真卡才能跑**（无卡只能看到拔卡遮罩）。
 
+## M12 — App 层二级密钥（DEK/KEK）加密（v4 外增量，前缀 `[M12.x]` / `[files]`）
+
+**World-1 设计**（2026-06-22 拍板）：登录/认证/卡硬件 AES 那套**完全不动**（卡 + 密码才是真正的保密门）；App 在隐私文件夹**用户文件**内容上再叠一层 DEK（随机 AES-256），DEK 被 KEK 包成 `wrappedDEK`，三者组 keystore blob 落卡隐藏区 `0:/.midun_keystore`。**诚实定位**：这一层**不增加保密性**，只为「控制/功能」——加密导出、可重置密钥；**UI 不得宣称"双重加密更安全"**。无管理员托管、无旧文件迁移（用户走恢复出厂 + 重新 init）。
+
+### M12.1 — 密钥库 + 加密原语（不碰文件 I/O）
+- 新增 `crypto/FileCrypto`（AES-256-GCM 流式分块，纯 `java.security`，可 JVM 测）+ `data/crypto/CardKeystore`（@Singleton；`createNew` 生成 DEK/KEK、`load` 解包、`rewrap` 重包、`lock` 清零；keystore blob = `MAGIC"MDK1"(4)‖VER(1)‖KEK(32)‖wrappedDEK(60)` = 97 字节定长二进制，避开 `java.util.Base64` 的 API26 门槛）。
+- 接 init/auth/lock 生命周期（`RealUsbManager`：init 生成存盘、auth 加载解 DEK 驻内存、logout/拔卡/恢复出厂 lock 清零）。`CardKeystore` 无卡依赖（避 DI 环），落卡读卡由 `RealUsbManager` 经 `RealFileSystem` raw I/O 完成。JVM 单测 `FileCryptoTest`/`CardKeystoreTest`。
+- **Commit** `4a8f08e`。
+
+### M12.2 — 写路径加密 + 文件头/大小记账
+- `RealFileSystem.writeFile` 按 `isUserFilePath`（`0:/<夹>/<名>` 且名非 `.` 前缀）分流：用户文件 + 密钥库已解锁 → `writeEncrypted`（写 `FileHeader` + 逐 16KB 明文块 DEK 加密落卡）；元数据/缓存侧车/未解锁 → 原始字节写。
+- `FileHeader` v2 = 22 字节：`MAGIC"MDF1"(4)‖VER(1,=2)‖plaintextSize(8 BE)‖fileNonce(8)‖typeCode(1)`。`FileItem.size`/进度读**明文大小**（卡 `SFGetSize` 给密文大小）。
+- **加密范围 = 仅隐私文件夹用户文件**：`.recv_`/`.sent_` 传输缓存、`0:/.midun_*` 侧车保持明文（本就受卡 AES，不叠 DEK，不动已跑通的 P2P 传输）；`keystore` 永不被 DEK 加密（鸡生蛋）。
+- **Commit** `d65727c`。
+
+### M12.3 — 读路径解密 + 预览随机读 + chunk 调优
+- `readFile`/`openCardStream` 对称解密；视频预览 `media/CardFileDataSource` 做「明文偏移→密文块→解块」随机读映射。
+- **crypto chunk = 16KB**（`FileCrypto.CHUNK_PLAIN_BYTES`，单一来源，为视频 seek 粒度从 64KB 缩小）；**与卡 I/O 块解耦**：`SFWrite/SFRead` 批量按 `IO_CALL = 128KB`（用户实测导入导出明显更快），容器格式只认 16KB chunk。
+- **Commit** `0ebf407` / `7cecdf1` / `496c433` / `a453a37`。
+
+### `[files]` 三点文件增量（M12.3 后，用户提）
+- **内容魔数判类型**：导入时 `FileTypes.detect`（魔数优先、扩展名兜底）→ 结果存进 `FileHeader` typeCode，列表/预览读头不再靠文件名后缀（解决 `xxx.mp4(3)` 坏后缀）。**Commit** `bb0fb25`。
+- **字节级导出进度**（同导入款）：`FileByteProgress`、`exportFileToUri`、`ByteProgressDialog` 复用、文件夹导出报每文件字节。**Commit** `6a82db4`。
+- **导入/导出取消**：cooperative `isCancelled` 每 chunk 检 → `TransferCancelledException`；清残留（导入半文件 `SFDelete`、单/夹导出删 target）；用 VM `@Volatile transferCancelled` 标志 + `cancelTransfer()`（**不用 `job.cancel()`**——否则 cancel 后 `.onFailure` 里 suspend `emit` 抛 CancellationException 致弹框卡死）。**Commit** `9e978b9`。
+
+### M12.4 — keystore 生命周期硬化（撤掉旧文件迁移）
+- 原计划「旧卡（有文件无 keystore）清旧文件 + 建 keystore」**作废**——用户确认走「恢复出厂（SFFormat→未初始化）→ 重新 init」，init 必建 keystore，旧卡场景不复存在。
+- 落地两条硬化：① `initDevice` 校验 `saveKeystoreRaw` 返回，失败 → 关盘 + lock + `failure("密钥库写入失败，请恢复出厂后重试")`（不再丢返回值留下「已初始化却无 keystore」的卡）；② `authenticate` 若 `cardKeystore.load()` false（缺失/损坏）→ 关盘 + lock + `failure("密钥库缺失或损坏…")`，`sessionPwdHash` 移到 keystore 校验通过后才设（**不静默跑明文**）。
+- **Commit** `8df7d6b`。
+
+### M12.5 — 真·加密导出（导出口令）
+- `COPY_ENCRYPTED` 策略落地成真容器：导出时用户设一个**导出口令**，文件加密成便携 `.midun` 容器，拿口令在别处也能解。替换 M11.5.2「加密拷贝也导明文」的诚实降级占位。
+- **Commit** `9fe3c39`。
+
+### M12.6 — 真·密钥更新（App 层 KEK 轮换）+ 修假实现
+- **改对 v4「密钥更新」的理解**：FSShell 确无密钥轮换接口（《密钥管理》只有改密码），但有了 App 层 DEK/KEK 后，「密钥更新」= **重生成 KEK、重包不变的 DEK、覆盖 keystore**——真实、可做、且 DEK 不变所以**文件不丢、不必重加密**（安全收益有限，文案如实写）。
+- `CardKeystore.rewrap()`（12.1 预留）产新 blob；`RealFileSystem.rewriteKeystoreRaw()` **崩溃安全覆盖**：写临时文件 → 旧文件改名 `.bak` → 临时就位 → 删 `.bak`，任一步崩溃后卡上都有一份完整 keystore，`loadKeystoreRaw` 从 `.bak` 自愈（新旧 blob 包同一 DEK，哪份生效都能解）。
+- **修假实现 bug**：`DeviceViewModel.updateKey` 原忽略 `cardManager.updateKey()` 的 Result、密码对就无条件报「成功」（真卡模式吞掉失败 = 对用户撒谎，违背诚实降级）→ 改按 `.onSuccess/.onFailure` 分流；`RealUsbManager.updateKey` 替换旧 `NotImplementedError` 为真轮换；`SettingsScreen` 文案诚实化（「重新生成文件封装密钥 KEK」「不改变安全卡硬件加密强度」「真保护来自卡 + 密码」，不吹更安全）。
+- **Commit** `e6bf15f`。
+
+## 连接保活 — TCP keepalive + 应用层心跳（v4 外增量，`[network]`，2026-06-24）
+
+- **背景**：P2P 会话是裸 TCP socket，**无 keepalive、无心跳**。App 退后台/空闲时 NAT/OS 回收空闲连接 → 接收循环 `readLine()` 返回/抛异常 → `onPeerDisconnected` 断连。纯 P2P 临时会话（断开即抹、不复用旧会话）掉了只能重扫码，无自动重连。
+- **方案 A（用户 2026-06-24 拍板，零新权限、不引前台服务）**：① 四个 session socket（聊天监听/连接 + 文件通道两端）开 `SO_KEEPALIVE`；② 聊天 socket 上加应用层心跳（单例 scope）：每 20s 发 `PING` 帧、对端回 `PONG`；任意入站帧刷新 `lastInboundAt`，超 60s 无入站 = 判死 → 关 socket 打断 `readLine`（含半开连接检测）→ 走既有 `onPeerDisconnected` 归位；`disconnect`/`onPeerDisconnected` 取消心跳 job。
+- **诚实边界**：能扛**前台 + 进程存活时的快速切换/空闲**（心跳维持 NAT 映射）；**扛不住**长时间息屏（WiFi 省电/Doze）或 OEM 杀后台（进程死了任何应用层手段都无效，尤其华为/小米）。要后台/息屏也保持须前台服务 + 常驻通知——用户权衡后不做。
+- **Commit** `94745cb`。
+
+## 聊天语音消息（v4 外增量，`[chat-voice]`，按住说话，2026-06-24）
+
+v4 即时通信只设计了文字 + 文件；语音是 v4 外新增。**复用文件传输管线**（不另造协议）：语音本质 = 小音频文件 + 时长。
+- **数据**：`ChatMessage` 加 `audioDurationSec`（`ChatStore` 持久化）；`addFileMessage` 加 `type`+`audioDurationSec` 参；会话列表预览 `[语音]`。**Commit** `60dae65`。
+- **收发**：`audio/VoiceRecorder`（MediaRecorder→cache `.m4a`/AAC，60s 硬封顶 `setMaxDuration`，<1s 误触丢弃）；`sendFile/doSendFile/sendFileOffline` 穿 `durationSec` 进 `FILE_BEGIN` 元数据，两端按 mime `audio/*` → `MessageType.AUDIO`（否则 FILE）。**接收落 `.recv_` 缓存即收即播、不进「选文件夹保存」流程**（语音是即时媒体非文件）；离线语义同文字/文件（留 `.sent_` 副本可回放、标未送达、对方收不到）。**Commit** `cb91de5`。
+- **UI**：输入栏麦克风/键盘切换 + 微信式「按住说话·上滑取消」（`pointerInput.awaitEachGesture`：按下录、松手发、上滑 120px 取消；RECORD_AUDIO 首按运行时申请；录音秒数/取消态反馈直接显示在按钮内，未做单独浮层）；`audio/VoicePlayer`（MediaPlayer 单段播放）；AUDIO 气泡可点播放/暂停 + 时长 + 宽度随时长递增；播放经 `ChatViewModel.readVoiceBytes` 读卡内缓存（mine=`.sent_`/源、received=`.recv_`）→ temp 文件，缓存过期（7 天 TTL）优雅降级；离开会话停播 + 弃在录音。**Commit** `e719862`。
+- **诚实边界**：语音端到端收发**未装机验**（须两机两卡同 WiFi）；语音 clip 不做单独加密（同 `.recv_/.sent_` 缓存约定，受卡 AES，不叠 DEK）。
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
