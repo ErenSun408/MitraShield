@@ -1,5 +1,6 @@
 package com.example.midun.data.real
 
+import com.example.midun.crypto.FileContainer
 import com.example.midun.crypto.FileCrypto
 import com.example.midun.crypto.FileHeader
 import com.example.midun.data.FileSystemOps
@@ -122,6 +123,28 @@ class RealFileSystem @Inject constructor(
     override suspend fun readFileBytes(fileId: String): Result<ByteArray> = withContext(Dispatchers.IO) {
         val out = ByteArrayOutputStream()
         readFile(fileId, out).map { out.toByteArray() }
+    }
+
+    /**
+     * 加密导出（M12.5）：读卡内**明文**（[openCardStream] 解 DEK）+ 文件头（明文大小/类型），用导出口令经
+     * [FileContainer] 重加密成 `.midun` 容器写到 [output]。返回明文字节数（进度总量）。容器脱离卡与 DEK，靠口令
+     * 在别处也能解。[isCancelled] 每块查；**不关闭 [output]**（调用方负责）。
+     */
+    suspend fun exportFileEncrypted(
+        fileId: String,
+        fileName: String,
+        output: OutputStream,
+        passphrase: String,
+        isCancelled: () -> Boolean = { false },
+        onProgress: (written: Long) -> Unit = {}
+    ): Result<Long> = withContext(Dispatchers.IO) {
+        runCatching {
+            val (size, type) = fileMeta(fileId) // 明文大小 + 内容判定类型（写进容器头，开封后列表/预览可用）
+            openCardStream(fileId).use { plain ->
+                FileContainer.encrypt(plain, size, fileName, type, passphrase, output, isCancelled, onProgress)
+            }
+            size
+        }
     }
 
     // —— 视频预览随机读原语（供自定义 media3 DataSource 流式解密，不落整文件）。句柄 SFOpen 返回。 ——

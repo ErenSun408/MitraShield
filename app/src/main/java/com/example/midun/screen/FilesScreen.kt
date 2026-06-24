@@ -18,9 +18,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.midun.crypto.FileContainer
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
@@ -44,12 +47,17 @@ fun FilesScreen(
     val uiState by fileViewModel.uiState.collectAsState()
     val exportProgress by fileViewModel.exportProgress.collectAsState()
     var folderToDelete by remember { mutableStateOf<FileItem?>(null) }
-    // 文件夹导出：选目标目录（OpenDocumentTree）→ 在其下建同名子目录写入全部文件（M11.5.6）。
+    // 文件夹导出：选目标目录（OpenDocumentTree）→ 在其下建同名子目录写入全部文件（M11.5.6 / M12.5 加密）。
     var pendingExportFolder by remember { mutableStateOf<FileItem?>(null) }
+    // 拷贝密文策略（M12.5）：导出前收口令。[passphraseForFolder] 非空=正在为该文件夹收口令；[pendingExportPass]
+    // 把确认后的口令带进选取器回调（明文策略保持 null → 走原明文导出）。
+    var passphraseForFolder by remember { mutableStateOf<FileItem?>(null) }
+    var pendingExportPass by remember { mutableStateOf<String?>(null) }
     val folderExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
         val f = pendingExportFolder
-        if (treeUri != null && f != null) fileViewModel.exportFolderToTree(f.id, f.name, treeUri)
+        if (treeUri != null && f != null) fileViewModel.exportFolderToTree(f.id, f.name, treeUri, pendingExportPass)
         pendingExportFolder = null
+        pendingExportPass = null
     }
 
     LaunchedEffect(Unit) {
@@ -112,8 +120,13 @@ fun FilesScreen(
                         onClick = { onFolderClick(folder.id) },
                         onRename = { newName -> fileViewModel.renameFolder(folder.id, newName) },
                         onExportFolder = {
-                            pendingExportFolder = folder
-                            folderExportLauncher.launch(null)
+                            if (folder.copyPolicy == CopyPolicy.COPY_ENCRYPTED) {
+                                passphraseForFolder = folder // 先收口令，再选目录
+                            } else {
+                                pendingExportPass = null
+                                pendingExportFolder = folder
+                                folderExportLauncher.launch(null)
+                            }
                         },
                         onDelete = { folderToDelete = folder }
                     )
@@ -137,6 +150,20 @@ fun FilesScreen(
     // 仅「进行中」显进度弹窗；完成态由上面的 LaunchedEffect 转 Snackbar。
     exportProgress?.takeIf { !it.finished }?.let {
         FolderExportDialog(it, onCancel = { fileViewModel.cancelTransfer() })
+    }
+
+    // 加密导出口令弹框（M12.5）：拷贝密文文件夹导出前收口令，确认后带口令选目录。
+    passphraseForFolder?.let { f ->
+        ExportPassphraseDialog(
+            isFolder = true,
+            onConfirm = { pass ->
+                pendingExportPass = pass
+                pendingExportFolder = f
+                passphraseForFolder = null
+                folderExportLauncher.launch(null)
+            },
+            onDismiss = { passphraseForFolder = null }
+        )
     }
 }
 
@@ -392,26 +419,35 @@ fun FileDetailScreen(
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { fileViewModel.importFromUri(folderId, it) }
     }
-    // 系统保存选取器（CreateDocument）：选好位置即真实流式导出该文件（M11.5.2）。
+    // 拷贝密文策略（M12.5）：导出前先收一个导出口令，文件重加密成便携 .midun 容器。这两个状态门控口令弹框，
+    // [pendingExportPass] 把确认后的口令带进选取器回调（明文策略保持 null → 走原明文导出）。
+    val encryptedPolicy = effectiveCopyPolicy == CopyPolicy.COPY_ENCRYPTED
+    var passphraseForFile by remember { mutableStateOf<FileItem?>(null) }
+    var passphraseForFolder by remember { mutableStateOf(false) }
+    var pendingExportPass by remember { mutableStateOf<String?>(null) }
+    // 系统保存选取器（CreateDocument）：选好位置即真实流式导出该文件（M11.5.2 / M12.5 加密）。
     var fileToExport by remember { mutableStateOf<FileItem?>(null) }
     val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
         val f = fileToExport
-        if (uri != null && f != null) fileViewModel.exportFileToUri(f.id, f.name, f.size, uri)
+        if (uri != null && f != null) fileViewModel.exportFileToUri(f.id, f.name, f.size, uri, pendingExportPass)
         fileToExport = null
+        pendingExportPass = null
     }
-    // 文件夹整体导出：选目标目录 → 建同名子目录写入全部文件（M11.5.6）。
+    // 文件夹整体导出：选目标目录 → 建同名子目录写入全部文件（M11.5.6 / M12.5 加密）。
     val exportProgress by fileViewModel.exportProgress.collectAsState()
     val fileExportResult by fileViewModel.fileExportResult.collectAsState()
     val fileExportProgress by fileViewModel.fileExportProgress.collectAsState()
     val folderExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
-        if (treeUri != null && folder != null) fileViewModel.exportFolderToTree(folder.id, folder.name, treeUri)
+        if (treeUri != null && folder != null) fileViewModel.exportFolderToTree(folder.id, folder.name, treeUri, pendingExportPass)
+        pendingExportPass = null
     }
     var fileToDelete by remember { mutableStateOf<FileItem?>(null) }
     var previewFile by remember { mutableStateOf<FileItem?>(null) }
     var showDeleteAllFilesDialog by remember { mutableStateOf(false) }
     val onExportAllFiles = {
         showMenu = false
-        folderExportLauncher.launch(null)
+        if (encryptedPolicy) passphraseForFolder = true // 先收口令，再选目录
+        else { pendingExportPass = null; folderExportLauncher.launch(null) }
     }
     val onDeleteAllFiles = {
         showMenu = false
@@ -561,8 +597,8 @@ fun FileDetailScreen(
                         onRename = { newName -> fileViewModel.renameFile(file.id, newName, folderId) },
                         onMove = { target -> fileViewModel.moveFile(file.id, file.name, folderId, target.id) },
                         onExportFile = {
-                            fileToExport = file
-                            exportLauncher.launch(file.name)
+                            if (encryptedPolicy) passphraseForFile = file // 先收口令，再选保存位置
+                            else { pendingExportPass = null; fileToExport = file; exportLauncher.launch(file.name) }
                         },
                         onDelete = { fileToDelete = file },
                         onPreview = { previewFile = file }
@@ -656,6 +692,87 @@ fun FileDetailScreen(
     }
 
     previewFile?.let { FilePreviewDialog(file = it, onClose = { previewFile = null }) }
+
+    // 加密导出口令弹框（M12.5）：单文件或文件夹加密导出前收口令，确认后带口令启动选取器。
+    if (passphraseForFile != null || passphraseForFolder) {
+        val isFolder = passphraseForFolder
+        ExportPassphraseDialog(
+            isFolder = isFolder,
+            onConfirm = { pass ->
+                pendingExportPass = pass
+                val f = passphraseForFile
+                passphraseForFile = null
+                passphraseForFolder = false
+                if (f != null) {
+                    fileToExport = f
+                    exportLauncher.launch("${f.name}.${FileContainer.EXTENSION}")
+                } else {
+                    folderExportLauncher.launch(null)
+                }
+            },
+            onDismiss = { passphraseForFile = null; passphraseForFolder = false }
+        )
+    }
+}
+
+/**
+ * 加密导出口令弹框（M12.5）。收一个导出口令（输入 + 确认两遍），确认后回调 [onConfirm]。
+ * 诚实文案：口令是唯一钥匙、忘记无法找回、强度决定安全性——不吹「军工级」。
+ */
+@Composable
+private fun ExportPassphraseDialog(isFolder: Boolean, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var pass by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
+    var show by remember { mutableStateOf(false) }
+    val tooShort = pass.length < 4
+    val mismatch = confirm.isNotEmpty() && pass != confirm
+    val canConfirm = !tooShort && pass == confirm
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Lock, null, tint = Primary) },
+        title = { Text(if (isFolder) "加密导出文件夹" else "加密导出文件") },
+        text = {
+            Column {
+                Text(
+                    "设置导出口令。文件会加密成 .midun 容器，拿口令在别处用本 App 可解。" +
+                        "口令是唯一钥匙，忘记将无法找回；口令越强越安全。",
+                    fontSize = 12.sp, color = TextSecondary
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = pass,
+                    onValueChange = { pass = it },
+                    label = { Text("导出口令") },
+                    singleLine = true,
+                    visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
+                    isError = pass.isNotEmpty() && tooShort,
+                    supportingText = if (pass.isNotEmpty() && tooShort) { { Text("至少 4 位", color = Danger) } } else null,
+                    trailingIcon = {
+                        TextButton(onClick = { show = !show }) { Text(if (show) "隐藏" else "显示", fontSize = 12.sp) }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = confirm,
+                    onValueChange = { confirm = it },
+                    label = { Text("再次输入口令") },
+                    singleLine = true,
+                    visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
+                    isError = mismatch,
+                    supportingText = if (mismatch) { { Text("两次口令不一致", color = Danger) } } else null,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (canConfirm) onConfirm(pass) }, enabled = canConfirm) {
+                Text("导出", color = if (canConfirm) Primary else TextSecondary)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } }
+    )
 }
 
 @Composable

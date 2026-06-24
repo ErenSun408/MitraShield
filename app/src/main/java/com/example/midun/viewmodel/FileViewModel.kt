@@ -6,6 +6,7 @@ import android.provider.OpenableColumns
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.midun.crypto.FileContainer
 import com.example.midun.data.FileRepository
 import com.example.midun.data.TransferCancelledException
 import com.example.midun.data.OperationLogRepository
@@ -298,22 +299,28 @@ class FileViewModel @Inject constructor(
     }
 
     /**
-     * 把卡内文件 [fileId] 真实导出到系统选取器（`CreateDocument`）返回的 [uri]（M11.5.2）。
-     * 真卡读隐藏区明文流式写出；Mock 写占位说明。导出受 UI 拷贝策略门控（NO_COPY 不可见）。
+     * 把卡内文件 [fileId] 真实导出到系统选取器（`CreateDocument`）返回的 [uri]（M11.5.2）。读隐藏区明文流式写出。
+     * 导出受 UI 拷贝策略门控（NO_COPY 不可见）。
+     *
+     * [passphrase] 非空（拷贝密文策略，M12.5）→ 用该导出口令把文件重加密成便携 `.midun` 容器写出；为空 → 明文导出。
      */
-    fun exportFileToUri(fileId: String, fileName: String, size: Long, uri: Uri) {
+    fun exportFileToUri(fileId: String, fileName: String, size: Long, uri: Uri, passphrase: String? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             transferCancelled = false
             _fileExportProgress.value = FileByteProgress(fileName, 0L, size)
             runCatching {
                 context.contentResolver.openOutputStream(uri)?.use { out ->
-                    fileSystem.exportFile(fileId, fileName, out, isCancelled = { transferCancelled }) { written ->
-                        _fileExportProgress.value = FileByteProgress(fileName, written, size)
-                    }.getOrThrow()
+                    val onProg: (Long) -> Unit = { _fileExportProgress.value = FileByteProgress(fileName, it, size) }
+                    if (passphrase != null)
+                        fileSystem.exportFileEncrypted(fileId, fileName, out, passphrase, { transferCancelled }, onProg).getOrThrow()
+                    else
+                        fileSystem.exportFile(fileId, fileName, out, { transferCancelled }, onProg).getOrThrow()
                 } ?: throw IOException("无法写入目标位置")
             }.onSuccess {
-                operationLog.record(OperationType.FILE_EXPORT, "导出「$fileName」")
-                _fileExportResult.value = ExportResult(true, "已导出「$fileName」到所选位置")
+                operationLog.record(OperationType.FILE_EXPORT, if (passphrase != null) "加密导出「$fileName」" else "导出「$fileName」")
+                _fileExportResult.value = ExportResult(
+                    true, if (passphrase != null) "已加密导出「$fileName.${FileContainer.EXTENSION}」到所选位置" else "已导出「$fileName」到所选位置"
+                )
             }.onFailure {
                 if (it is TransferCancelledException) {
                     // 取消：删半成品 SAF 文档（系统选取器已先建空文档），提示「已取消」。
@@ -333,9 +340,12 @@ class FileViewModel @Inject constructor(
 
     /**
      * 把整个文件夹导出到用户经 `OpenDocumentTree` 选定的目录 [treeUri]（M11.5.6）：在该目录下建一个同名
-     * 子目录，再把文件夹内下一级所有文件原样（不压缩、保留文件名）逐个流式写入。按文件个数回报进度。
+     * 子目录，再把文件夹内下一级所有文件逐个流式写入。按文件个数回报进度。
+     *
+     * [passphrase] 非空（拷贝密文策略，M12.5）→ 每个文件用同一导出口令重加密成各自独立的 `.midun` 容器
+     * （各自 salt/nonce，可单独开封）；为空 → 明文原样导出。
      */
-    fun exportFolderToTree(folderId: String, folderName: String, treeUri: Uri) {
+    fun exportFolderToTree(folderId: String, folderName: String, treeUri: Uri, passphrase: String? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             val tree = DocumentFile.fromTreeUri(context, treeUri)
             if (tree == null || !tree.canWrite()) {
@@ -356,16 +366,21 @@ class FileViewModel @Inject constructor(
             for ((i, f) in files.withIndex()) {
                 if (transferCancelled) { cancelled = true; break }
                 _exportProgress.value = ExportProgress(i, files.size, currentFile = f.name, fileTotal = f.size)
-                // 先建目标文档，留引用以便取消时删半成品。
-                val target = dir.createFile("application/octet-stream", f.name)
+                // 加密导出落 <名>.midun；明文导出保留原名。先建目标文档，留引用以便取消时删半成品。
+                val targetName = if (passphrase != null) "${f.name}.${FileContainer.EXTENSION}" else f.name
+                val target = dir.createFile("application/octet-stream", targetName)
                 runCatching {
-                    (target ?: throw IOException("创建文件失败：${f.name}"))
+                    (target ?: throw IOException("创建文件失败：$targetName"))
                     context.contentResolver.openOutputStream(target.uri)?.use { out ->
-                        fileSystem.exportFile(f.id, f.name, out, isCancelled = { transferCancelled }) { written ->
+                        val onProg: (Long) -> Unit = {
                             _exportProgress.value = ExportProgress(
-                                i, files.size, currentFile = f.name, fileWritten = written, fileTotal = f.size
+                                i, files.size, currentFile = f.name, fileWritten = it, fileTotal = f.size
                             )
-                        }.getOrThrow()
+                        }
+                        if (passphrase != null)
+                            fileSystem.exportFileEncrypted(f.id, f.name, out, passphrase, { transferCancelled }, onProg).getOrThrow()
+                        else
+                            fileSystem.exportFile(f.id, f.name, out, { transferCancelled }, onProg).getOrThrow()
                     } ?: throw IOException("打开输出失败：${f.name}")
                 }.onSuccess { ok++ }
                     .onFailure {
@@ -377,10 +392,11 @@ class FileViewModel @Inject constructor(
                 if (cancelled) break
                 _exportProgress.value = ExportProgress(i + 1, files.size, currentFile = f.name, fileTotal = f.size)
             }
+            val verb = if (passphrase != null) "加密导出" else "导出"
             val summary =
-                if (cancelled) "已取消，已导出 $ok/${files.size} 个文件到「$folderName」"
-                else "已导出 $ok/${files.size} 个文件到「$folderName」"
-            operationLog.record(OperationType.FILE_EXPORT, "导出文件夹「$folderName」（$summary）")
+                if (cancelled) "已取消，已$verb $ok/${files.size} 个文件到「$folderName」"
+                else "已$verb $ok/${files.size} 个文件到「$folderName」"
+            operationLog.record(OperationType.FILE_EXPORT, "$verb 文件夹「$folderName」（$summary）")
             _exportProgress.value = ExportProgress(
                 files.size, files.size, finished = true, message = summary
             )

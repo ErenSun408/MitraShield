@@ -44,6 +44,16 @@ class FileRepository @Inject constructor(
 
     override suspend fun readFileBytes(fileId: String) = real.readFileBytes(fileId)
 
+    /** 加密导出（M12.5）：用导出口令把卡内文件重加密成便携 `.midun` 容器写到 [output]。 */
+    suspend fun exportFileEncrypted(
+        fileId: String,
+        fileName: String,
+        output: OutputStream,
+        passphrase: String,
+        isCancelled: () -> Boolean = { false },
+        onProgress: (written: Long) -> Unit = {}
+    ) = real.exportFileEncrypted(fileId, fileName, output, passphrase, isCancelled, onProgress)
+
     override suspend fun moveFile(fileId: String, targetFolderId: String) =
         real.moveFile(fileId, targetFolderId)
 
