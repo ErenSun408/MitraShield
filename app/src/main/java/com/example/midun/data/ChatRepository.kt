@@ -316,19 +316,22 @@ class ChatRepository @Inject constructor(
         fileSize: Long,
         status: MessageStatus,
         savedFolderId: String? = null,
-        localPath: String? = null
+        localPath: String? = null,
+        type: MessageType = MessageType.FILE,
+        audioDurationSec: Int = 0
     ): ChatMessage {
         val msg = ChatMessage(
             id = messageId,
             contactId = contactId,
             content = fileName,
-            type = MessageType.FILE,
+            type = type,
             isMine = isMine,
             status = status,
             fileName = fileName,
             fileSize = fileSize,
             savedFolderId = savedFolderId,
-            localPath = localPath
+            localPath = localPath,
+            audioDurationSec = audioDurationSec
         )
         messages.getOrPut(contactId) { mutableListOf() }.add(msg)
         if (!isMine) {
@@ -430,6 +433,7 @@ class ChatRepository @Inject constructor(
                 lastMessage.recalled -> "[消息已撤回]"
                 lastMessage.burned -> "🔥 [已焚毁]"
                 lastMessage.burnAfterRead -> "🔥 [阅后即焚]" // 焚毁消息预览不泄漏原文
+                lastMessage.type == MessageType.AUDIO -> "[语音]"
                 lastMessage.type == MessageType.FILE -> "[文件] ${lastMessage.fileName ?: ""}"
                 else -> lastMessage.content
             },

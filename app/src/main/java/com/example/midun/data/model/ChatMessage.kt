@@ -28,7 +28,10 @@ data class ChatMessage(
     val localPath: String? = null,
     // 「去建立连接」系统提示行（type=SYSTEM 时有效）：未建立会话时发送消息后插入的一条提示，
     // 渲染为带可点链接的居中系统行；每个断连段只插一条、作为历史记录保留。
-    val connectPrompt: Boolean = false
+    val connectPrompt: Boolean = false,
+    // 语音消息（type=AUDIO，[chat-voice]）：录音时长（秒），气泡显时长 + 决定气泡宽度。音频文件本体复用文件
+    // 传输缓存（接收=0:/.recv_<id>、发送=0:/.sent_<id>），即收即播、不进「选文件夹保存」流程。0=非语音。
+    val audioDurationSec: Int = 0
 )
 
 data class Contact(

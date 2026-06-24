@@ -104,6 +104,7 @@ class ChatStore @Inject constructor(
         m.savedFolderId?.let { put("savedFolderId", it) }
         m.localPath?.let { put("localPath", it) }
         if (m.connectPrompt) put("connectPrompt", true)
+        if (m.audioDurationSec > 0) put("audioDurationSec", m.audioDurationSec)
     }
 
     private fun messageFromJson(o: JSONObject) = ChatMessage(
@@ -122,7 +123,8 @@ class ChatStore @Inject constructor(
         burned = o.optBoolean("burned"),
         savedFolderId = if (o.has("savedFolderId")) o.getString("savedFolderId") else null,
         localPath = if (o.has("localPath")) o.getString("localPath") else null,
-        connectPrompt = o.optBoolean("connectPrompt")
+        connectPrompt = o.optBoolean("connectPrompt"),
+        audioDurationSec = o.optInt("audioDurationSec")
     )
 
     private companion object {
