@@ -165,7 +165,7 @@ fun HomeScreen(
 
         Spacer(Modifier.height(20.dp))
 
-        // 最近操作：真实操作日志（OperationLogViewModel 观察 MockOperationLog 的 StateFlow，
+        // 最近操作：真实操作日志（OperationLogViewModel 观察 OperationLogRepository 的 StateFlow，
         // 各记录点经同一 @Singleton 写入，无需手动 reload）。清理类操作不记录自身（见 M9.3）。
         Text("最近操作", fontSize = 16.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(12.dp))

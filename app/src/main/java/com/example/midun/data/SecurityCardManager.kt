@@ -1,7 +1,5 @@
 package com.example.midun.data
 
-import com.example.midun.data.mock.MockChatRepository
-import com.example.midun.data.mock.MockOperationLog
 import com.example.midun.data.mock.MockUsbManager
 import com.example.midun.data.model.DeviceInfo
 import com.example.midun.data.real.RealUsbManager
@@ -34,8 +32,8 @@ class SecurityCardManager @Inject constructor(
     val mock: MockUsbManager,
     private val real: RealUsbManager,
     // 真卡 wipe 时清共享聊天/日志仓库（真卡的文件清在 RealUsbManager；mock 的三者由 MockUsbManager 自清）。
-    private val chatRepo: MockChatRepository,
-    private val operationLog: MockOperationLog
+    private val chatRepo: ChatRepository,
+    private val operationLog: OperationLogRepository
 ) : UsbCardOps {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

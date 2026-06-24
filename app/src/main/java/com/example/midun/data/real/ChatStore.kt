@@ -20,7 +20,7 @@ data class ChatSnapshot(
 )
 
 /**
- * 聊天记录的真卡持久化后端（M11.5.5）。把 [com.example.midun.data.mock.MockChatRepository] 的内存联系人
+ * 聊天记录的真卡持久化后端（M11.5.5）。把 [com.example.midun.data.ChatRepository] 的内存联系人
  * 与消息序列化为隐藏区侧车 [CHAT_PATH] 的 JSON，使聊天跨会话留存于安全卡。
  *
  * 活动条件 / 依赖选型同 [OperationLogStore]：判据 = [RealUsbManager] AUTHENTICATED（真卡模式 + 盘已打开），

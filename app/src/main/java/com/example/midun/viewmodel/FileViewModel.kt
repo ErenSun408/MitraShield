@@ -8,7 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.FileRepository
 import com.example.midun.data.TransferCancelledException
-import com.example.midun.data.mock.MockOperationLog
+import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.OperationType
@@ -62,7 +62,7 @@ data class ExportProgress(
 @HiltViewModel
 class FileViewModel @Inject constructor(
     private val fileSystem: FileRepository,
-    private val operationLog: MockOperationLog,
+    private val operationLog: OperationLogRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 

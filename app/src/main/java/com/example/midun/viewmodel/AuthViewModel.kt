@@ -2,7 +2,7 @@ package com.example.midun.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.midun.data.mock.MockOperationLog
+import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.model.OperationType
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
 @HiltViewModel
 class AuthViewModel @Inject constructor(
     private val cardManager: SecurityCardManager,
-    private val operationLog: MockOperationLog
+    private val operationLog: OperationLogRepository
 ) : ViewModel() {
 
     sealed class InitState {

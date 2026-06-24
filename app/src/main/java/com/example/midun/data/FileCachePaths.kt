@@ -2,7 +2,7 @@ package com.example.midun.data
 
 /**
  * 聊天文件传输的卡内缓存路径（file-transfer 阶段3）。唯一来源——
- * [com.example.midun.network.P2PSessionManager] 收发落卡与 [com.example.midun.data.mock.MockChatRepository]
+ * [com.example.midun.network.P2PSessionManager] 收发落卡与 [com.example.midun.data.ChatRepository]
  * 的 7 天 TTL 清理共用，避免前缀漂移导致清理对不上路径。
  *
  * 两类都是根级 `.` 前缀的隐藏文件（文件/文件夹列表不可见），属临时预览缓存、受 TTL + 手动清理管辖；

@@ -3,8 +3,8 @@ package com.example.midun.network
 import android.util.Base64
 import com.example.midun.data.FileCachePaths
 import com.example.midun.data.SecurityCardManager
-import com.example.midun.data.mock.MockChatRepository
-import com.example.midun.data.mock.MockOperationLog
+import com.example.midun.data.ChatRepository
+import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.real.RealFileSystem
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
@@ -63,8 +63,8 @@ import org.json.JSONObject
  */
 @Singleton
 class P2PSessionManager @Inject constructor(
-    private val chatRepo: MockChatRepository,
-    private val operationLog: MockOperationLog,
+    private val chatRepo: ChatRepository,
+    private val operationLog: OperationLogRepository,
     private val cardManager: SecurityCardManager,
     // 文件接收落卡（M11.5.3）：直接依赖叶子 RealFileSystem（无 DI 环，同 ChatStore/OperationLogStore 选型）。
     private val realFileSystem: RealFileSystem

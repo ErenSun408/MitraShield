@@ -2,6 +2,8 @@ package com.example.midun.data.mock
 
 import android.content.Context
 import android.provider.Settings
+import com.example.midun.data.ChatRepository
+import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.UsbCardOps
 import com.example.midun.data.model.DeviceInfo
 import com.example.midun.data.model.UsbDeviceStatus
@@ -17,8 +19,8 @@ import kotlinx.coroutines.flow.asStateFlow
 class MockUsbManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val fileSystem: MockFileSystem,
-    private val chatRepository: MockChatRepository,
-    private val operationLog: MockOperationLog
+    private val chatRepository: ChatRepository,
+    private val operationLog: OperationLogRepository
 ) : UsbCardOps {
     private val _deviceStatus = MutableStateFlow(DeviceInfo())
     override val deviceStatus: StateFlow<DeviceInfo> = _deviceStatus.asStateFlow()

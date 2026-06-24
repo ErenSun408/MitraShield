@@ -4,7 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.FileRepository
 import com.example.midun.data.SecurityCardManager
-import com.example.midun.data.mock.MockChatRepository
+import com.example.midun.data.ChatRepository
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.CopyPolicy
@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
-    private val chatRepo: MockChatRepository,
+    private val chatRepo: ChatRepository,
     private val p2pManager: P2PSessionManager,
     private val fileRepository: FileRepository,
     cardManager: SecurityCardManager
@@ -53,7 +53,7 @@ class ChatViewModel @Inject constructor(
     private val _pickLoading = MutableStateFlow(false)
     val pickLoading: StateFlow<Boolean> = _pickLoading.asStateFlow()
 
-    // 联系人列表：以 MockChatRepository（单例）为唯一数据源。
+    // 联系人列表：以 ChatRepository（单例）为唯一数据源。
     // 因 ChatList / ChatDetail / QrCode 各自是不同 NavBackStackEntry，会拿到不同的
     // ChatViewModel 实例（同 M5.3 偏离），故每次进屏 / 改动后都 loadContacts() 重读单例，
     // 否则扫码建联、清空会话等改动在列表实例里不可见。

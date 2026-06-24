@@ -1,11 +1,10 @@
-package com.example.midun.data.mock
+package com.example.midun.data
 
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.data.model.UsbDeviceStatus
-import com.example.midun.data.FileCachePaths
 import com.example.midun.data.real.ChatSnapshot
 import com.example.midun.data.real.ChatStore
 import com.example.midun.data.real.RealFileSystem
@@ -28,7 +27,7 @@ import kotlinx.coroutines.withContext
  * 开发流；真卡模式下认证成功即从卡加载历史（替换内存种子）、每次变更写穿到卡。模式判据/依赖选型见 [ChatStore]。
  */
 @Singleton
-class MockChatRepository @Inject constructor(
+class ChatRepository @Inject constructor(
     private val store: ChatStore,
     private val realFileSystem: RealFileSystem,
     realUsbManager: RealUsbManager

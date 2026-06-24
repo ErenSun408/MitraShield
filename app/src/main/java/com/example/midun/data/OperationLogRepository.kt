@@ -1,4 +1,4 @@
-package com.example.midun.data.mock
+package com.example.midun.data
 
 import com.example.midun.data.model.OperationLog
 import com.example.midun.data.model.OperationType
@@ -27,7 +27,7 @@ import kotlinx.coroutines.launch
  * 纯内存（进程重启即清空，贴合「不留痕」）；真卡模式下认证成功即从卡加载历史、每次变更写穿到卡。
  */
 @Singleton
-class MockOperationLog @Inject constructor(
+class OperationLogRepository @Inject constructor(
     private val store: OperationLogStore,
     realUsbManager: RealUsbManager
 ) {

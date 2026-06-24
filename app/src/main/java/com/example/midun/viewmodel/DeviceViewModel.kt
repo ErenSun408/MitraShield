@@ -5,7 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.SettingsStore
-import com.example.midun.data.mock.MockChatRepository
+import com.example.midun.data.ChatRepository
 import com.example.midun.data.model.UsbDeviceStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -21,7 +21,7 @@ import kotlinx.coroutines.launch
 class DeviceViewModel @Inject constructor(
     private val cardManager: SecurityCardManager,
     private val settingsStore: SettingsStore,
-    private val chatRepository: MockChatRepository
+    private val chatRepository: ChatRepository
 ) : ViewModel() {
 
     /** 文件预览缓存统计（设置页「清除缓存」副标题）：返回 (文件数, 总字节)。 */
