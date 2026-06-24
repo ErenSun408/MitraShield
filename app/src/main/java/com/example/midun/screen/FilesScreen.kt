@@ -410,6 +410,7 @@ fun FileDetailScreen(
 ) {
     val uiState by fileViewModel.uiState.collectAsState()
     val importProgress by fileViewModel.importProgress.collectAsState()
+    val pendingContainer by fileViewModel.pendingContainer.collectAsState() // 选中 .midun → 弹口令解密框
     val folder = uiState.folders.find { it.id == folderId }
     val files = if (uiState.currentFolderId == folderId) uiState.currentFiles else emptyList()
     val effectiveCopyPolicy = folder?.copyPolicy ?: CopyPolicy.NO_COPY
@@ -713,6 +714,18 @@ fun FileDetailScreen(
             onDismiss = { passphraseForFile = null; passphraseForFolder = false }
         )
     }
+
+    // 导入 .midun 容器（M12.5 解密侧）：选中容器 → 收一次导出口令 → 解回原文件落进本文件夹。
+    pendingContainer?.let { pc ->
+        ImportPassphraseDialog(
+            fileName = pc.fileName,
+            onConfirm = { pass ->
+                fileViewModel.importContainer(folderId, pc.uri, pass)
+                fileViewModel.clearPendingContainer()
+            },
+            onDismiss = { fileViewModel.clearPendingContainer() }
+        )
+    }
 }
 
 /**
@@ -769,6 +782,47 @@ private fun ExportPassphraseDialog(isFolder: Boolean, onConfirm: (String) -> Uni
         confirmButton = {
             TextButton(onClick = { if (canConfirm) onConfirm(pass) }, enabled = canConfirm) {
                 Text("导出", color = if (canConfirm) Primary else TextSecondary)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } }
+    )
+}
+
+/**
+ * 导入 .midun 容器的口令弹框（M12.5 解密侧）。只收**一个**口令（输入已有口令、非创建，故不二次确认）。
+ * 口令是容器的唯一钥匙，跨设备一致；输错由解密时报「口令错误」。
+ */
+@Composable
+private fun ImportPassphraseDialog(fileName: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
+    var pass by remember { mutableStateOf("") }
+    var show by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.LockOpen, null, tint = Primary) },
+        title = { Text("解密导入") },
+        text = {
+            Column {
+                Text(
+                    "「$fileName」是加密容器。输入导出时设置的口令，解密后将作为原文件导入本文件夹。",
+                    fontSize = 12.sp, color = TextSecondary
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = pass,
+                    onValueChange = { pass = it },
+                    label = { Text("导出口令") },
+                    singleLine = true,
+                    visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        TextButton(onClick = { show = !show }) { Text(if (show) "隐藏" else "显示", fontSize = 12.sp) }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { if (pass.isNotEmpty()) onConfirm(pass) }, enabled = pass.isNotEmpty()) {
+                Text("解密导入", color = if (pass.isNotEmpty()) Primary else TextSecondary)
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } }

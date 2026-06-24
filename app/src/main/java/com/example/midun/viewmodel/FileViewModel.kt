@@ -15,6 +15,7 @@ import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.OperationType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import java.io.IOException
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
@@ -81,6 +82,12 @@ class FileViewModel @Inject constructor(
     /** 非空表示导入进行中，供 UI 显示进度对话框；导入结束（成功/失败）置空。 */
     private val _importProgress = MutableStateFlow<FileByteProgress?>(null)
     val importProgress: StateFlow<FileByteProgress?> = _importProgress.asStateFlow()
+
+    /** 选中的是 `.midun` 容器（按魔数识别）→ 非空时 UI 弹口令框收口令、确认后调 [importContainer]（M12.5 解密侧）。 */
+    data class PendingContainer(val uri: Uri, val fileName: String)
+    private val _pendingContainer = MutableStateFlow<PendingContainer?>(null)
+    val pendingContainer: StateFlow<PendingContainer?> = _pendingContainer.asStateFlow()
+    fun clearPendingContainer() { _pendingContainer.value = null }
 
     /** 非空表示单文件导出进行中，供 UI 显示字节进度对话框；结束（成功/失败）置空。 */
     private val _fileExportProgress = MutableStateFlow<FileByteProgress?>(null)
@@ -152,6 +159,11 @@ class FileViewModel @Inject constructor(
                 return@launch
             }
             val (name, size) = meta
+            // 识别口令保护的 .midun 容器（按内容魔数，改名也认）→ 转「输口令解密」流程，不当普通文件导入。
+            if (isMidunContainer(uri)) {
+                _pendingContainer.value = PendingContainer(uri, name)
+                return@launch
+            }
             if (size > MAX_IMPORT_BYTES) {
                 _operationResult.emit(OperationResult.Error("文件超过 100MB 上限，无法导入"))
                 return@launch
@@ -177,6 +189,67 @@ class FileViewModel @Inject constructor(
                 else _operationResult.emit(OperationResult.Error(it.message ?: "导入失败"))
             }
             _importProgress.value = null
+        }
+    }
+
+    /** peek [uri] 首字节判断是否为 `.midun` 容器（M12.5 解密侧）。读不到/非容器回 false。 */
+    private fun isMidunContainer(uri: Uri): Boolean = runCatching {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            val head = ByteArray(FileContainer.MAGIC.size)
+            var off = 0
+            while (off < head.size) {
+                val n = input.read(head, off, head.size - off); if (n < 0) break; off += n
+            }
+            off == head.size && FileContainer.isContainer(head)
+        } ?: false
+    }.getOrDefault(false)
+
+    /**
+     * 导入一个口令保护的 `.midun` 容器（M12.5 解密侧补齐：原本只做了导出、没接「解回来」）：用导出口令把容器
+     * 解回原文件、落进隐私文件夹 [folderId]。容器自包含（salt+迭代次数都在头里）→ **跨设备只要口令对就能解**，
+     * 与卡内 DEK 无关。先解密到 App 临时文件（拿到原名/大小），再按原名走正常导入（落卡时再被卡 DEK 静态加密、
+     * 此后是普通可预览文件）。口令错 → [FileContainer.BadPassphraseException] → 提示「口令错误」。
+     */
+    fun importContainer(folderId: String, uri: Uri, passphrase: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            transferCancelled = false
+            val tmp = File(context.cacheDir, "import_${System.currentTimeMillis()}.tmp")
+            _importProgress.value = FileByteProgress("解密中…", 0L, 0L)
+            try {
+                val meta = (context.contentResolver.openInputStream(uri)
+                    ?: throw IOException("打开文件失败")).use { input ->
+                    tmp.outputStream().use { out ->
+                        FileContainer.decrypt(
+                            input, passphrase, out,
+                            isCancelled = { transferCancelled },
+                            onProgress = { w -> _importProgress.value = FileByteProgress("解密中…", w, 0L) }
+                        )
+                    }
+                }
+                if (tmp.length() > MAX_IMPORT_BYTES) throw IOException("解密后文件超过 100MB 上限")
+                _importProgress.value = FileByteProgress(meta.originalName, 0L, tmp.length())
+                fileSystem.importFile(
+                    folderId = folderId,
+                    fileName = meta.originalName,
+                    size = tmp.length(),
+                    openStream = { tmp.inputStream() },
+                    isCancelled = { transferCancelled },
+                    onProgress = { w -> _importProgress.value = FileByteProgress(meta.originalName, w, tmp.length()) }
+                ).getOrThrow()
+                loadFiles(folderId)
+                operationLog.record(OperationType.FILE_IMPORT, "解密导入「${meta.originalName}」")
+                _operationResult.emit(OperationResult.Success("已解密导入「${meta.originalName}」"))
+            } catch (e: Exception) {
+                when (e) {
+                    is TransferCancelledException -> _operationResult.emit(OperationResult.Success("已取消导入"))
+                    is FileContainer.BadPassphraseException ->
+                        _operationResult.emit(OperationResult.Error("口令错误或文件已损坏"))
+                    else -> _operationResult.emit(OperationResult.Error(e.message ?: "解密导入失败"))
+                }
+            } finally {
+                tmp.delete()
+                _importProgress.value = null
+            }
         }
     }
 
