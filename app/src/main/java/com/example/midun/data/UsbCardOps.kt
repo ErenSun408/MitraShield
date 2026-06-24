@@ -35,6 +35,6 @@ interface UsbCardOps {
     /** 切换设备绑定（bind=true 写本机 ID，false 解绑）。真卡写卡内 `0:/.bind` → `suspend`（IO）。 */
     suspend fun updateBinding(bind: Boolean)
 
-    /** 密钥更新（轮换）。 */
+    /** 密钥更新（M12.6 App 层 KEK 轮换）：重生成 KEK、重包不变的 DEK、覆盖卡内 keystore。失败如实返回。 */
     suspend fun updateKey(): Result<Unit>
 }

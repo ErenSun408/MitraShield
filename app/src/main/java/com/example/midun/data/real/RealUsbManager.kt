@@ -311,9 +311,24 @@ class RealUsbManager @Inject constructor(
         } else null
     }
 
-    /** 密钥更新：FSShell **无 App 可调的密钥轮换接口**（《密钥管理》只有改密码）→ 诚实降级，不做。 */
-    override suspend fun updateKey(): Result<Unit> =
-        Result.failure(NotImplementedError("SDK 无密钥轮换接口（安全层不对普通开发者开放）"))
+    /**
+     * 密钥更新（M12.6）：**App 层 KEK 轮换**——重生成 KEK、用它重新包裹**不变的 DEK**，安全覆盖卡内 keystore。
+     * DEK 不变 → 隐私文件夹已有文件无需重新加密、不会丢失。需已认证（DEK 在内存、盘已打开）。
+     *
+     * **诚实定位**：这是 App 层「文件封装密钥」的轮换，**不提升保密强度**——真正的保护是安全卡硬件加密 + 登录
+     * 密码（《密钥管理》层 SDK 不开放轮换）。失败如实返回，不再吞 Result 假报成功。
+     */
+    override suspend fun updateKey(): Result<Unit> = withContext(Dispatchers.IO) {
+        if (_deviceStatus.value.status != UsbDeviceStatus.AUTHENTICATED) {
+            return@withContext Result.failure(IllegalStateException("请先登录后再更新密钥"))
+        }
+        val blob = cardKeystore.rewrap()
+            ?: return@withContext Result.failure(IllegalStateException("密钥库未解锁，无法更新密钥"))
+        if (!realFileSystem.rewriteKeystoreRaw(blob)) {
+            return@withContext Result.failure(IllegalStateException("密钥库写入失败，密钥未更新"))
+        }
+        Result.success(Unit)
+    }
 
     /** 真卡唯一序列号（接 P2P deviceSn 用，M11.6）。打开后 driveName 参数被忽略。 */
     fun getSerialNumber(): String? = runCatching { fsShell.SFDiskGetSN("") }.getOrNull()

@@ -115,15 +115,19 @@ class DeviceViewModel @Inject constructor(
     }
 
     /**
-     * 密钥更新（M7.4 patch §M7 改动3）：校验密码 → 调安全卡密钥轮换（mock：delay 1s）→ onSuccess。
-     * 真 SDK 接入后历史文件仍可用旧会话密钥解密，新生成的二级密钥不暴露给上层。
+     * 密钥更新（M12.6）：校验密码 → App 层 KEK 轮换（[SecurityCardManager.updateKey] 重生成 KEK 重包不变的
+     * DEK、覆盖卡内 keystore）→ 按 **Result 分流**。修掉旧实现「吞掉 Result、密码对就无条件报成功」的假实现：
+     * 轮换失败（盘问题/写卡失败）如实报错，不再对用户撒谎。
      */
     fun updateKey(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            if (cardManager.verifyPassword(password)) {
-                cardManager.updateKey()
-                onSuccess()
-            } else onError("密码错误")
+            if (!cardManager.verifyPassword(password)) {
+                onError("密码错误")
+                return@launch
+            }
+            cardManager.updateKey()
+                .onSuccess { onSuccess() }
+                .onFailure { onError(it.message ?: "密钥更新失败") }
         }
     }
 

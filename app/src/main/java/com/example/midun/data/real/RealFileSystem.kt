@@ -532,10 +532,51 @@ class RealFileSystem @Inject constructor(
     fun saveKeystoreRaw(bytes: ByteArray): Boolean =
         writeFile(KEYSTORE_PATH, bytes.inputStream()).isSuccess
 
-    /** 原始读 keystore blob；不存在（旧卡未初始化此格式）返回 null。需盘已打开。 */
+    /**
+     * 密钥更新（M12.6）：**安全覆盖** keystore。不裸截断写在原文件上——若写到一半中断会把 keystore 写坏，
+     * DEK 随之不可解 = 隐私文件夹所有文件报废。改为「先写临时文件 → 旧文件改名备份 → 临时文件就位 → 删备份」：
+     * 任一步崩溃后卡上都至少有一份完整 keystore（旧 [KEYSTORE_PATH] 或 [KEYSTORE_BAK]），由 [loadKeystoreRaw]
+     * 自愈还原。新旧 blob 包裹**同一 DEK**，无论生效哪份都能解出相同密钥、文件不丢。需盘已打开。
+     */
+    fun rewriteKeystoreRaw(bytes: ByteArray): Boolean {
+        synchronized(fsShell) {
+            LibJniFSShell.SFDelete(KEYSTORE_TMP)
+            LibJniFSShell.SFDelete(KEYSTORE_BAK)
+        }
+        if (!writeFile(KEYSTORE_TMP, bytes.inputStream()).isSuccess) {
+            synchronized(fsShell) { LibJniFSShell.SFDelete(KEYSTORE_TMP) }
+            return false
+        }
+        return synchronized(fsShell) {
+            // 旧 keystore 先改名为备份（而非删）→ 即便下一步崩溃，备份仍是有效 keystore。
+            if (!LibJniFSShell.SFRename(KEYSTORE_PATH, KEYSTORE_BAK)) {
+                LibJniFSShell.SFDelete(KEYSTORE_TMP); return@synchronized false
+            }
+            if (!LibJniFSShell.SFRename(KEYSTORE_TMP, KEYSTORE_PATH)) {
+                LibJniFSShell.SFRename(KEYSTORE_BAK, KEYSTORE_PATH) // 还原旧 keystore
+                LibJniFSShell.SFDelete(KEYSTORE_TMP)
+                return@synchronized false
+            }
+            LibJniFSShell.SFDelete(KEYSTORE_BAK)
+            true
+        }
+    }
+
+    /**
+     * 原始读 keystore blob；不存在（旧卡未初始化此格式）返回 null。需盘已打开。
+     * **自愈（M12.6）**：若主 keystore 缺失但 [KEYSTORE_BAK] 还在（密钥更新在两次 rename 之间中断），
+     * 用备份并把它改名还原回主路径——备份包裹同一 DEK，等价于上次更新成功。
+     */
     fun loadKeystoreRaw(): ByteArray? {
+        readKeystoreAt(KEYSTORE_PATH)?.let { return it }
+        val bak = readKeystoreAt(KEYSTORE_BAK) ?: return null
+        synchronized(fsShell) { LibJniFSShell.SFRename(KEYSTORE_BAK, KEYSTORE_PATH) }
+        return bak
+    }
+
+    private fun readKeystoreAt(path: String): ByteArray? {
         val out = ByteArrayOutputStream()
-        return if (readFile(KEYSTORE_PATH, out).isSuccess) out.toByteArray() else null
+        return if (readFile(path, out).isSuccess) out.toByteArray() else null
     }
 
     /**
@@ -705,6 +746,8 @@ class RealFileSystem @Inject constructor(
         const val ROOT = "0:/"
         const val META_PATH = "0:/.midun_meta.json"
         const val KEYSTORE_PATH = "0:/.midun_keystore" // App 层 DEK/KEK 密钥库（raw，永不 DEK 加密）
+        const val KEYSTORE_TMP = "0:/.midun_keystore.tmp" // 密钥更新临时文件（M12.6 安全覆盖）
+        const val KEYSTORE_BAK = "0:/.midun_keystore.bak" // 密钥更新旧文件备份（M12.6 崩溃自愈）
         // 加密分块大小取 FileCrypto 的单一来源（消除「写/读两个 64KB 常量须保持一致」的隐患）；同时复用作
         // 原始拷贝/读写的 I/O 缓冲（缓冲大小非格式关键，取同值即可）。
         const val CHUNK = FileCrypto.CHUNK_PLAIN_BYTES
