@@ -50,7 +50,7 @@ class SecurityCardManager @Inject constructor(
         operationLog.clear()
     }
 
-    override suspend fun updateBinding(bind: Boolean) = real.updateBinding(bind)
+    override suspend fun updateBinding(bind: Boolean): Result<Unit> = real.updateBinding(bind)
     override suspend fun updateKey() = real.updateKey()
 
     // —— USB 插拔事件路由（来自 MainActivity 广播，经 DeviceViewModel）——

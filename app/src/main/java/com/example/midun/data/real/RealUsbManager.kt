@@ -151,8 +151,9 @@ class RealUsbManager @Inject constructor(
                 runCatching { fsShell.SFCloseDisk() }
                 return@withContext Result.failure(IllegalStateException("设置密码失败，错误码=$ret"))
             }
-            // 绑定（M11.6.6）：选中绑定则写卡内 0:/.bind = 本机 androidId（需盘已打开）。
-            val boundId = if (bindDevice) androidId().also { writeBoundId(it) } else null
+            // 绑定（M11.6.6）：选中绑定则写卡内 0:/.bind = 本机 androidId（需盘已打开）。写卡失败 → 视为未绑定
+            // （boundId=null），不谎报已绑定；初始化主流程（密码+keystore）已成，不因可选绑定写失败而整体失败。
+            val boundId = if (bindDevice) androidId().takeIf { writeBoundId(it) } else null
             // App 层密钥库（M12.1）：生成全新 DEK/KEK，原始落卡 0:/.midun_keystore（盘已打开、关盘前）。
             // DEK 同时入内存，但本次 init 完会关盘+清会话 → 登录时再由 authenticate 载入。
             // M12.4：落盘失败必须让 init 失败——否则会留下「已初始化却无 keystore」的卡 → 后续静默明文。
@@ -311,22 +312,30 @@ class RealUsbManager @Inject constructor(
      */
     override suspend fun wipeUserData(): Result<Unit> = realFileSystem.clear()
 
-    /** 切换绑定（M11.6.6）：bind=true 写卡内 `0:/.bind`=本机 androidId；false 删 `.bind` 解绑。需盘已打开。 */
-    override suspend fun updateBinding(bind: Boolean): Unit = withContext(Dispatchers.IO) {
+    /**
+     * 切换绑定（M11.6.6）：bind=true 写卡内 `0:/.bind`=本机 androidId；false 删 `.bind` 解绑。需盘已打开。
+     * **写卡失败如实返回 failure**——绝不在卡里没真正写/删的情况下谎报绑定状态（否则下次登录的绑定校验
+     * 形同虚设）。仅在卡操作成功后才翻转内存 `boundPhoneId`。
+     */
+    override suspend fun updateBinding(bind: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
         if (bind) {
             val id = androidId()
-            writeBoundId(id)
+            if (!writeBoundId(id)) {
+                return@withContext Result.failure(IllegalStateException("绑定写入失败，请重试"))
+            }
             _deviceStatus.value = _deviceStatus.value.copy(boundPhoneId = id)
         } else {
-            realFileSystem.deleteFile(BIND_PATH)
+            if (realFileSystem.deleteFile(BIND_PATH).isFailure) {
+                return@withContext Result.failure(IllegalStateException("解绑失败，请重试"))
+            }
             _deviceStatus.value = _deviceStatus.value.copy(boundPhoneId = null)
         }
+        Result.success(Unit)
     }
 
-    /** 写卡内绑定文件 `0:/.bind` = [id]（本机 androidId）。 */
-    private fun writeBoundId(id: String) {
-        realFileSystem.writeFile(BIND_PATH, id.toByteArray(Charsets.UTF_8).inputStream())
-    }
+    /** 写卡内绑定文件 `0:/.bind` = [id]（本机 androidId）。返回是否真正写入成功。 */
+    private fun writeBoundId(id: String): Boolean =
+        realFileSystem.writeFile(BIND_PATH, id.toByteArray(Charsets.UTF_8).inputStream()).isSuccess
 
     /** 读卡内绑定 androidId；无 `.bind`（未绑定）回 null。需盘已打开。 */
     private fun readBoundId(): String? {

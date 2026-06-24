@@ -102,15 +102,18 @@ class DeviceViewModel @Inject constructor(
     }
 
     /**
-     * 切换设备绑定状态（M7.3 patch §M7 改动2）：校验密码 → 翻转 boundPhoneId → onSuccess。
-     * mock 期不影响登录流程（authenticate 仍仅校验密码）；真 SDK 后将耦合 boundPhoneId 校验。
+     * 切换设备绑定状态（M11.6.6）：校验密码 → 写/删卡内 `0:/.bind` → 按 **Result 分流**。
+     * 写卡失败如实报错，不再无条件报成功（绑定校验是登录安全门，谎报会让它失效）。
      */
     fun updateBinding(password: String, bind: Boolean, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            if (cardManager.verifyPassword(password)) {
-                cardManager.updateBinding(bind)
-                onSuccess()
-            } else onError("密码错误")
+            if (!cardManager.verifyPassword(password)) {
+                onError("密码错误")
+                return@launch
+            }
+            cardManager.updateBinding(bind)
+                .onSuccess { onSuccess() }
+                .onFailure { onError(it.message ?: (if (bind) "绑定失败" else "解绑失败")) }
         }
     }
 
