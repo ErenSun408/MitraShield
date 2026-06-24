@@ -367,6 +367,9 @@ class P2PSessionManager @Inject constructor(
         val msgId = generateMessageId()
         val fileNonce = P2PCrypto.newFileNonce()
         val totalChunks = ((size + FILE_CHUNK_BYTES - 1) / FILE_CHUNK_BYTES).toInt().coerceAtLeast(1)
+        // 阅后即焚（`[chat-voice]` 扩展）：开启态下**仅语音**焚（mime audio/*）；其余文件仍不焚（范围决策）。
+        val burning = _burnMode.value.enabled && mime.startsWith("audio/")
+        val burnTtl = if (burning) _burnMode.value.ttlSeconds else 0
 
         // 发送方预览副本：手机来源在真卡模式下边发边落 `.sent_<msgId>`；落不成则不留（localPath 保持 null）。
         val sentCopyPath = if (sourceCardPath == null) FileCachePaths.sent(msgId) else null
@@ -375,7 +378,8 @@ class P2PSessionManager @Inject constructor(
         // 隐私文件夹来源即刻可预览（文件已在卡上）→ 起始就带 localPath；手机来源成功后再补。
         chatRepo.addFileMessage(
             contactId, msgId, isMine = true, fileName, size, MessageStatus.SENDING, localPath = sourceCardPath,
-            type = fileMessageType(mime), audioDurationSec = durationSec
+            type = fileMessageType(mime), audioDurationSec = durationSec,
+            burnAfterRead = burning, burnTtl = burnTtl
         )
         setProgress(msgId, 0f)
         _incomingMessages.emit(contactId)
@@ -389,6 +393,7 @@ class P2PSessionManager @Inject constructor(
                 put("nonce", Base64.encodeToString(fileNonce, Base64.NO_WRAP))
                 put("chunks", totalChunks)
                 if (durationSec > 0) put("durationSec", durationSec) // 语音消息时长（接收端建 AUDIO 气泡用）
+                if (burning) { put("burn", true); put("ttl", burnTtl) } // 语音阅后即焚标记 + 时长
             }.toString()
             channel.sendFrame(FileTransferChannel.FILE_BEGIN, P2PCrypto.encrypt(key, beginJson))
 
@@ -461,9 +466,12 @@ class P2PSessionManager @Inject constructor(
         val sentCopyPath = if (sourceCardPath == null) FileCachePaths.sent(msgId) else null
         // 有副本要写 → 起始 SENDING 显进度；无副本 → 直接 FAILED 未送达。
         val initialStatus = if (sentCopyPath != null) MessageStatus.SENDING else MessageStatus.FAILED
+        // 离线语音也按焚毁模式标记（对端收不到，本端焚毁退化为本地删；同文字离线焚毁语义）。
+        val burning = _burnMode.value.enabled && mime.startsWith("audio/")
         chatRepo.addFileMessage(
             contactId, msgId, isMine = true, fileName, size, initialStatus, localPath = sourceCardPath,
-            type = fileMessageType(mime), audioDurationSec = durationSec
+            type = fileMessageType(mime), audioDurationSec = durationSec,
+            burnAfterRead = burning, burnTtl = if (burning) _burnMode.value.ttlSeconds else 0
         )
         _incomingMessages.emit(contactId)
         if (sentCopyPath == null) return@withContext Result.success(Unit)
@@ -554,8 +562,19 @@ class P2PSessionManager @Inject constructor(
             runCatching { writeFrame(session, generateMessageId(), BURN_TYPE, messageId) }
         }
         chatRepo.markBurned(messageId, contactId)
+        deleteBurnedMedia(messageId) // 语音等媒体真焚毁=删本端卡内缓存，墓碑不留可复播的文件
         _incomingMessages.emit(contactId)
         Result.success(Unit)
+    }
+
+    /**
+     * 焚毁媒体消息时删本端卡内缓存（`[chat-voice]` 阅后即焚关键）：语音/文件本体在 `.recv_<id>`（收方）/
+     * `.sent_<id>`（发方）。文字焚毁只抹文本、无缓存，这里两路径都试删（不存在的那条返回 false、无害）。
+     * 否则墓碑只是 UI 标记，音频文件还在、可被复播或恢复。
+     */
+    private fun deleteBurnedMedia(messageId: String) {
+        runCatching { realFileSystem.streamDelete(FileCachePaths.recv(messageId)) }
+        runCatching { realFileSystem.streamDelete(FileCachePaths.sent(messageId)) }
     }
 
     /** 焚毁 TTL 秒数 → 人类可读（5→5秒，60→1分钟）。 */
@@ -673,12 +692,14 @@ class P2PSessionManager @Inject constructor(
         val totalChunks = json.getInt("chunks")
         val msgType = fileMessageType(json.optString("mime"))
         val durationSec = json.optInt("durationSec")
+        val burning = json.optBoolean("burn", false) // 语音阅后即焚标记 + 时长（计时在「听完」时才起）
+        val burnTtl = json.optInt("ttl", 0)
         val stagingPath = FileCachePaths.recv(msgId)
         val handle = realFileSystem.streamCreate(stagingPath)
         if (handle <= 0) {
             chatRepo.addFileMessage(
                 contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.FAILED,
-                type = msgType, audioDurationSec = durationSec
+                type = msgType, audioDurationSec = durationSec, burnAfterRead = burning, burnTtl = burnTtl
             )
             _incomingMessages.emit(contactId)
             return
@@ -689,7 +710,7 @@ class P2PSessionManager @Inject constructor(
         )
         chatRepo.addFileMessage(
             contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.RECEIVED,
-            type = msgType, audioDurationSec = durationSec
+            type = msgType, audioDurationSec = durationSec, burnAfterRead = burning, burnTtl = burnTtl
         )
         setProgress(msgId, 0f)
         _incomingMessages.emit(contactId)
@@ -841,9 +862,10 @@ class P2PSessionManager @Inject constructor(
                 _incomingMessages.emit(contactId)
             }
             BURN_TYPE -> {
-                // 对端焚毁（B 阶段）：plaintext = 目标消息 id，本地焚毁对应消息为焚毁墓碑。
+                // 对端焚毁（B 阶段）：plaintext = 目标消息 id，本地焚毁对应消息为焚毁墓碑 + 删本端媒体缓存。
                 val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
                 chatRepo.markBurned(plaintext, contactId)
+                deleteBurnedMedia(plaintext)
                 _incomingMessages.emit(contactId)
             }
             PING_TYPE -> runCatching { writeFrame(session, generateMessageId(), PONG_TYPE, "") } // 心跳：回 PONG

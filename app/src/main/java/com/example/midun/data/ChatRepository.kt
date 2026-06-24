@@ -318,7 +318,9 @@ class ChatRepository @Inject constructor(
         savedFolderId: String? = null,
         localPath: String? = null,
         type: MessageType = MessageType.FILE,
-        audioDurationSec: Int = 0
+        audioDurationSec: Int = 0,
+        burnAfterRead: Boolean = false,
+        burnTtl: Int = 0
     ): ChatMessage {
         val msg = ChatMessage(
             id = messageId,
@@ -331,7 +333,9 @@ class ChatRepository @Inject constructor(
             fileSize = fileSize,
             savedFolderId = savedFolderId,
             localPath = localPath,
-            audioDurationSec = audioDurationSec
+            audioDurationSec = audioDurationSec,
+            burnAfterRead = burnAfterRead,
+            burnTtl = burnTtl
         )
         messages.getOrPut(contactId) { mutableListOf() }.add(msg)
         if (!isMine) {

@@ -146,6 +146,9 @@ fun ChatDetailScreen(
     var cancelArmed by remember { mutableStateOf(false) }            // 上滑进入取消区（松手则取消）
     var recordSeconds by remember { mutableIntStateOf(0) }           // 录音时长（按钮内实时显示）
     var playingVoiceId by remember { mutableStateOf<String?>(null) } // 正在播放的语音消息 id
+    // 阅后即焚语音：已点开（揭示+播放）但**计时尚未起**的消息 id。焚毁计时改在「听完」(播放完成) 才启动，
+    // 故「已揭示」要和「计时器已起(burnTimers)」解耦——这个本地集合承载「已揭示、播放中、还没听完」这段。
+    var openedBurnVoice by remember { mutableStateOf(setOf<String>()) }
     val hasMicPermission = {
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
@@ -457,6 +460,7 @@ fun ChatDetailScreen(
                         },
                         onResend = { resendTarget = msg },
                         audioPlaying = playingVoiceId == msg.id,
+                        audioBurnOpened = msg.id in openedBurnVoice,
                         onAudioTap = {
                             if (playingVoiceId == msg.id) {
                                 voicePlayer.stop(); playingVoiceId = null
@@ -466,10 +470,18 @@ fun ChatDetailScreen(
                                     snackbarHostState.showSnackbar("语音不可用，可能已过期")
                                     return@launch
                                 }
+                                // 焚毁语音：首次点开记入 openedBurnVoice（揭示遮罩）；计时**不在此刻起**。
+                                val burnRecv = msg.burnAfterRead && !msg.isMine
+                                if (burnRecv) openedBurnVoice = openedBurnVoice + msg.id
                                 val tmp = File(context.cacheDir, "voice_play.m4a")
                                 tmp.writeBytes(bytes)
                                 playingVoiceId = msg.id
-                                if (!voicePlayer.play(tmp) { playingVoiceId = null }) {
+                                // 播放完成回调：普通语音仅复位；焚毁语音在**听完**才启动 ttl 倒计时（到点两端焚）。
+                                val started = voicePlayer.play(tmp) {
+                                    playingVoiceId = null
+                                    if (burnRecv) chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl)
+                                }
+                                if (!started) {
                                     playingVoiceId = null
                                     snackbarHostState.showSnackbar("语音播放失败")
                                 }
@@ -1049,7 +1061,8 @@ private fun ChatBubble(
     onResend: () -> Unit = {},
     onFileTap: () -> Unit = {},
     onAudioTap: () -> Unit = {},
-    audioPlaying: Boolean = false
+    audioPlaying: Boolean = false,
+    audioBurnOpened: Boolean = false
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val isFile = msg.type == MessageType.FILE
@@ -1058,8 +1071,10 @@ private fun ChatBubble(
     val isAudio = msg.type == MessageType.AUDIO
 
     // 焚毁消息（B 阶段）：接收方未点开 → 遮罩；点开后 burnDeadline 非空 → 倒计时显示。
+    // 焚毁**语音**特殊：计时改在「听完」才起（burnDeadline 仍为空），故揭示判据要叠加 [audioBurnOpened]
+    // （已点开播放但还没听完）——否则点开后仍被遮罩、看不到播放 UI。
     val isBurn = msg.burnAfterRead
-    val revealed = burnDeadline != null
+    val revealed = burnDeadline != null || (isAudio && audioBurnOpened)
     val masked = isBurn && !msg.isMine && !revealed
 
     Row(
@@ -1097,7 +1112,10 @@ private fun ChatBubble(
                     // 遮罩态点击揭示并启动倒计时；文件气泡点击触发保存/预览；其余点击无操作，长按弹菜单。
                     modifier = Modifier.combinedClickable(
                         onClick = {
-                            if (masked) onReveal() else if (isFile) onFileTap() else if (isAudio) onAudioTap()
+                            // 语音（含焚毁遮罩态）一律走 onAudioTap：它负责揭示+播放，并在听完时启动焚毁计时。
+                            if (isAudio) onAudioTap()
+                            else if (masked) onReveal()
+                            else if (isFile) onFileTap()
                         },
                         onLongClick = { showMenu = true }
                     )
@@ -1109,7 +1127,7 @@ private fun ChatBubble(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.LocalFireDepartment, null, tint = Warning, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("点击查看", color = contentColor, fontSize = 14.sp)
+                                Text(if (isAudio) "点击收听" else "点击查看", color = contentColor, fontSize = 14.sp)
                             }
                         } else {
                         when {
