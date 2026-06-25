@@ -177,9 +177,10 @@ private fun VideoPreview(file: FileItem, vm: PreviewViewModel) {
         }
     }
     val player = remember(file.id) {
-        val factory = CardFileDataSource.Factory(vm.realFileSystem, file.id)
+        // 暂存缓存（.recv_/.sent_）经 StagingStore 路由（无卡测试本地直读）；隐私文件夹走卡内流式解密。见 PreviewViewModel.videoFactory。
+        val factory = vm.videoFactory(file.id)
         val source = ProgressiveMediaSource.Factory(factory)
-            .createMediaSource(MediaItem.fromUri(Uri.parse("card://preview")))
+            .createMediaSource(MediaItem.fromUri(vm.videoUri(file.id)))
         ExoPlayer.Builder(context).build().apply {
             setMediaSource(source)
             prepare()

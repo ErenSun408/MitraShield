@@ -7,8 +7,8 @@ import com.example.midun.data.model.MessageType
 import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.data.real.ChatSnapshot
 import com.example.midun.data.real.ChatStore
-import com.example.midun.data.real.RealFileSystem
 import com.example.midun.data.real.RealUsbManager
+import com.example.midun.data.staging.StagingStore
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -29,7 +29,7 @@ import kotlinx.coroutines.withContext
 @Singleton
 class ChatRepository @Inject constructor(
     private val store: ChatStore,
-    private val realFileSystem: RealFileSystem,
+    private val stagingStore: StagingStore,
     realUsbManager: RealUsbManager
 ) {
 
@@ -66,8 +66,8 @@ class ChatRepository @Inject constructor(
         val cutoff = System.currentTimeMillis() - CACHE_TTL_MS
         messages.values.flatten().forEach { m ->
             if (m.type == MessageType.FILE && m.timestamp < cutoff) {
-                realFileSystem.streamDelete(FileCachePaths.recv(m.id))
-                realFileSystem.streamDelete(FileCachePaths.sent(m.id))
+                stagingStore.delete(FileCachePaths.recv(m.id))
+                stagingStore.delete(FileCachePaths.sent(m.id))
             }
         }
     }
@@ -82,7 +82,7 @@ class ChatRepository @Inject constructor(
     suspend fun cacheStats(): Pair<Int, Long> = withContext(Dispatchers.IO) {
         var count = 0
         var bytes = 0L
-        cachePaths().forEach { p -> realFileSystem.fileSizeOrNull(p)?.let { count++; bytes += it } }
+        cachePaths().forEach { p -> stagingStore.sizeOrNull(p)?.let { count++; bytes += it } }
         count to bytes
     }
 
@@ -93,8 +93,8 @@ class ChatRepository @Inject constructor(
     suspend fun clearCache(): Long = withContext(Dispatchers.IO) {
         var freed = 0L
         cachePaths().forEach { p ->
-            val sz = realFileSystem.fileSizeOrNull(p) ?: return@forEach
-            if (realFileSystem.streamDelete(p)) freed += sz
+            val sz = stagingStore.sizeOrNull(p) ?: return@forEach
+            if (stagingStore.delete(p)) freed += sz
         }
         freed
     }

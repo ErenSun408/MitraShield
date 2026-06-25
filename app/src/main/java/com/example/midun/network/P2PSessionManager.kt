@@ -6,6 +6,7 @@ import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.ChatRepository
 import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.real.RealFileSystem
+import com.example.midun.data.staging.StagingStore
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
@@ -67,7 +68,9 @@ class P2PSessionManager @Inject constructor(
     private val chatRepo: ChatRepository,
     private val operationLog: OperationLogRepository,
     private val cardManager: SecurityCardManager,
-    // 文件接收落卡（M11.5.3）：直接依赖叶子 RealFileSystem（无 DI 环，同 ChatStore/OperationLogStore 选型）。
+    // 文件收发暂存（M11.5.3 + 无卡测试 T2）：经 StagingStore——真卡落卡、无卡测试落手机本地。
+    private val stagingStore: StagingStore,
+    // 仅用于把暂存复制进隐私文件夹（saveReceivedFile，卡内操作、测试模式不触发）。
     private val realFileSystem: RealFileSystem
 ) {
 
@@ -373,7 +376,7 @@ class P2PSessionManager @Inject constructor(
 
         // 发送方预览副本：手机来源在真卡模式下边发边落 `.sent_<msgId>`；落不成则不留（localPath 保持 null）。
         val sentCopyPath = if (sourceCardPath == null) FileCachePaths.sent(msgId) else null
-        val copyHandle = sentCopyPath?.let { realFileSystem.streamCreate(it).takeIf { h -> h > 0 } }
+        val copyHandle = sentCopyPath?.let { stagingStore.create(it).takeIf { h -> h > 0 } }
 
         // 隐私文件夹来源即刻可预览（文件已在卡上）→ 起始就带 localPath；手机来源成功后再补。
         chatRepo.addFileMessage(
@@ -410,7 +413,7 @@ class P2PSessionManager @Inject constructor(
                         .toInt().coerceAtLeast(0)
                     val chunk = ByteArray(want)
                     if (want > 0) readFully(input, chunk)
-                    if (copyHandle != null && want > 0) realFileSystem.streamWrite(copyHandle, chunk, 0, want)
+                    if (copyHandle != null && want > 0) stagingStore.write(copyHandle, chunk, 0, want)
                     digest.update(chunk)
                     val isLast = index == totalChunks - 1
                     val cipher = P2PCrypto.encryptChunk(key, fileNonce, index, isLast, chunk)
@@ -428,7 +431,7 @@ class P2PSessionManager @Inject constructor(
 
             // 副本写全 → 记 localPath（发送方此后可预览自己发的图/视频）。
             if (copyHandle != null) {
-                realFileSystem.streamClose(copyHandle)
+                stagingStore.close(copyHandle)
                 sentCopyPath?.let { chatRepo.setFileLocalPath(msgId, contactId, it) }
             }
             chatRepo.updateFileStatus(msgId, contactId, MessageStatus.SENT)
@@ -438,8 +441,8 @@ class P2PSessionManager @Inject constructor(
         } catch (e: Exception) {
             // 失败/取消：关副本句柄并删半成品（localPath 仍为 null，发送方不会预览到残片）。
             if (copyHandle != null) {
-                runCatching { realFileSystem.streamClose(copyHandle) }
-                sentCopyPath?.let { runCatching { realFileSystem.streamDelete(it) } }
+                runCatching { stagingStore.close(copyHandle) }
+                sentCopyPath?.let { runCatching { stagingStore.delete(it) } }
             }
             chatRepo.updateFileStatus(msgId, contactId, MessageStatus.FAILED)
             clearProgress(msgId)
@@ -480,7 +483,7 @@ class P2PSessionManager @Inject constructor(
         setProgress(msgId, 0f)
         return@withContext try {
             openStream().use { input ->
-                realFileSystem.writeFile(sentCopyPath, input, MAX_FILE_BYTES) { w ->
+                stagingStore.writeFile(sentCopyPath, input, MAX_FILE_BYTES) { w ->
                     if (sendCancelled) throw IOException("已取消发送")
                     setProgress(msgId, if (size > 0) w.toFloat() / size else 1f)
                 }
@@ -493,7 +496,7 @@ class P2PSessionManager @Inject constructor(
             Result.success(Unit)
         } catch (e: Exception) {
             // 写副本失败/取消：删半成品；消息仍保留为未送达（只是没有预览副本）。
-            runCatching { realFileSystem.streamDelete(sentCopyPath) }
+            runCatching { stagingStore.delete(sentCopyPath) }
             chatRepo.updateFileStatus(msgId, contactId, MessageStatus.FAILED)
             clearProgress(msgId)
             _incomingMessages.emit(contactId)
@@ -573,8 +576,8 @@ class P2PSessionManager @Inject constructor(
      * 否则墓碑只是 UI 标记，音频文件还在、可被复播或恢复。
      */
     private fun deleteBurnedMedia(messageId: String) {
-        runCatching { realFileSystem.streamDelete(FileCachePaths.recv(messageId)) }
-        runCatching { realFileSystem.streamDelete(FileCachePaths.sent(messageId)) }
+        runCatching { stagingStore.delete(FileCachePaths.recv(messageId)) }
+        runCatching { stagingStore.delete(FileCachePaths.sent(messageId)) }
     }
 
     /** 焚毁 TTL 秒数 → 人类可读（5→5秒，60→1分钟）。 */
@@ -695,7 +698,7 @@ class P2PSessionManager @Inject constructor(
         val burning = json.optBoolean("burn", false) // 语音阅后即焚标记 + 时长（计时在「听完」时才起）
         val burnTtl = json.optInt("ttl", 0)
         val stagingPath = FileCachePaths.recv(msgId)
-        val handle = realFileSystem.streamCreate(stagingPath)
+        val handle = stagingStore.create(stagingPath)
         if (handle <= 0) {
             chatRepo.addFileMessage(
                 contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.FAILED,
@@ -725,7 +728,7 @@ class P2PSessionManager @Inject constructor(
         val isLast = index == f.totalChunks - 1
         val plain = runCatching { P2PCrypto.decryptChunk(key, f.fileNonce, index, isLast, cipher) }.getOrNull()
         if (plain == null) { abortIncoming(MessageStatus.FAILED); return } // 块被重排/重放/篡改 → GCM 校验失败
-        realFileSystem.streamWrite(f.handle, plain, 0, plain.size)
+        stagingStore.write(f.handle, plain, 0, plain.size)
         f.digest.update(plain)
         f.written += plain.size
         setProgress(f.msgId, if (f.fileSize > 0) f.written.toFloat() / f.fileSize else 1f)
@@ -735,12 +738,12 @@ class P2PSessionManager @Inject constructor(
     private suspend fun handleFileEnd(key: ByteArray, payload: ByteArray) {
         val f = incoming ?: return
         incoming = null
-        realFileSystem.streamClose(f.handle)
+        stagingStore.close(f.handle)
         val expect = runCatching { JSONObject(P2PCrypto.decrypt(key, payload)).getString("sha256") }.getOrNull()
         if (expect != null && expect == toHex(f.digest.digest())) {
             chatRepo.updateFileStatus(f.msgId, f.contactId, MessageStatus.RECEIVED)
         } else {
-            realFileSystem.streamDelete(f.stagingPath)
+            stagingStore.delete(f.stagingPath)
             chatRepo.updateFileStatus(f.msgId, f.contactId, MessageStatus.FAILED)
         }
         clearProgress(f.msgId)
@@ -759,9 +762,10 @@ class P2PSessionManager @Inject constructor(
         msgId: String, contactId: String, fileName: String, folderId: String
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val staging = FileCachePaths.recv(msgId)
-        if (realFileSystem.streamOpen(staging).let { h -> if (h > 0) { realFileSystem.streamClose(h); false } else true }) {
+        if (!stagingStore.exists(staging)) {
             return@withContext Result.failure(IllegalStateException("暂存文件不存在，可能已被清理"))
         }
+        // 保存到隐私文件夹是卡内复制（copyWithinCard 读卡内 staging）；测试模式无隐私文件夹、此路径不触发（T3 UI 禁用）。
         val dest = uniqueDestPath(folderId, fileName)
         if (!realFileSystem.copyWithinCard(staging, dest)) {
             return@withContext Result.failure(IllegalStateException("保存到文件夹失败"))
@@ -791,8 +795,8 @@ class P2PSessionManager @Inject constructor(
     private fun abortIncoming(status: MessageStatus) {
         val f = incoming ?: return
         incoming = null
-        runCatching { realFileSystem.streamClose(f.handle) }
-        runCatching { realFileSystem.streamDelete(f.stagingPath) }
+        runCatching { stagingStore.close(f.handle) }
+        runCatching { stagingStore.delete(f.stagingPath) }
         chatRepo.updateFileStatus(f.msgId, f.contactId, status)
         clearProgress(f.msgId)
         _incomingMessages.tryEmit(f.contactId)

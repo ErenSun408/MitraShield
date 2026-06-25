@@ -2,6 +2,7 @@ package com.example.midun.data
 
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.real.RealFileSystem
+import com.example.midun.data.staging.StagingStore
 import java.io.InputStream
 import java.io.OutputStream
 import javax.inject.Inject
@@ -16,7 +17,8 @@ import javax.inject.Singleton
 @Singleton
 class FileRepository @Inject constructor(
     private val real: RealFileSystem,
-    private val cardManager: SecurityCardManager
+    private val cardManager: SecurityCardManager,
+    private val stagingStore: StagingStore
 ) : FileSystemOps {
 
     override suspend fun getFolders() = real.getFolders()
@@ -42,7 +44,14 @@ class FileRepository @Inject constructor(
         onProgress: (written: Long) -> Unit
     ) = real.exportFile(fileId, fileName, output, isCancelled, onProgress)
 
-    override suspend fun readFileBytes(fileId: String) = real.readFileBytes(fileId)
+    // 聊天暂存缓存（.recv_/.sent_）走 StagingStore（无卡测试落本地）；隐私文件夹走真卡。下同 openFileStream/cardFileExists。
+    override suspend fun readFileBytes(fileId: String) =
+        if (FileCachePaths.isCachePath(fileId)) {
+            stagingStore.readBytes(fileId)?.let { Result.success(it) }
+                ?: Result.failure(java.io.IOException("暂存文件不存在或已清理：$fileId"))
+        } else {
+            real.readFileBytes(fileId)
+        }
 
     /** 加密导出（M12.5）：用导出口令把卡内文件重加密成便携 `.midun` 容器写到 [output]。 */
     suspend fun exportFileEncrypted(
@@ -67,11 +76,14 @@ class FileRepository @Inject constructor(
     override suspend fun renameFolder(folderId: String, newName: String) = real.renameFolder(folderId, newName)
     override suspend fun renameFile(fileId: String, newName: String) = real.renameFile(fileId, newName)
 
-    /** 打开隐私文件夹内某文件为流式 InputStream（M11.5.3：发送该文件时用）。读卡内明文流。 */
-    fun openFileStream(fileId: String): InputStream = real.openCardStream(fileId)
+    /** 打开文件为流式 InputStream（M11.5.3 发送 / 语音回放 / 重发）。暂存缓存走 StagingStore，隐私文件夹读卡内明文流。 */
+    fun openFileStream(fileId: String): InputStream =
+        if (FileCachePaths.isCachePath(fileId)) stagingStore.openRead(fileId) else real.openCardStream(fileId)
 
     /**
-     * 卡内文件是否存在（file-transfer 阶段3）：预览前判断缓存是否已被 7 天 TTL 清理 → 过期降级。
+     * 文件是否存在（file-transfer 阶段3）：预览前判断缓存是否已被 7 天 TTL 清理 → 过期降级。
+     * 暂存缓存走 StagingStore（无卡测试落本地），隐私文件夹查卡。
      */
-    fun cardFileExists(path: String): Boolean = real.exists(path)
+    fun cardFileExists(path: String): Boolean =
+        if (FileCachePaths.isCachePath(path)) stagingStore.exists(path) else real.exists(path)
 }
