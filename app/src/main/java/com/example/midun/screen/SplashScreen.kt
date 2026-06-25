@@ -31,6 +31,7 @@ fun SplashScreen(
     var startAnim by remember { mutableStateOf(false) }
     var animationDone by remember { mutableStateOf(false) }
     val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
+    val isTestMode by deviceViewModel.isTestMode.collectAsState()
 
     val alphaAnim by animateFloatAsState(
         targetValue = if (startAnim) 1f else 0f,
@@ -47,7 +48,14 @@ fun SplashScreen(
         animationDone = true
     }
 
-    LaunchedEffect(animationDone, deviceStatus) {
+    LaunchedEffect(animationDone, deviceStatus, isTestMode) {
+        // 无卡测试模式：跳过卡检测/动画等待，直奔主页（绕过 Init/Login，认证要卡）。
+        if (isTestMode) {
+            navController.navigate(Screen.Main.route) {
+                popUpTo(Screen.Splash.route) { inclusive = true }
+            }
+            return@LaunchedEffect
+        }
         if (!animationDone) return@LaunchedEffect
         val target = when {
             // DISCONNECTED 不会进到这（MainActivity 在无卡时不渲染 NavGraph）；CONNECTING=正在检测卡 → 停留显本页。
