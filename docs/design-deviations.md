@@ -1018,4 +1018,14 @@ v4 即时通信只设计了文字 + 文件；语音是 v4 外新增。**复用�
 - **UI**：输入栏麦克风/键盘切换 + 微信式「按住说话·上滑取消」（`pointerInput.awaitEachGesture`：按下录、松手发、上滑 120px 取消；RECORD_AUDIO 首按运行时申请；录音秒数/取消态反馈直接显示在按钮内，未做单独浮层）；`audio/VoicePlayer`（MediaPlayer 单段播放）；AUDIO 气泡可点播放/暂停 + 时长 + 宽度随时长递增；播放经 `ChatViewModel.readVoiceBytes` 读卡内缓存（mine=`.sent_`/源、received=`.recv_`）→ temp 文件，缓存过期（7 天 TTL）优雅降级；离开会话停播 + 弃在录音。**Commit** `e719862`。
 - **诚实边界**：语音端到端收发**未装机验**（须两机两卡同 WiFi）；语音 clip 不做单独加密（同 `.recv_/.sent_` 缓存约定，受卡 AES，不叠 DEK）。
 
+## 无卡测试模式（v4 外增量，`[nocard-test]`，2026-06-25）
+
+给手中暂无安全卡的客户测通信/文件/语音。在「砍模拟模式→真卡-only」（2026-06-24）之后**重新引入测试态**，但形态与旧 `useRealCard` 双实现完全不同：不是运行时切换两套设备实现，而是**默认真卡不动 + 一个进程内 testMode 标志 + 一层 staging 存储抽象**。
+
+- **默认真卡、入口常态、不持久化**：`TestModeManager`（@Singleton，`isTestMode` 初值 false、`enable()` 不可逆、重启即失效——避免污染正式真卡客户）。MainActivity 左上角常态三点面板（画在 NavGraph 之外，故无卡 DISCONNECTED 白屏时也可见）点「无卡测试」→ 置位 + 种「测试1」联系人。testMode 时 MainActivity 无视卡状态渲染 NavGraph、屏蔽拔卡遮罩；Splash 跳过卡检测/动画直跳 Main（绕过 Init/Login——认证要卡）。**Commit** `948ff78`。
+- **关键事实**：通信链路本就不依赖卡（`currentDeviceSn()` 有 fallbackSn、ECDH+AES 全软件）；真正绑卡的是**收文件/语音的暂存**（`handleFileBegin` 要在卡上建 `.recv_`，没卡收不下来），不只是「保存到隐私文件夹」。
+- **staging 存储抽象**：`data/staging/StagingStore.kt`（@Singleton）。**按每次调用**读 testMode 选后端（而非 DI 期固定——testMode 可能 App 启动后才开）：真卡→`RealFileSystem`（逐字委托、行为不变），测试→`LocalStagingStore`（落手机 `filesDir/nocard_staging/`）。句柄用 `LOCAL_HANDLE_BASE=0x40000000` 命名空间区分，create 出的句柄在后续 write/close 必回同一后端。改造：P2PSessionManager 收发暂存（`.recv_`/`.sent_`/焚毁删/离线副本）、ChatRepository 缓存 sweep/stats/clear、FileRepository 读门面（openFileStream/cardFileExists/readFileBytes 按 `FileCachePaths.isCachePath` 分流）、视频预览（PreviewViewModel.videoFactory/videoUri，本地走 media3 `FileDataSource` + `file://`）。**保存到隐私文件夹（copyWithinCard）仍卡-only**，测试模式 UI 禁用、不触发。**Commit** `0babb0b`。
+- **无卡 UI**：ChatDetailScreen 隐藏「从隐私文件夹」发送来源、媒体预览不给「保存到文件夹」按钮、非媒体收文件提示「无卡测试版不支持保存」、气泡 hint 随 testMode 变。**Commit** `cdc3d34`。
+- **诚实边界**：测试模式明文落手机本地（无卡保密能力，仅供功能测试）；端到端收发**未装机验**（须两台无卡机同 WiFi 互扫）；真卡机回归亦待复验（StagingStore 真卡路径理论上零行为变化）。
+
 <!-- 后续里程碑的偏离继续在下面追加 -->
