@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -286,34 +287,7 @@ fun ChatDetailScreen(
                         .padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Box {
-                        IconButton(onClick = {
-                            // 未连接时与文字一致：仍可发，本地标「未送达」+ 留发送方预览副本，
-                            // 对方收不到（纯 P2P 无服务器、不补发）。
-                            showSourceMenu = true
-                        }) {
-                            Icon(Icons.Default.AttachFile, "发送文件", tint = Primary)
-                        }
-                        DropdownMenu(expanded = showSourceMenu, onDismissRequest = { showSourceMenu = false }) {
-                            DropdownMenuItem(
-                                text = { Text("从手机存储") },
-                                leadingIcon = { Icon(Icons.Default.PhoneAndroid, null, tint = Primary) },
-                                onClick = { showSourceMenu = false; pickFileLauncher.launch("*/*") }
-                            )
-                            // 无卡测试模式无隐私文件夹（无卡）→ 仅保留「从手机存储」。
-                            if (!isTestMode) {
-                                DropdownMenuItem(
-                                    text = { Text("从隐私文件夹") },
-                                    leadingIcon = { Icon(Icons.Default.Folder, null, tint = Primary) },
-                                    onClick = {
-                                        showSourceMenu = false
-                                        showPickDialog = true
-                                        chatViewModel.loadSaveFolders()
-                                    }
-                                )
-                            }
-                        }
-                    }
+                    // 微信式布局：最左语音/键盘切换 → 中间输入框/按住说话 → 最右文件(空)/发送(有内容,渐变)。
                     IconButton(onClick = {
                         voiceMode = !voiceMode
                         if (voiceMode) voicePlayer.stop()
@@ -390,18 +364,51 @@ fun ChatDetailScreen(
                             shape = RoundedCornerShape(20.dp),
                             maxLines = 4
                         )
-                        Spacer(Modifier.width(8.dp))
-                        FilledIconButton(
-                            onClick = {
-                                if (inputText.isNotBlank()) {
-                                    chatViewModel.sendMessage(inputText.trim())
-                                    inputText = ""
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    // 最右槽位：输入框为空(或语音模式)→ 文件图标(开来源菜单)；有内容 → 渐变为发送按钮。
+                    Box {
+                        Crossfade(
+                            targetState = !voiceMode && inputText.isNotBlank(),
+                            label = "sendOrAttach"
+                        ) { showSend ->
+                            if (showSend) {
+                                FilledIconButton(
+                                    onClick = {
+                                        if (inputText.isNotBlank()) {
+                                            chatViewModel.sendMessage(inputText.trim())
+                                            inputText = ""
+                                        }
+                                    },
+                                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = Primary)
+                                ) {
+                                    Icon(Icons.Default.Send, "发送")
                                 }
-                            },
-                            enabled = inputText.isNotBlank(),
-                            colors = IconButtonDefaults.filledIconButtonColors(containerColor = Primary)
-                        ) {
-                            Icon(Icons.Default.Send, "发送")
+                            } else {
+                                // 未连接时与文字一致：仍可发，本地标「未送达」+ 留发送方预览副本，对方收不到（纯 P2P 无服务器、不补发）。
+                                IconButton(onClick = { showSourceMenu = true }) {
+                                    Icon(Icons.Default.AttachFile, "发送文件", tint = Primary)
+                                }
+                            }
+                        }
+                        DropdownMenu(expanded = showSourceMenu, onDismissRequest = { showSourceMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("从手机存储") },
+                                leadingIcon = { Icon(Icons.Default.PhoneAndroid, null, tint = Primary) },
+                                onClick = { showSourceMenu = false; pickFileLauncher.launch("*/*") }
+                            )
+                            // 无卡测试模式无隐私文件夹（无卡）→ 仅保留「从手机存储」。
+                            if (!isTestMode) {
+                                DropdownMenuItem(
+                                    text = { Text("从隐私文件夹") },
+                                    leadingIcon = { Icon(Icons.Default.Folder, null, tint = Primary) },
+                                    onClick = {
+                                        showSourceMenu = false
+                                        showPickDialog = true
+                                        chatViewModel.loadSaveFolders()
+                                    }
+                                )
+                            }
                         }
                     }
                 }
