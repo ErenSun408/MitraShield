@@ -33,6 +33,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -147,6 +149,15 @@ fun ChatDetailScreen(
     val voiceRecorder = remember { VoiceRecorder(context) }
     val voicePlayer = remember { VoicePlayer() }
     var voiceMode by remember { mutableStateOf(false) }              // true=语音输入态，false=文字输入
+    // 切回键盘模式时自动弹键盘（对称于切到语音模式时键盘自动下落）：toggle 置 pending，TextField 重入组合后 requestFocus。
+    val inputFocusRequester = remember { FocusRequester() }
+    var pendingKeyboardFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(voiceMode, pendingKeyboardFocus) {
+        if (!voiceMode && pendingKeyboardFocus) {
+            runCatching { inputFocusRequester.requestFocus() } // 聚焦文字框即弹起软键盘
+            pendingKeyboardFocus = false
+        }
+    }
     var recording by remember { mutableStateOf(false) }              // 正在录音
     var cancelArmed by remember { mutableStateOf(false) }            // 上滑进入取消区（松手则取消）
     var recordSeconds by remember { mutableIntStateOf(0) }           // 录音时长（按钮内实时显示）
@@ -289,6 +300,7 @@ fun ChatDetailScreen(
                 ) {
                     // 微信式布局：最左语音/键盘切换 → 中间输入框/按住说话 → 最右文件(空)/发送(有内容,渐变)。
                     IconButton(onClick = {
+                        if (voiceMode) pendingKeyboardFocus = true // 语音→键盘：切换后自动弹起键盘
                         voiceMode = !voiceMode
                         if (voiceMode) voicePlayer.stop()
                     }) {
@@ -360,7 +372,7 @@ fun ChatDetailScreen(
                             value = inputText,
                             onValueChange = { inputText = it },
                             placeholder = { Text("输入消息...", fontSize = 14.sp) },
-                            modifier = Modifier.weight(1f).heightIn(max = 120.dp),
+                            modifier = Modifier.weight(1f).heightIn(max = 120.dp).focusRequester(inputFocusRequester),
                             shape = RoundedCornerShape(20.dp),
                             maxLines = 4
                         )
@@ -391,7 +403,12 @@ fun ChatDetailScreen(
                                 }
                             }
                         }
-                        DropdownMenu(expanded = showSourceMenu, onDismissRequest = { showSourceMenu = false }) {
+                        DropdownMenu(
+                            expanded = showSourceMenu,
+                            onDismissRequest = { showSourceMenu = false },
+                            // 不抢窗口焦点：键盘弹起时点文件不收起键盘 → 布局不跳动、菜单项点得准。
+                            properties = PopupProperties(focusable = false)
+                        ) {
                             DropdownMenuItem(
                                 text = { Text("从手机存储") },
                                 leadingIcon = { Icon(Icons.Default.PhoneAndroid, null, tint = Primary) },
