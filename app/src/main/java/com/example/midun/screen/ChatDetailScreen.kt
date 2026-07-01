@@ -114,12 +114,17 @@ fun ChatDetailScreen(
     var fileToSave by remember { mutableStateOf<ChatMessage?>(null) } // 接收方点「保存」时选文件夹的目标消息
     var previewFile by remember { mutableStateOf<FileItem?>(null) }   // 预览中的文件（暂存区或已保存文件夹）
     var previewSaveTarget by remember { mutableStateOf<ChatMessage?>(null) } // 免保存预览时可「保存到文件夹」的接收消息
+    // 焚毁媒体预览关闭回调（阅后即焚）：图/视频退出预览时触发，登记倒计时。非焚毁预览为 null。
+    var previewOnClose by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var burnDocCard by remember { mutableStateOf<ChatMessage?>(null) } // 焚毁文档只读卡片（文档不支持预览）的目标消息
     // 打开媒体预览前先验卡内文件是否还在（缓存可能已被 7 天 TTL 清理）→ 过期/缺失优雅降级，不开空白预览。
-    val openMediaPreview: (String, String, FileType, ChatMessage?) -> Unit = { path, name, type, saveTarget ->
+    // [onClose] 非空 = 焚毁媒体：退出预览时触发（登记焚毁倒计时）；普通预览传 null。
+    val openMediaPreview: (String, String, FileType, ChatMessage?, (() -> Unit)?) -> Unit = { path, name, type, saveTarget, onClose ->
         scope.launch {
             if (chatViewModel.cardFileExists(path)) {
                 previewFile = FileItem(id = path, name = name, type = type)
                 previewSaveTarget = saveTarget
+                previewOnClose = onClose
             } else {
                 snackbarHostState.showSnackbar(
                     if (FileCachePaths.isCachePath(path)) "缓存已过期，该文件已自动清理，无法预览"
@@ -523,20 +528,32 @@ fun ChatDetailScreen(
                             val transferring = transferProgress[msg.id] != null
                             val ft = fileTypeOf(msg.fileName ?: "")
                             val isMedia = ft == FileType.IMAGE || ft == FileType.VIDEO
+                            // 接收方焚毁文件（[chat-voice] 之外的图/视频/文档焚毁）：一次性预览，退出预览才起倒计时。
+                            val burnRecv = msg.burnAfterRead && !msg.isMine && msg.type == MessageType.FILE
                             when {
+                                // 焚毁文件二次预览拦截：已看过并退出过一次（已登记倒计时）→ 提示不支持二次预览。
+                                burnRecv && burnTimers[msg.id] != null -> scope.launch {
+                                    snackbarHostState.showSnackbar("阅后即焚文件不支持二次预览")
+                                }
+                                // 焚毁图/视频首次预览：无「保存到文件夹」按钮（saveTarget=null），退出预览时登记焚毁倒计时。
+                                burnRecv && isMedia -> openMediaPreview(
+                                    chatViewModel.stagingPathFor(msg.id), msg.fileName ?: "", ft, null
+                                ) { chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl) }
+                                // 焚毁文档/其他（不支持预览）：弹只读卡片（名+大小），关闭卡片时登记焚毁倒计时。
+                                burnRecv -> burnDocCard = msg
                                 // 发送方点在途文件 → 取消发送确认。
                                 msg.isMine && msg.type == MessageType.FILE && transferring -> cancelTarget = msg
                                 // 发送方点自己发完的图/视频 → 预览卡内副本（手机来源 .sent_ / 隐私文件夹源路径）。
                                 msg.isMine && msg.type == MessageType.FILE && !transferring &&
                                     isMedia && msg.localPath != null ->
-                                    openMediaPreview(msg.localPath!!, msg.fileName ?: "", ft, null)
+                                    openMediaPreview(msg.localPath!!, msg.fileName ?: "", ft, null, null)
                                 // 接收方收到、未保存：媒体免保存直接预览暂存区（点预览里再选保存）；非媒体走保存弹窗。
                                 !msg.isMine && msg.type == MessageType.FILE && msg.savedFolderId == null &&
                                     msg.status == MessageStatus.RECEIVED && !transferring -> {
                                     // 无卡测试模式：媒体仍可预览，但不提供「保存到文件夹」（saveTarget=null）；非媒体仅提示不支持保存。
                                     if (isMedia) openMediaPreview(
                                         chatViewModel.stagingPathFor(msg.id), msg.fileName ?: "", ft,
-                                        if (isTestMode) null else msg
+                                        if (isTestMode) null else msg, null
                                     )
                                     else if (isTestMode) scope.launch {
                                         snackbarHostState.showSnackbar("无卡测试版不支持保存到文件夹（无安全卡）")
@@ -548,7 +565,7 @@ fun ChatDetailScreen(
                                 }
                                 // 已保存的图片/视频 → 预览（文件夹永久副本）。
                                 msg.savedFolderId != null -> {
-                                    if (isMedia) openMediaPreview("${msg.savedFolderId}/${msg.fileName}", msg.fileName ?: "", ft, null)
+                                    if (isMedia) openMediaPreview("${msg.savedFolderId}/${msg.fileName}", msg.fileName ?: "", ft, null, null)
                                     else scope.launch { snackbarHostState.showSnackbar("已保存到文件夹，该类型暂不支持预览") }
                                 }
                             }
@@ -723,18 +740,61 @@ fun ChatDetailScreen(
     previewFile?.let { file ->
         FilePreviewDialog(
             file = file,
-            onClose = { previewFile = null; previewSaveTarget = null },
-            // 免保存预览（接收方未保存的媒体）时提供「保存到文件夹」→ 转交保存弹窗。
+            // 焚毁媒体：退出预览触发 previewOnClose（登记倒计时）。普通预览该回调为 null。
+            onClose = {
+                previewOnClose?.invoke()
+                previewFile = null; previewSaveTarget = null; previewOnClose = null
+            },
+            // 免保存预览（接收方未保存的媒体）时提供「保存到文件夹」→ 转交保存弹窗。焚毁媒体 saveTarget=null → 不显示。
             onSave = previewSaveTarget?.let { m ->
                 {
                     previewFile = null
                     previewSaveTarget = null
+                    previewOnClose = null
                     fileToSave = m
                     chatViewModel.loadSaveFolders()
                 }
             }
         )
     }
+
+    // 焚毁文档只读卡片（文档不支持预览）：显示名+大小，关闭时登记焚毁倒计时（退出即开始）。
+    burnDocCard?.let { msg ->
+        BurnDocDialog(
+            fileName = msg.fileName ?: msg.content,
+            fileSize = msg.fileSize,
+            onDismiss = {
+                chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl)
+                burnDocCard = null
+            }
+        )
+    }
+}
+
+/**
+ * 焚毁文档只读卡片：文档不支持预览（见 FilePreviewDialog），焚毁文档点开显示名称+大小的确认卡片，
+ * 不提供预览/下载/保存（阅后即焚语义）。关闭本卡片（`onDismiss`）即视为「看过一次」→ 由调用方登记焚毁倒计时。
+ */
+@Composable
+private fun BurnDocDialog(fileName: String, fileSize: Long?, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.LocalFireDepartment, null, tint = Warning) },
+        title = { Text(fileName, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column {
+                fileSize?.let { Text(formatFileSize(it), color = TextSecondary, fontSize = 13.sp) }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "阅后即焚文档不支持预览与保存。关闭本窗口后将开始焚毁倒计时，且不可再次查看。",
+                    color = TextSecondary, fontSize = 13.sp
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("我知道了", color = Primary) }
+        }
+    )
 }
 
 /** 隐私文件夹发送来源选取对话框（M11.5.3b）：先列文件夹，进入后列文件，点文件即发送。 */
@@ -912,6 +972,9 @@ private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, conten
             val isMedia = ft == FileType.IMAGE || ft == FileType.VIDEO
             val (hint, hintColor) = when {
                 msg.status == MessageStatus.FAILED && !msg.isMine -> "接收失败" to Danger
+                // 焚毁文件（接收方）：不显「点击预览/保存」提示——焚毁文件不可保存、且看过一次即不可再看，
+                // 状态由火焰描边 + 「N秒后焚毁」标签承载（BurnStatusLabel）。
+                msg.burnAfterRead && !msg.isMine -> null to contentColor
                 // 发送方自己发的图/视频可点击预览（功能保留），但不再显文字提示。
                 msg.isMine -> null to contentColor
                 // 无卡测试模式不支持保存到文件夹（无卡）→ 媒体仍可预览、非媒体提示不支持。
@@ -1156,9 +1219,10 @@ private fun ChatBubble(
                     modifier = Modifier.combinedClickable(
                         onClick = {
                             // 语音（含焚毁遮罩态）一律走 onAudioTap：它负责揭示+播放，并在听完时启动焚毁计时。
+                            // 文件（含焚毁遮罩态）一律走 onFileTap：焚毁图/视频/文档在此打开预览/卡片，退出后才起倒计时。
                             if (isAudio) onAudioTap()
-                            else if (masked) onReveal()
                             else if (isFile) onFileTap()
+                            else if (masked) onReveal()
                         },
                         onLongClick = { showMenu = true }
                     )
