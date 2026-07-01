@@ -415,7 +415,6 @@ fun FileDetailScreen(
     val files = if (uiState.currentFolderId == folderId) uiState.currentFiles else emptyList()
     val effectiveCopyPolicy = folder?.copyPolicy ?: CopyPolicy.NO_COPY
     var showMenu by remember { mutableStateOf(false) }
-    var showImportDialog by remember { mutableStateOf(false) }
     // 系统文件选取器（GetContent）：选中即真实流式导入到本文件夹（M11.5.1）。
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { fileViewModel.importFromUri(folderId, it) }
@@ -503,7 +502,7 @@ fun FileDetailScreen(
                     IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") }
                 },
                 actions = {
-                    IconButton(onClick = { showImportDialog = true }) {
+                    IconButton(onClick = { importLauncher.launch("*/*") }) {
                         Icon(Icons.Default.FileUpload, "导入")
                     }
                     IconButton(onClick = { showMenu = !showMenu }) {
@@ -549,7 +548,7 @@ fun FileDetailScreen(
                     Spacer(Modifier.height(6.dp))
                     Text("导入后会显示在当前隐私文件夹中", color = TextSecondary, fontSize = 12.sp)
                     Spacer(Modifier.height(12.dp))
-                    TextButton(onClick = { showImportDialog = true }) {
+                    TextButton(onClick = { importLauncher.launch("*/*") }) {
                         Icon(Icons.Default.FileUpload, null, tint = Primary)
                         Spacer(Modifier.width(6.dp))
                         Text("导入第一个文件", color = Primary)
@@ -607,53 +606,6 @@ fun FileDetailScreen(
                 }
             }
         }
-    }
-
-    if (showImportDialog) {
-        AlertDialog(
-            onDismissRequest = { showImportDialog = false },
-            icon = { Icon(Icons.Default.FileUpload, null, tint = Primary) },
-            title = { Text("导入文件") },
-            text = {
-                Column {
-                    Text("选择导入来源：", fontSize = 14.sp)
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = {
-                            showImportDialog = false
-                            importLauncher.launch("*/*")
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.PhoneAndroid, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("从手机存储导入")
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(
-                        onClick = {
-                            showImportDialog = false
-                            importLauncher.launch("*/*")
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Usb, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("从普通U盘导入")
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "在系统选取器中选择文件（手机存储或已挂载的U盘），单文件上限 100MB",
-                        fontSize = 11.sp,
-                        color = TextSecondary
-                    )
-                }
-            },
-            confirmButton = {},
-            dismissButton = {
-                TextButton(onClick = { showImportDialog = false }) { Text("取消") }
-            }
-        )
     }
 
     importProgress?.let {
