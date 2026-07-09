@@ -96,14 +96,14 @@ fun SplashScreen(
             )
             Spacer(Modifier.height(16.dp))
             Text(
-                text = "密盾",
+                text = "波波",
                 color = CardBg,
                 fontSize = 36.sp,
                 fontWeight = FontWeight.Bold
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "您的安全由我们守护",
+                text = "愿我们在平淡里听见彼此的声音",
                 color = CardBg.copy(alpha = 0.7f),
                 fontSize = 14.sp
             )

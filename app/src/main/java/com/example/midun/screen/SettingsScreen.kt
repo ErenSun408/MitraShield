@@ -225,7 +225,7 @@ fun SettingsScreen(
         Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             TextButton(onClick = { showAboutDialog = true }) {
                 Text(
-                    "关于密盾 v${BuildConfig.VERSION_NAME}",
+                    "关于波波 v${BuildConfig.VERSION_NAME}",
                     fontSize = 12.sp,
                     color = TextSecondary
                 )
@@ -609,7 +609,7 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
             icon = { Icon(Icons.Default.Security, null, tint = Primary) },
-            title = { Text("密盾 v${BuildConfig.VERSION_NAME}") },
+            title = { Text("波波 v${BuildConfig.VERSION_NAME}") },
             text = {
                 Column {
                     Text("USB安全卡管理系统")

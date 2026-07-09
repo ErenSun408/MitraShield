@@ -75,7 +75,7 @@ fun LoginScreen(
                     modifier = Modifier.size(56.dp)
                 )
                 Spacer(Modifier.height(12.dp))
-                Text("密盾", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Text("波波", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // 能停在此屏即 USB 必连（断开由全局 UsbDisconnectedOverlay 兜底），故静态显示。

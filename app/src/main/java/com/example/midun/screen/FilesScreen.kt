@@ -700,7 +700,7 @@ private fun ExportPassphraseDialog(isFolder: Boolean, onConfirm: (String) -> Uni
         text = {
             Column {
                 Text(
-                    "设置导出口令。文件将只可使用密盾解密。" +
+                    "设置导出口令。文件将只可使用波波解密。" +
                         "请妥善记录口令密钥，忘记将无法找回。",
                     fontSize = 12.sp, color = TextSecondary
                 )
