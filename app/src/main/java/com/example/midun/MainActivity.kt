@@ -132,7 +132,7 @@ class MainActivity : ComponentActivity() {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .background(Color(0xFF153B5D))
+                                .background(Color(0xFF133757))
                         ) {
                             Image(
                                 painter = painterResource(R.drawable.nocard_bg),
