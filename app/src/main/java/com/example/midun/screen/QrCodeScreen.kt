@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.net.Uri
 import android.widget.Toast
 import androidx.core.content.FileProvider
@@ -165,7 +166,16 @@ fun QrCodeScreen(
                         .build(content)
                         .render()
                         .getBytes()
-                    BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.size)
+                    val decoded = BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.size)
+                    // 压到不透明白底上：render() 产出的 PNG 带透明背景，分享到部分机型会被填成黑色。
+                    // flatten 后屏显与分享的 PNG 均为白底二维码。
+                    val flattened = Bitmap.createBitmap(decoded.width, decoded.height, Bitmap.Config.ARGB_8888)
+                    Canvas(flattened).apply {
+                        drawColor(android.graphics.Color.WHITE)
+                        drawBitmap(decoded, 0f, 0f, null)
+                    }
+                    decoded.recycle()
+                    flattened
                 }
             }.getOrNull()
             if (bitmap != null) {
