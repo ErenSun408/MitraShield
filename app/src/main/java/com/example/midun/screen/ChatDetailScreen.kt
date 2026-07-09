@@ -186,8 +186,10 @@ fun ChatDetailScreen(
 
     // 搜索词非空时按内容/文件名过滤；空时用原始消息流。messages 变化时重算。
     val displayMessages = remember(messages, searchQuery) {
-        if (searchQuery.isBlank()) messages
-        else chatViewModel.searchMessages(contactId, searchQuery)
+        val base = if (searchQuery.isBlank()) messages
+            else chatViewModel.searchMessages(contactId, searchQuery)
+        // 焚毁后的消息不再显示（去掉焚毁墓碑「🔥 阅后即焚消息已焚毁」，阅后不留痕）。
+        base.filterNot { it.burned }
     }
 
     // 进会话：加载消息 + 清除未读（见 M6.1/M6.4 约定）。
@@ -482,8 +484,7 @@ fun ChatDetailScreen(
                     msg.type == MessageType.SYSTEM -> SystemLine(msg.content)
                     // 撤回墓碑（M10.5）：复用 SystemLine 居中渲染。
                     msg.recalled -> SystemLine(if (msg.isMine) "你撤回了一条消息" else "对方撤回了一条消息")
-                    // 焚毁墓碑（B 阶段）：复用 SystemLine。
-                    msg.burned -> SystemLine("🔥 阅后即焚消息已焚毁")
+                    // 焚毁后的消息已在 displayMessages 过滤掉（不再显示墓碑）。
                     else -> ChatBubble(
                         msg = msg,
                         burnDeadline = burnTimers[msg.id],
@@ -586,7 +587,7 @@ fun ChatDetailScreen(
 
     if (showBurnDialog) {
         // 时长选项（秒）：与 P2PSessionManager.formatTtl 对应。
-        val options = listOf("5秒" to 5, "30秒" to 30, "1分钟" to 60, "5分钟" to 300)
+        val options = listOf("10秒" to 10, "15秒" to 15, "30秒" to 30, "1分钟" to 60)
         AlertDialog(
             onDismissRequest = { showBurnDialog = false },
             icon = { Icon(Icons.Default.LocalFireDepartment, null, tint = Warning) },
