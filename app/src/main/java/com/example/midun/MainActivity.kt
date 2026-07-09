@@ -14,6 +14,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -124,14 +125,23 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Box(modifier = Modifier.fillMaxSize()) {
-                    // 未插卡等待态背景（波波换皮）：无卡且非测试模式时铺满水墨背景，替代原纯白等待屏。
+                    // 未插卡等待态背景（波波换皮）：无卡且非测试模式时显示水墨背景，替代原纯白等待屏。
+                    // 用 FillWidth + 顶部对齐显示完整满宽诗句（Crop 会按高缩放裁掉左右两端、切掉「遇…景」）；
+                    // 图比屏矮时底部空隙用图底色 #153B5D 填充，无缝衔接。
                     if (status == UsbDeviceStatus.DISCONNECTED && !isTestMode) {
-                        Image(
-                            painter = painterResource(R.drawable.nocard_bg),
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(Color(0xFF153B5D))
+                        ) {
+                            Image(
+                                painter = painterResource(R.drawable.nocard_bg),
+                                contentDescription = null,
+                                modifier = Modifier.fillMaxSize(),
+                                alignment = Alignment.TopCenter,
+                                contentScale = ContentScale.FillWidth
+                            )
+                        }
                     }
 
                     // 无卡(DISCONNECTED)时不渲染主导航：从没连过 → 纯白等待(下方什么都不画)；连过又拔 → 退出遮罩。
