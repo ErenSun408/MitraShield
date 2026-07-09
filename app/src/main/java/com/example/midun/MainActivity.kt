@@ -13,6 +13,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
@@ -35,6 +36,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -121,6 +124,16 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Box(modifier = Modifier.fillMaxSize()) {
+                    // 未插卡等待态背景（波波换皮）：无卡且非测试模式时铺满水墨背景，替代原纯白等待屏。
+                    if (status == UsbDeviceStatus.DISCONNECTED && !isTestMode) {
+                        Image(
+                            painter = painterResource(R.drawable.nocard_bg),
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+
                     // 无卡(DISCONNECTED)时不渲染主导航：从没连过 → 纯白等待(下方什么都不画)；连过又拔 → 退出遮罩。
                     // 有卡(CONNECTING 检测中 / CONNECTED / AUTHENTICATED)才渲染 NavGraph(Splash 自显「检测中」并路由)。
                     // 无卡测试模式(isTestMode)：无视卡状态强制渲染 NavGraph，Splash 据 testMode 直跳 Main。
