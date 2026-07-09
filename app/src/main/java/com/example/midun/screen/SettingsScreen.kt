@@ -84,6 +84,13 @@ fun SettingsScreen(
 
     val isBound = deviceStatus.boundPhoneId != null
 
+    // 退出自动清理（下次登录补清）：开启需密码确认。pendingExitClearTarget = "contacts"/"files" 表示正开启哪项。
+    val exitClearPrefs by deviceViewModel.exitClearPrefs.collectAsState()
+    var pendingExitClearTarget by remember { mutableStateOf<String?>(null) }
+    var exitClearPassword by remember { mutableStateOf("") }
+    var exitClearError by remember { mutableStateOf("") }
+    var exitClearLoading by remember { mutableStateOf(false) }
+
     // 文件预览缓存（file-transfer 阶段4）：副标题显占用，点击确认后只清 .recv_/.sent_ 暂存。
     val context = LocalContext.current
     var cacheBytes by remember { mutableStateOf<Long?>(null) }
@@ -174,6 +181,58 @@ fun SettingsScreen(
                         (cacheBytes?.let { "（占用 ${formatStorage(it)}）" } ?: ""),
                     iconTint = Accent,
                     onClick = { showCacheDialog = true }
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // ── 自动清理（下次登录补清）──────────────────────────────────────────────────
+        SettingsSectionHeader("自动清理")
+        Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+            Column {
+                SettingsActionItem(
+                    icon = Icons.Default.PersonRemove,
+                    title = "登录时清空联系人",
+                    subtitle = "开启后每次登录自动清空所有联系人与聊天记录",
+                    iconTint = Warning,
+                    trailing = {
+                        Switch(
+                            checked = exitClearPrefs.clearContacts,
+                            onCheckedChange = { on ->
+                                if (on) {
+                                    pendingExitClearTarget = "contacts"; exitClearPassword = ""; exitClearError = ""
+                                } else deviceViewModel.setClearContactsOnExit(false, null, {}, {})
+                            }
+                        )
+                    },
+                    onClick = {
+                        if (!exitClearPrefs.clearContacts) {
+                            pendingExitClearTarget = "contacts"; exitClearPassword = ""; exitClearError = ""
+                        } else deviceViewModel.setClearContactsOnExit(false, null, {}, {})
+                    }
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                SettingsActionItem(
+                    icon = Icons.Default.FolderDelete,
+                    title = "登录时清空隐私文件",
+                    subtitle = "开启后每次登录自动清空隐私文件夹内所有文件",
+                    iconTint = Warning,
+                    trailing = {
+                        Switch(
+                            checked = exitClearPrefs.clearFiles,
+                            onCheckedChange = { on ->
+                                if (on) {
+                                    pendingExitClearTarget = "files"; exitClearPassword = ""; exitClearError = ""
+                                } else deviceViewModel.setClearFilesOnExit(false, null, {}, {})
+                            }
+                        )
+                    },
+                    onClick = {
+                        if (!exitClearPrefs.clearFiles) {
+                            pendingExitClearTarget = "files"; exitClearPassword = ""; exitClearError = ""
+                        } else deviceViewModel.setClearFilesOnExit(false, null, {}, {})
+                    }
                 )
             }
         }
@@ -301,6 +360,66 @@ fun SettingsScreen(
             },
             dismissButton = {
                 TextButton(onClick = dismiss, enabled = !cleanLoading) {
+                    Text("取消", color = TextSecondary)
+                }
+            }
+        )
+    }
+
+    pendingExitClearTarget?.let { target ->
+        val isContacts = target == "contacts"
+        val dismiss = {
+            pendingExitClearTarget = null
+            exitClearPassword = ""
+            exitClearError = ""
+            exitClearLoading = false
+        }
+        AlertDialog(
+            onDismissRequest = { if (!exitClearLoading) dismiss() },
+            icon = { Icon(Icons.Default.Warning, null, tint = Warning) },
+            title = { Text(if (isContacts) "登录时清空联系人" else "登录时清空隐私文件") },
+            text = {
+                Column {
+                    Text(
+                        if (isContacts)
+                            "开启后，每次登录时将自动清空所有联系人与聊天记录，且不可恢复。请谨慎开启。\n\n请输入当前密码确认："
+                        else
+                            "开启后，每次登录时将自动清空隐私文件夹内所有历史文件，且不可恢复。请谨慎开启。\n\n请输入当前密码确认：",
+                        color = TextSecondary
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = exitClearPassword,
+                        onValueChange = { exitClearPassword = it; exitClearError = "" },
+                        label = { Text("当前密码") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        isError = exitClearError.isNotEmpty(),
+                        supportingText = { if (exitClearError.isNotEmpty()) Text(exitClearError, color = Danger) },
+                        enabled = !exitClearLoading,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        exitClearLoading = true
+                        exitClearError = ""
+                        val onOk = { dismiss() }
+                        val onErr: (String) -> Unit = { m -> exitClearError = m; exitClearLoading = false }
+                        if (isContacts) deviceViewModel.setClearContactsOnExit(true, exitClearPassword, onOk, onErr)
+                        else deviceViewModel.setClearFilesOnExit(true, exitClearPassword, onOk, onErr)
+                    },
+                    enabled = exitClearPassword.isNotBlank() && !exitClearLoading,
+                    colors = ButtonDefaults.buttonColors(containerColor = Warning)
+                ) {
+                    Text("确认开启")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = dismiss, enabled = !exitClearLoading) {
                     Text("取消", color = TextSecondary)
                 }
             }

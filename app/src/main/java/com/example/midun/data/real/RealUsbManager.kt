@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import com.example.midun.data.ExitClearPrefs
 import com.example.midun.data.UsbCardOps
 import com.example.midun.data.crypto.CardKeystore
 import com.example.midun.data.model.DeviceInfo
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import seczure.device.usb.USBStorageHelper
 import seczure.fsudisk.fsshell.FSShellInstance
 import seczure.fsudisk.fsshell.LibJniFSShell
@@ -201,6 +203,11 @@ class RealUsbManager @Inject constructor(
             return@withContext Result.failure(IllegalStateException("密钥库缺失或损坏，请恢复出厂后重新初始化"))
         }
         sessionPwdHash = sha256(password)
+        // 退出自动清理「下次登录补清」：盘已打开、AUTHENTICATED 尚未置位（ChatRepository 未加载）→ 无竞态。
+        // 开启则在进主界面前清空对应数据；开关文件是根级侧车，clear() 不会删它 → 每次登录都清。
+        val exitClear = readExitClearPrefs()
+        if (exitClear.clearContacts) runCatching { realFileSystem.deleteFile(CHAT_SIDECAR) }
+        if (exitClear.clearFiles) realFileSystem.clear()
         val sn = readSn() // 盘已打开，补读真实 SN（已初始化卡在 connectUsb 阶段读不到）
         val (total, free) = readCapacity()
         _deviceStatus.value = _deviceStatus.value.copy(
@@ -364,6 +371,33 @@ class RealUsbManager @Inject constructor(
         Result.success(Unit)
     }
 
+    // —— 退出自动清理偏好（卡内 `0:/.midun_exitclear.json`，下次登录补清）——
+
+    override suspend fun getExitClearPrefs(): ExitClearPrefs = withContext(Dispatchers.IO) {
+        readExitClearPrefs()
+    }
+
+    override suspend fun setExitClearPrefs(prefs: ExitClearPrefs): Result<Unit> = withContext(Dispatchers.IO) {
+        val json = JSONObject()
+            .put("contacts", prefs.clearContacts)
+            .put("files", prefs.clearFiles)
+            .toString()
+        if (realFileSystem.writeFile(EXITCLEAR_PATH, json.byteInputStream()).isFailure) {
+            return@withContext Result.failure(IllegalStateException("设置写入失败，请重试"))
+        }
+        Result.success(Unit)
+    }
+
+    /** 读退出清理偏好：盘已打开即可读（不依赖 AUTHENTICATED 门，供 [authenticate] 补清时调用）。缺失/失败回全 false。 */
+    private fun readExitClearPrefs(): ExitClearPrefs {
+        val out = ByteArrayOutputStream()
+        if (realFileSystem.readFile(EXITCLEAR_PATH, out).isFailure) return ExitClearPrefs()
+        return runCatching {
+            val o = JSONObject(out.toString(Charsets.UTF_8.name()))
+            ExitClearPrefs(o.optBoolean("contacts", false), o.optBoolean("files", false))
+        }.getOrDefault(ExitClearPrefs())
+    }
+
     /** 真卡唯一序列号（接 P2P deviceSn 用，M11.6）。打开后 driveName 参数被忽略。 */
     fun getSerialNumber(): String? = runCatching { fsShell.SFDiskGetSN("") }.getOrNull()
 
@@ -401,5 +435,6 @@ class RealUsbManager @Inject constructor(
         const val BIND_PATH = "0:/.bind"
         const val CHAT_SIDECAR = "0:/.midun_chat.json"
         const val OPLOG_SIDECAR = "0:/.midun_oplog.json"
+        const val EXITCLEAR_PATH = "0:/.midun_exitclear.json"
     }
 }

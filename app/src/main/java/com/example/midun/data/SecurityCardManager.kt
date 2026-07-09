@@ -53,6 +53,9 @@ class SecurityCardManager @Inject constructor(
     override suspend fun updateBinding(bind: Boolean): Result<Unit> = real.updateBinding(bind)
     override suspend fun updateKey() = real.updateKey()
 
+    override suspend fun getExitClearPrefs(): ExitClearPrefs = real.getExitClearPrefs()
+    override suspend fun setExitClearPrefs(prefs: ExitClearPrefs): Result<Unit> = real.setExitClearPrefs(prefs)
+
     // —— USB 插拔事件路由（来自 MainActivity 广播，经 DeviceViewModel）——
     fun onUsbAttached() {
         scope.launch { real.connectUsb() }

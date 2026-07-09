@@ -4,6 +4,18 @@ import com.example.midun.data.model.DeviceInfo
 import kotlinx.coroutines.flow.StateFlow
 
 /**
+ * 退出自动清理偏好（存卡内 `0:/.midun_exitclear.json`，随卡走）。开启后**每次登录认证成功、进主界面前**
+ * 自动清空对应数据（用完即清）。物理拔卡时卡已断开无法删卡上数据、`onTaskRemoved` 时间窗口不可靠删大量文件，
+ * 故按用户决策落地为「下次登录补清」而非「退出即清」，语义上等价于「每次进来都是干净的」。
+ */
+data class ExitClearPrefs(
+    /** 清空所有联系人与聊天记录。 */
+    val clearContacts: Boolean = false,
+    /** 清空隐私文件夹内所有文件。 */
+    val clearFiles: Boolean = false
+)
+
+/**
  * USB 安全卡业务操作接口（M11.3）。由 `RealUsbManager`（真卡 FSShell）实现，`SecurityCardManager`
  * facade 转发到它。USB 连接靠系统插拔广播 + `RealUsbManager.connectUsb`（非接口方法）。
  */
@@ -37,4 +49,10 @@ interface UsbCardOps {
 
     /** 密钥更新（M12.6 App 层 KEK 轮换）：重生成 KEK、重包不变的 DEK、覆盖卡内 keystore。失败如实返回。 */
     suspend fun updateKey(): Result<Unit>
+
+    /** 读退出自动清理偏好（卡内 `0:/.midun_exitclear.json`）。需盘已打开。缺失/失败回默认全 false。 */
+    suspend fun getExitClearPrefs(): ExitClearPrefs
+
+    /** 写退出自动清理偏好到卡。需盘已打开。写卡失败如实返回。 */
+    suspend fun setExitClearPrefs(prefs: ExitClearPrefs): Result<Unit>
 }

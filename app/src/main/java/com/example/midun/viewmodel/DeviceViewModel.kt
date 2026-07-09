@@ -3,6 +3,7 @@ package com.example.midun.viewmodel
 import android.hardware.usb.UsbDevice
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.midun.data.ExitClearPrefs
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.SettingsStore
 import com.example.midun.data.ChatRepository
@@ -12,8 +13,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -57,6 +60,43 @@ class DeviceViewModel @Inject constructor(
     val isAuthenticated: StateFlow<Boolean> = deviceStatus.map {
         it.status == UsbDeviceStatus.AUTHENTICATED
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    // 退出自动清理偏好（卡内持久，下次登录补清）：认证成功后从卡加载当前值供设置页显示。
+    private val _exitClearPrefs = MutableStateFlow(ExitClearPrefs())
+    val exitClearPrefs: StateFlow<ExitClearPrefs> = _exitClearPrefs.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            deviceStatus.collect {
+                if (it.status == UsbDeviceStatus.AUTHENTICATED) {
+                    _exitClearPrefs.value = cardManager.getExitClearPrefs()
+                }
+            }
+        }
+    }
+
+    /** 设置「登录时清空联系人」。开启需密码确认（谨慎，会清空所有聊天记录），关闭无需密码。写卡持久。 */
+    fun setClearContactsOnExit(enabled: Boolean, password: String?, onSuccess: () -> Unit, onError: (String) -> Unit) =
+        updateExitClear(_exitClearPrefs.value.copy(clearContacts = enabled), enabled, password, onSuccess, onError)
+
+    /** 设置「登录时清空隐私文件」。开启需密码确认（谨慎，会清空所有隐私文件），关闭无需密码。写卡持久。 */
+    fun setClearFilesOnExit(enabled: Boolean, password: String?, onSuccess: () -> Unit, onError: (String) -> Unit) =
+        updateExitClear(_exitClearPrefs.value.copy(clearFiles = enabled), enabled, password, onSuccess, onError)
+
+    private fun updateExitClear(
+        target: ExitClearPrefs, enabling: Boolean, password: String?,
+        onSuccess: () -> Unit, onError: (String) -> Unit
+    ) {
+        viewModelScope.launch {
+            if (enabling && (password == null || !cardManager.verifyPassword(password))) {
+                onError("密码错误")
+                return@launch
+            }
+            cardManager.setExitClearPrefs(target)
+                .onSuccess { _exitClearPrefs.value = target; onSuccess() }
+                .onFailure { onError(it.message ?: "设置失败") }
+        }
+    }
 
     fun onUsbAttached(device: UsbDevice?) {
         cardManager.onUsbAttached()
