@@ -1056,6 +1056,9 @@ M11.5.1 曾把隐私文件夹导入的「手机存储 / 普通U盘」两个按�
 - **退出自动清理设置 `[settings]` `e293270`**（客户 A6/A7「APP退出或安全卡退出清联系人/清隐私文件」）：两个默认关开关，**开启需密码确认**。**落地为「下次登录补清」而非「退出即清」**（用户 2026-07-09 拍板，权衡后）——因物理拔卡时卡已断开无法删卡上数据、`onTaskRemoved` 主线程时间窗口短删大量文件不可靠，故存卡开关（`0:/.midun_exitclear.json`，随卡走、`clear()` 不删它 → 每次登录都清）+ 在 `authenticate()` 开盘成功后、置 AUTHENTICATED 前（ChatRepository 未加载 → 无竞态）按开关删聊天 sidecar / 清用户文件。语义 = 「每次进来都是干净的」，100% 可靠。五层：`UsbCardOps`(+`ExitClearPrefs` 模型/2 方法)→`SecurityCardManager`→`RealUsbManager`(读写 JSON + 认证补清)→`DeviceViewModel`(prefs 流 + 开启验密码)→`SettingsScreen`(「自动清理」区两 Switch 行 + 密码弹框)。诚实文案：设置说明写「每次登录时自动清空」（如实反映时机，不写「退出即清」）。
 - **字体自适应 `[verify]`（无改码）**：客户 Q5 只需确认支持。核查全 app 无 `fontScale`/`densityDpi`/`Configuration`/`attachBaseContext` 覆盖，Manifest `configChanges` 不含 `fontScale`（字体大小变化 → Activity 重建 → Compose 用新 scale 重读 `sp`）→ **本就完全跟随系统字体大小**，装机改系统字号验证即可。
 
+- **图标居中 + 背景不裁字 `[rebrand]` `e3fed07`**（装机后跟进）：①图标原为整张 image4 铺满 108dp（edge-to-edge），气泡贴边显小、且 image4 自带圆角方边框缩放后成「圆里套方」双形——改为**只抠气泡**（蓝通道 alpha + 中心预裁掉四周亮边）居中放 ~64% 于**竖向 navy 渐变**（`#021C43→#153B5D`，`ic_launcher_background.xml` 由纯色改渐变）→ 气泡居中留白、无边框。②未插卡背景原 `ContentScale.Crop` 按高缩放裁掉满宽诗句左右端（切「遇…景」）→ 改 `FillWidth + TopCenter`，图比屏矮时底部空隙用图底色 `#153B5D` 填充，全宽文字完整、衔接无缝。
+- **装机小结（2026-07-09）**：`bobo` 分支构建装 Pixel 7 模拟器验证换皮外观。模拟器无卡 → 只验证桌面图标/名、启动页、未插卡背景；卡内功能（首页/私藏/波一下/设置/阅后即焚/退出清理）须真机 + 真卡。App 开 `FLAG_SECURE` → `adb screencap` 抓不到内容（安全窗口），只能肉眼看屏。
+
 **诚实边界（本批）**：阅后即焚去墓碑/时间、退出清理下次登录补清、二维码白底、图标/背景/字体自适应**均未系统装机验**（尤其退出清理须真机走「开开关→退出→重登→数据已空」全链；字体须改系统字号看缩放）。换皮不改任何加密/认证/传输内核。
 
 <!-- 后续里程碑的偏离继续在下面追加 -->
