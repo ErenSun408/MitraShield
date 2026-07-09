@@ -50,8 +50,8 @@ fun MainScreen(
 
     val navItems = listOf(
         BottomNavItem("首页", Icons.Default.Home, "home"),
-        BottomNavItem("文件夹", Icons.Default.Folder, "files"),
-        BottomNavItem("通信", Icons.Default.Chat, "chat"),
+        BottomNavItem("私藏", Icons.Default.Folder, "files"),
+        BottomNavItem("波一下", Icons.Default.Chat, "chat"),
         BottomNavItem("设置", Icons.Default.Settings, "settings"),
     )
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }

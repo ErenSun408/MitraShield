@@ -183,7 +183,7 @@ fun QrCodeScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("扫码建链") },
+                title = { Text("同波相契") },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") }
                 },

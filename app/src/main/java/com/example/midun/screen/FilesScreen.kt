@@ -102,7 +102,7 @@ fun FilesScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Lock, null, tint = Primary, modifier = Modifier.size(24.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("隐私文件夹", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("私藏清隅", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(4.dp))
                 Text("所有文件加密存储于USB安全卡EMMC中", fontSize = 12.sp, color = TextSecondary)

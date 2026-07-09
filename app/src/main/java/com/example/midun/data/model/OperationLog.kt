@@ -12,7 +12,7 @@ enum class OperationType(val label: String) {
     FILE_EXPORT("文件导出"),
     FILE_MOVE("文件移动"),
     FILE_DELETE("文件删除"),
-    CONNECT("即时通信"),
+    CONNECT("相逢叙话"),
 }
 
 /**

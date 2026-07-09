@@ -186,7 +186,7 @@ fun SettingsScreen(
             Column {
                 SettingsActionItem(
                     icon = Icons.Default.DeleteForever,
-                    title = "一键清理",
+                    title = "涤净闲存",
                     subtitle = "清除所有聊天记录和文件，保留登录态",
                     iconTint = Danger,
                     onClick = { showCleanDialog = true }
@@ -245,7 +245,7 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { if (!cleanLoading) dismiss() },
             icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
-            title = { Text("一键清理") },
+            title = { Text("涤净闲存") },
             text = {
                 Column {
                     Text(

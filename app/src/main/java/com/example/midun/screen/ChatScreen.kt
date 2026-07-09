@@ -60,7 +60,7 @@ fun ChatListScreen(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Chat, null, tint = Primary, modifier = Modifier.size(24.dp))
             Spacer(Modifier.width(8.dp))
-            Text("即时通信", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Text("相逢叙话", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
             FilledTonalButton(
                 onClick = onQrCodeClick,
@@ -68,7 +68,7 @@ fun ChatListScreen(
             ) {
                 Icon(Icons.Default.QrCode2, null, tint = Accent, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(4.dp))
-                Text("扫码建链", color = Accent, fontSize = 13.sp)
+                Text("同波相契", color = Accent, fontSize = 13.sp)
             }
         }
 

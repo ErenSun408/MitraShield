@@ -86,7 +86,7 @@ fun HomeScreen(
                     Icon(Icons.Default.Security, null, tint = Accent, modifier = Modifier.size(40.dp))
                     Spacer(Modifier.width(12.dp))
                     Column {
-                        Text("USB安全卡", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                        Text("守波秘钥", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                         Text("SN: ${device.deviceId.ifEmpty { "未知" }}", color = Color.White.copy(0.7f), fontSize = 12.sp)
                     }
                     Spacer(Modifier.weight(1f))
@@ -112,7 +112,6 @@ fun HomeScreen(
                     val used = (device.totalBytes - device.freeBytes).coerceAtLeast(0L)
                     StatusItem("存储容量", if (total > 0) formatStorage(total) else "--")
                     StatusItem("已用空间", if (total > 0) formatStorage(used) else "--")
-                    StatusItem("文件数量", "${fileCount}个")
                 }
             }
         }
@@ -126,15 +125,14 @@ fun HomeScreen(
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             QuickActionCard(
                 icon = Icons.Default.FolderOpen,
-                title = "隐私文件夹",
-                subtitle = "${folderCount}个文件夹",
+                title = "私藏清隅",
                 color = Primary,
                 onClick = onNavigateToFiles,
                 modifier = Modifier.weight(1f)
             )
             QuickActionCard(
                 icon = Icons.Default.Chat,
-                title = "即时通信",
+                title = "相逢叙话",
                 subtitle = if (unreadCount > 0) "${unreadCount}条新消息" else "暂无新消息",
                 color = Accent,
                 onClick = onNavigateToChat,
@@ -147,16 +145,14 @@ fun HomeScreen(
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             QuickActionCard(
                 icon = Icons.Default.QrCode2,
-                title = "扫码建链",
-                subtitle = "安全连接",
+                title = "同波相契",
                 color = PrimaryLight,
                 onClick = onQrCodeClick,
                 modifier = Modifier.weight(1f)
             )
             QuickActionCard(
                 icon = Icons.Default.UsbOff,
-                title = "一键清理",
-                subtitle = "安全销毁",
+                title = "涤净闲存",
                 color = Danger,
                 onClick = { showCleanDialog = true },
                 modifier = Modifier.weight(1f)
@@ -222,7 +218,7 @@ fun HomeScreen(
         AlertDialog(
             onDismissRequest = { if (!cleanLoading) dismiss() },
             icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
-            title = { Text("一键清理") },
+            title = { Text("涤净闲存") },
             text = {
                 Column {
                     Text(
@@ -300,7 +296,7 @@ private fun StatusItem(label: String, value: String) {
 
 @Composable
 private fun QuickActionCard(
-    icon: ImageVector, title: String, subtitle: String, color: Color,
+    icon: ImageVector, title: String, subtitle: String? = null, color: Color,
     onClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -312,7 +308,7 @@ private fun QuickActionCard(
             Icon(icon, null, tint = color, modifier = Modifier.size(28.dp))
             Spacer(Modifier.height(8.dp))
             Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            Text(subtitle, fontSize = 11.sp, color = TextSecondary)
+            if (subtitle != null) Text(subtitle, fontSize = 11.sp, color = TextSecondary)
         }
     }
 }
