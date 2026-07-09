@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -307,8 +308,20 @@ private fun QuickActionCard(
         Column(modifier = Modifier.padding(16.dp)) {
             Icon(icon, null, tint = color, modifier = Modifier.size(28.dp))
             Spacer(Modifier.height(8.dp))
-            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            if (subtitle != null) Text(subtitle, fontSize = 11.sp, color = TextSecondary)
+            // 副标题放标题右侧、底部对齐（而非另起一行）→ 有/无副标题的卡片同为「图标 + 单行文字」高度，四卡一致。
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                if (subtitle != null) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        subtitle,
+                        fontSize = 11.sp,
+                        color = TextSecondary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
     }
 }
