@@ -88,7 +88,7 @@ fun UsbDisconnectedOverlay(onCountdownFinished: () -> Unit) {
             Spacer(Modifier.height(24.dp))
 
             Text(
-                "USB安全卡已断开",
+                "设备已断开",
                 color = Danger,
                 fontSize = 26.sp,
                 fontWeight = FontWeight.Bold
@@ -142,7 +142,7 @@ fun UsbDisconnectedOverlay(onCountdownFinished: () -> Unit) {
             Spacer(Modifier.height(24.dp))
 
             Text(
-                "请重新插入USB安全卡后重启APP",
+                "请重新插入设备后重启APP",
                 color = Color.White.copy(0.5f),
                 fontSize = 12.sp
             )

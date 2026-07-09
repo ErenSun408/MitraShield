@@ -128,7 +128,7 @@ fun InitScreen(
                 0 -> {
                     Icon(Icons.Default.Usb, null, tint = Accent, modifier = Modifier.size(64.dp))
                     Spacer(Modifier.height(16.dp))
-                    Text("正在检测USB安全卡...", fontSize = 16.sp)
+                    Text("正在检测设备...", fontSize = 16.sp)
                     Spacer(Modifier.height(16.dp))
                     LinearProgressIndicator(color = Accent)
                 }
@@ -137,7 +137,7 @@ fun InitScreen(
                     Spacer(Modifier.height(16.dp))
                     Text("设置安全密码", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
-                    Text("密码将通过SHA256加密存储在安全卡中", fontSize = 12.sp, color = TextSecondary)
+                    Text("密码将通过SHA256加密存储在设备中", fontSize = 12.sp, color = TextSecondary)
                     Spacer(Modifier.height(24.dp))
 
                     OutlinedTextField(
@@ -198,7 +198,7 @@ fun InitScreen(
                     Spacer(Modifier.height(16.dp))
                     Text("设备绑定", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
-                    Text("绑定后USB安全卡仅限本手机使用", fontSize = 12.sp, color = TextSecondary)
+                    Text("绑定后设备仅限本手机使用", fontSize = 12.sp, color = TextSecondary)
                     Spacer(Modifier.height(32.dp))
 
                     Card(
@@ -218,7 +218,7 @@ fun InitScreen(
                             }
                             Spacer(Modifier.height(8.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("安全卡SN：", color = TextSecondary, fontSize = 14.sp)
+                                Text("设备SN：", color = TextSecondary, fontSize = 14.sp)
                                 Text(deviceStatus.deviceId.ifEmpty { "未知" }, fontWeight = FontWeight.Medium)
                             }
                         }
@@ -239,8 +239,8 @@ fun InitScreen(
                         Column {
                             Text("绑定当前设备", fontWeight = FontWeight.Medium)
                             Text(
-                                if (bindDevice) "安全卡将仅限此手机使用，可后续解绑"
-                                else "不绑定，任意手机均可使用此安全卡",
+                                if (bindDevice) "设备将仅限此手机使用，可后续解绑"
+                                else "不绑定，任意手机均可使用此设备",
                                 fontSize = 12.sp,
                                 color = TextSecondary
                             )
@@ -266,7 +266,7 @@ fun InitScreen(
                     Spacer(Modifier.height(40.dp))
                     CircularProgressIndicator(color = Accent, modifier = Modifier.size(64.dp))
                     Spacer(Modifier.height(24.dp))
-                    Text("正在初始化安全卡...", fontSize = 16.sp)
+                    Text("正在初始化设备...", fontSize = 16.sp)
                     Spacer(Modifier.height(8.dp))
                     Text("生成ECDH密钥对(secp256r1)", fontSize = 12.sp, color = TextSecondary)
                 }
@@ -276,7 +276,7 @@ fun InitScreen(
                     Spacer(Modifier.height(16.dp))
                     Text("初始化完成", fontSize = 24.sp, fontWeight = FontWeight.Bold, color = Success)
                     Spacer(Modifier.height(8.dp))
-                    Text("USB安全卡已就绪", fontSize = 14.sp, color = TextSecondary)
+                    Text("设备已就绪", fontSize = 14.sp, color = TextSecondary)
                     Spacer(Modifier.height(32.dp))
                     Button(
                         onClick = onInitComplete,

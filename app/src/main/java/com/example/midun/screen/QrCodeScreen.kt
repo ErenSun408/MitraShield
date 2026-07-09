@@ -239,7 +239,7 @@ fun QrCodeScreen(
                             Spacer(Modifier.height(12.dp))
                             // M10.3：点生成时实时取真实值（本机 IPv6、随机会话 ID、临时 ECDH 公钥），
                             // pre-gen 卡仅说明将包含哪些字段。
-                            InfoRow("设备SN", "本机安全卡")
+                            InfoRow("设备SN", "本机设备")
                             InfoRow("IPv6地址", "生成时获取本机地址")
                             InfoRow("会话ID", "随机生成")
                             InfoRow("临时公钥", "P-256 临时 ECDH 公钥")
@@ -587,7 +587,7 @@ private fun ScanTab(
             Text(
                 // 诚实文案（M10.9）：当前仅解析连接信息后建立端到端加密连接；设备身份签名校验
                 // 需安全卡身份密钥作信任根，随真 SDK（M11）接入后启用，故此处不再承诺「签名校验」。
-                "识别后将解析连接信息并建立端到端加密连接（设备身份签名校验将随安全卡接入启用）",
+                "识别后将解析连接信息并建立端到端加密连接（设备身份签名校验将随设备接入启用）",
                 fontSize = 12.sp,
                 color = TextSecondary
             )

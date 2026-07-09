@@ -105,7 +105,7 @@ fun FilesScreen(
                     Text("私藏清隅", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(4.dp))
-                Text("所有文件加密存储于USB安全卡EMMC中", fontSize = 12.sp, color = TextSecondary)
+                Text("所有文件加密存储于设备EMMC中", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(16.dp))
             }
 
@@ -242,9 +242,9 @@ private fun EmptyFoldersState(onCreateFolder: () -> Unit) {
     ) {
         Icon(Icons.Default.FolderOff, null, tint = TextSecondary.copy(alpha = 0.55f), modifier = Modifier.size(56.dp))
         Spacer(Modifier.height(12.dp))
-        Text("暂无隐私文件夹", color = TextSecondary, fontSize = 15.sp)
+        Text("暂无文件夹", color = TextSecondary, fontSize = 15.sp)
         Spacer(Modifier.height(4.dp))
-        Text("创建文件夹后，文件会加密存储在安全卡中", color = TextSecondary, fontSize = 12.sp)
+        Text("创建文件夹后，文件会加密存储在设备中", color = TextSecondary, fontSize = 12.sp)
         Spacer(Modifier.height(12.dp))
         TextButton(onClick = onCreateFolder) {
             Text("创建第一个文件夹", color = Primary)
@@ -286,7 +286,7 @@ private fun FolderCard(
                 Row {
                     Text("创建于 ${formatFolderDate(folder.createdAt)}", fontSize = 12.sp, color = TextSecondary)
                     Spacer(Modifier.width(8.dp))
-                    Text("安全卡存储", fontSize = 12.sp, color = TextSecondary)
+                    Text("设备存储", fontSize = 12.sp, color = TextSecondary)
                 }
                 Spacer(Modifier.height(4.dp))
                 Row {
@@ -546,7 +546,7 @@ fun FileDetailScreen(
                     Spacer(Modifier.height(12.dp))
                     Text("暂无文件", color = TextSecondary)
                     Spacer(Modifier.height(6.dp))
-                    Text("导入后会显示在当前隐私文件夹中", color = TextSecondary, fontSize = 12.sp)
+                    Text("导入后会显示在当前文件夹中", color = TextSecondary, fontSize = 12.sp)
                     Spacer(Modifier.height(12.dp))
                     TextButton(onClick = { importLauncher.launch("*/*") }) {
                         Icon(Icons.Default.FileUpload, null, tint = Primary)
@@ -1060,7 +1060,7 @@ fun CreateFolderScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("新建隐私文件夹") },
+                title = { Text("新建文件夹") },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") }
                 },
@@ -1155,7 +1155,7 @@ fun CreateFolderScreen(
             onDismissRequest = { showSuccess = false; onBack() },
             icon = { Icon(Icons.Default.CheckCircle, null, tint = Success) },
             title = { Text("创建成功") },
-            text = { Text("隐私文件夹「$folderName」已在USB安全卡EMMC中创建") },
+            text = { Text("文件夹「$folderName」已在设备EMMC中创建") },
             confirmButton = {
                 TextButton(onClick = { showSuccess = false; onBack() }) { Text("确定") }
             }

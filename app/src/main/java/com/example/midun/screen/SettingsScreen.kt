@@ -140,7 +140,7 @@ fun SettingsScreen(
                 SettingsActionItem(
                     icon = if (isBound) Icons.Default.PhonelinkErase else Icons.Default.PhonelinkSetup,
                     title = if (isBound) "解绑本机" else "绑定本机",
-                    subtitle = if (isBound) "解绑后安全卡可在其他手机使用" else "绑定后安全卡只能在此手机使用",
+                    subtitle = if (isBound) "解绑后设备可在其他手机使用" else "绑定后设备只能在此手机使用",
                     iconTint = if (isBound) Warning else Accent,
                     onClick = {
                         bindAction = !isBound
@@ -249,7 +249,7 @@ fun SettingsScreen(
             text = {
                 Column {
                     Text(
-                        "将清除安全卡中的所有聊天记录、隐私文件与联系人，保留登录态。\n\n此操作不可恢复，请输入当前密码确认：",
+                        "将清除设备中的所有聊天记录、文件与联系人，保留登录态。\n\n此操作不可恢复，请输入当前密码确认：",
                         color = TextSecondary
                     )
                     Spacer(Modifier.height(12.dp))
@@ -321,7 +321,7 @@ fun SettingsScreen(
             text = {
                 Column {
                     Text(
-                        "此操作将永久删除安全卡内所有文件、聊天记录和密码，且无法恢复。\n\n请输入当前密码确认：",
+                        "此操作将永久删除设备内所有文件、聊天记录和密码，且无法恢复。\n\n请输入当前密码确认：",
                         color = TextSecondary
                     )
                     Spacer(Modifier.height(12.dp))
@@ -404,8 +404,8 @@ fun SettingsScreen(
             text = {
                 Column {
                     Text(
-                        if (bindAction) "绑定后安全卡只能在此手机上使用，请输入密码确认："
-                        else "解绑后安全卡可在任意手机使用，请输入密码确认：",
+                        if (bindAction) "绑定后设备只能在此手机上使用，请输入密码确认："
+                        else "解绑后设备可在任意手机使用，请输入密码确认：",
                         color = TextSecondary
                     )
                     Spacer(Modifier.height(12.dp))
@@ -494,7 +494,7 @@ fun SettingsScreen(
                     Column {
                         Text(
                             "将重新生成文件封装密钥，并用它重新封装现有的文件加密密钥。\n\n" +
-                                "• 文件加密密钥不变，隐私文件夹文件无需重新加密、不会丢失\n" +
+                                "• 文件加密密钥不变，文件夹文件无需重新加密、不会丢失\n" +
                                 "• 此操作不可撤销\n\n" +
                                 "请输入密码确认：",
                             color = TextSecondary
@@ -612,7 +612,7 @@ fun SettingsScreen(
             title = { Text("波波 v${BuildConfig.VERSION_NAME}") },
             text = {
                 Column {
-                    Text("USB安全卡管理系统")
+                    Text("设备管理系统")
                     Spacer(Modifier.height(8.dp))
                     Text("功能特性：", fontWeight = FontWeight.Medium)
                     Text("  - AES-256文件加密存储")
@@ -639,7 +639,7 @@ fun SettingsScreen(
                 Text(
                     "将清除聊天中图片/视频的预览缓存" +
                         (cacheBytes?.takeIf { it > 0 }?.let { "（约 ${formatStorage(it)}）" } ?: "") +
-                        "。\n\n对话中未保存的文件可能无法再预览；已保存到隐私文件夹的文件不受影响。",
+                        "。\n\n对话中未保存的文件可能无法再预览；已保存到文件夹的文件不受影响。",
                     color = TextSecondary
                 )
             },

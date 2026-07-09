@@ -222,7 +222,7 @@ fun HomeScreen(
             text = {
                 Column {
                     Text(
-                        "将清除安全卡中的所有聊天记录、隐私文件、联系人与操作日志，保留登录态。\n\n此操作不可恢复，请输入当前密码确认：",
+                        "将清除设备中的所有聊天记录、文件、联系人与操作日志，保留登录态。\n\n此操作不可恢复，请输入当前密码确认：",
                         color = TextSecondary
                     )
                     Spacer(Modifier.height(12.dp))

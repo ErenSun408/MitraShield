@@ -115,7 +115,7 @@ fun SplashScreen(
             )
             Spacer(Modifier.height(12.dp))
             Text(
-                text = "正在检测USB安全卡...",
+                text = "正在检测设备...",
                 color = CardBg.copy(alpha = 0.5f),
                 fontSize = 12.sp
             )

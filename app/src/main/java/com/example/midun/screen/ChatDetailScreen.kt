@@ -135,8 +135,8 @@ fun ChatDetailScreen(
     }
     var cancelTarget by remember { mutableStateOf<ChatMessage?>(null) } // 取消在途发送的目标消息
     var resendTarget by remember { mutableStateOf<ChatMessage?>(null) } // 点「未送达」重发的目标消息
-    var showSourceMenu by remember { mutableStateOf(false) }          // 发送来源菜单（手机/隐私文件夹）
-    var showPickDialog by remember { mutableStateOf(false) }          // 隐私文件夹来源选取对话框
+    var showSourceMenu by remember { mutableStateOf(false) }          // 发送来源菜单（手机/文件夹）
+    var showPickDialog by remember { mutableStateOf(false) }          // 文件夹来源选取对话框
     // 手机存储选取器（GetContent）：选中即查名/大小/mime → 流式加密发送。
     val pickFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -422,7 +422,7 @@ fun ChatDetailScreen(
                             // 无卡测试模式无隐私文件夹（无卡）→ 仅保留「从手机存储」。
                             if (!isTestMode) {
                                 DropdownMenuItem(
-                                    text = { Text("从隐私文件夹") },
+                                    text = { Text("从文件夹") },
                                     leadingIcon = { Icon(Icons.Default.Folder, null, tint = Primary) },
                                     onClick = {
                                         showSourceMenu = false
@@ -556,7 +556,7 @@ fun ChatDetailScreen(
                                         if (isTestMode) null else msg, null
                                     )
                                     else if (isTestMode) scope.launch {
-                                        snackbarHostState.showSnackbar("无卡测试版不支持保存到文件夹（无安全卡）")
+                                        snackbarHostState.showSnackbar("无卡测试版不支持保存到文件夹（无设备）")
                                     }
                                     else {
                                         fileToSave = msg
@@ -824,7 +824,7 @@ private fun PickFromFolderDialog(
                 val folder = selectedFolder
                 when {
                     folder == null && folders.isEmpty() ->
-                        PickEmptyState(Icons.Default.FolderOff, "暂无隐私文件夹")
+                        PickEmptyState(Icons.Default.FolderOff, "暂无文件夹")
                     folder == null ->
                         folders.forEach { f ->
                             PickRow(
@@ -1012,7 +1012,7 @@ private fun SaveToFolderDialog(
         title = { Text("保存文件") },
         text = {
             Column {
-                Text("将「$fileName」保存到隐私文件夹：", fontSize = 13.sp, color = TextSecondary)
+                Text("将「$fileName」保存到文件夹：", fontSize = 13.sp, color = TextSecondary)
                 Spacer(Modifier.height(12.dp))
                 if (creating) {
                     OutlinedTextField(

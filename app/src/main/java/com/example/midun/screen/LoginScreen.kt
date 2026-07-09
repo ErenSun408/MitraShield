@@ -87,7 +87,7 @@ fun LoginScreen(
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        "USB安全卡已连接",
+                        "设备已连接",
                         color = Success,
                         fontSize = 12.sp
                     )
@@ -110,7 +110,7 @@ fun LoginScreen(
             ) {
                 Text("安全登录", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
-                Text("密码经SHA256加密传输至安全卡验证", fontSize = 12.sp, color = TextSecondary)
+                Text("密码经SHA256加密传输至设备验证", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(24.dp))
 
                 OutlinedTextField(
@@ -178,7 +178,7 @@ fun LoginScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Info, null, tint = TextSecondary, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("安全卡SN: ${deviceStatus.deviceId.ifEmpty { "未知" }}", fontSize = 11.sp, color = TextSecondary)
+                        Text("设备SN: ${deviceStatus.deviceId.ifEmpty { "未知" }}", fontSize = 11.sp, color = TextSecondary)
                     }
                     Spacer(Modifier.height(4.dp))
                     Text("本机ID: $phoneId", fontSize = 11.sp, color = TextSecondary)
@@ -201,7 +201,7 @@ fun LoginScreen(
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(Modifier.width(12.dp))
-                        Text("正在清除安全卡内所有数据...", color = TextSecondary)
+                        Text("正在清除设备内所有数据...", color = TextSecondary)
                     }
                 } else {
                     Column {
@@ -211,8 +211,8 @@ fun LoginScreen(
                         }
                         Text(
                             "忘记密码只能通过恢复出厂设置解决。\n\n" +
-                                "此操作将永久删除安全卡内所有文件、聊天记录和密码，且无法恢复。\n\n" +
-                                "确认后需要重新初始化安全卡。",
+                                "此操作将永久删除设备内所有文件、聊天记录和密码，且无法恢复。\n\n" +
+                                "确认后需要重新初始化设备。",
                             color = TextSecondary
                         )
                     }
