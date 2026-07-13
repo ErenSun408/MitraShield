@@ -15,7 +15,7 @@ import javax.crypto.spec.SecretKeySpec
  *   `wrappedDEK`、「密钥更新」重包（DEK 不变、文件不丢）。
  * - **分块文件加解密**（[encryptChunk]/[decryptChunk]）：与 P2PCrypto 同一「确定性 nonce + AAD」方案——
  *   `nonce = fileNonce(8B) ‖ chunkIndex(4B)`、`AAD = fileNonce ‖ chunkIndex ‖ isLast`，防块重排/重放/截断。
- *   供 M12.2/12.3 在 [com.example.midun.data.real.RealFileSystem] 读写路径插入透明加解密。
+ *   供 M12.2/12.3 在 RealFileSystem 读写路径插入透明加解密。
  *
  * **诚实定位**：卡 + 密码才是真正的保密门（卡硬件 AES）；本层 DEK 只为「控制/功能」（加密导出、可重置
  * 的封装密钥），不增加保密性。详见 M12 设计。

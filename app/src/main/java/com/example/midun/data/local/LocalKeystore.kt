@@ -13,7 +13,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * 无卡版 App 层密钥库（NC1.2）。与真卡版 [com.example.midun.data.crypto.CardKeystore] 同样持有一枚 **DEK**
+ * 无卡版 App 层密钥库（NC1.2）。与真卡版 CardKeystore 同样持有一枚 **DEK**
  * 加密用户文件内容（逐块 AES-GCM，复用 [FileCrypto]），但 **KEK 的保管方式根本不同**：
  *
  * - 真卡版：KEK 是随机 32 字节、**明存在 blob 里**——因为 blob 落在安全卡隐藏区（卡硬件 AES + 卡密码门保护），
@@ -30,7 +30,7 @@ import javax.inject.Singleton
  * **绝不在 rewrap 里删旧别名**——新 blob 尚未持久化前旧 blob 仍在盘上、须能解；旧别名统一由 [load] 成功后
  * 清理（此时确认当前版本可用，其余版本即废）。这样任何一步崩溃都还有一份可解的 (blob, KEK)。
  *
- * 接口对齐 [com.example.midun.data.crypto.CardKeystore]：`dek()/isUnlocked/createNew()/load()/rewrap()/lock()`，
+ * 接口对齐 CardKeystore：`dek()/isUnlocked/createNew()/load()/rewrap()/lock()`，
  * 供 `LocalFileSystem`（读写透明加解密）与 `LocalAuthManager`（生命周期落盘/解锁）复用同一套调用。
  */
 @Singleton

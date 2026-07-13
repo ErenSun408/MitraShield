@@ -26,7 +26,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /**
- * 无卡版隐私文件夹文件系统（NC1.3）。真卡版 [com.example.midun.data.real.RealFileSystem] 的纯软件孪生：
+ * 无卡版隐私文件夹文件系统（NC1.3）。真卡版 RealFileSystem 的纯软件孪生：
  * **公共接口/方法签名逐一对齐**（drop-in 替换），把安全卡隐藏区 `LibJniFSShell.SFxxx` 原生原语换成
  * [RandomAccessFile]/[File]，**逐块 AES-GCM 加密写/读、视频预览随机读、导出容器逻辑整段复用**
  * （[FileCrypto]/[FileHeader]/[FileContainer] 与真卡共享，不改一字）。

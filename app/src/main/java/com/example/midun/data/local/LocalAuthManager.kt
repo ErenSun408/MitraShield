@@ -22,7 +22,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /**
- * 无卡版认证/生命周期管理器（NC2.1）。真卡版 [com.example.midun.data.real.RealUsbManager] 的纯软件孪生，
+ * 无卡版认证/生命周期管理器（NC2.1）。真卡版 RealUsbManager 的纯软件孪生，
  * 实现 [AuthOps]，由 [com.example.midun.data.AccountManager] 门面路由。
  *
  * **无「插卡/开盘」概念**：真卡登录 = `SFOpenDiskEx(密码)` 开隐藏盘（密码即开盘凭证）。无卡把它拆成两件独立的事：

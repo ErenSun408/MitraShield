@@ -14,7 +14,7 @@ import java.io.OutputStream
 class TransferCancelledException : IOException("已取消")
 
 /**
- * 隐私文件夹文件系统的统一抽象（M11.4）。由 [com.example.midun.data.real.RealFileSystem]（真卡隐藏区）
+ * 隐私文件夹文件系统的统一抽象（M11.4）。由 RealFileSystem（真卡隐藏区）
  * 实现，[FileRepository] 作门面转发——保留接口以隔离上层与原生卡 IO。
  *
  * **读方法为 `suspend`**：真卡读列表/大小是阻塞原生 IO（`SFGetFileList`/`SFGetSize`），不能在主线程同步调用。
