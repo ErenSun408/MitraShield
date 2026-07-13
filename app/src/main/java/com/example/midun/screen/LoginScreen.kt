@@ -76,22 +76,6 @@ fun LoginScreen(
                 )
                 Spacer(Modifier.height(12.dp))
                 Text("波波", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 能停在此屏即 USB 必连（断开由全局 UsbDisconnectedOverlay 兜底），故静态显示。
-                    Icon(
-                        Icons.Default.Usb,
-                        null,
-                        tint = Success,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        "设备已连接",
-                        color = Success,
-                        fontSize = 12.sp
-                    )
-                }
             }
         }
 

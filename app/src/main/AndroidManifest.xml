@@ -5,11 +5,6 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <!-- M11.1：FSShell SDK 底层用 libusb 操作 usbfs，部分严格系统需此权限访问 /dev/bus/usb（非必需项）。 -->
-    <uses-permission android:name="android.permission.HARDWARE_TEST" />
-    <uses-feature
-        android:name="android.hardware.usb.host"
-        android:required="false" />
 
     <application
         android:name=".MiDunApp"
@@ -34,12 +29,6 @@
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
-            </intent-filter>
-            <meta-data
-                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
-                android:resource="@xml/device_filter" />
         </activity>
 
         <!-- 分享二维码图片用：把 cache 下的 PNG 经内容 URI 授权给分享目标。 -->

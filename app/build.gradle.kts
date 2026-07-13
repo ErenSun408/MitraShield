@@ -57,22 +57,9 @@ android {
         // 该 detector 是纯 false-positive，安全禁用。AGP 8.8+ 修复后可移除。
         disable += "NullSafeMutableLiveData"
     }
-
-    packaging {
-        jniLibs {
-            // M11.1：FSShell 的 .so 由旧 NDK 编译、未页对齐；Android 11+ 默认要求对齐的未压缩
-            // so，故用 legacy 打包（压缩 + 安装时解压到 /data），与 Manifest extractNativeLibs=true
-            // 一致，确保 release 也生效，避免 so 加载崩溃（SDK 文档 1.5 节）。
-            useLegacyPackaging = true
-        }
-    }
 }
 
 dependencies {
-    // M11.1：FSShell 真实安全卡 SDK —— libs/ 下的 jar（LibJniFSShell + USBStorageHelper），
-    // 配套 .so 在 src/main/jniLibs/{arm64-v8a,armeabi-v7a}/。接口审计见 M11 计划。
-    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar"))))
-
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
