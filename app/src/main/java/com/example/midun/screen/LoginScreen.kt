@@ -1,5 +1,6 @@
 package com.example.midun.screen
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -12,9 +13,11 @@ import androidx.compose.runtime.*
 import android.provider.Settings
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -22,6 +25,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.midun.R
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.AuthViewModel
 import com.example.midun.viewmodel.DeviceViewModel
@@ -73,11 +77,12 @@ fun LoginScreen(
                     .padding(top = 80.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Icon(
-                    Icons.Default.Security,
-                    null,
-                    tint = Accent,
-                    modifier = Modifier.size(56.dp)
+                Image(
+                    painter = painterResource(R.drawable.bobo_icon_fg),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(RoundedCornerShape(16.dp))
                 )
                 Spacer(Modifier.height(12.dp))
                 Text("波波", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)

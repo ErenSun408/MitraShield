@@ -64,8 +64,6 @@ fun HomeScreen(
     val contacts by chatViewModel.contacts.collectAsState()
     val logs by operationLogViewModel.logs.collectAsState()
 
-    val deviceConnected = device.status == SessionStatus.AUTHENTICATED ||
-        device.status == SessionStatus.CONNECTED
     val folderCount = fileState.folders.size
     val fileCount = fileState.totalFileCount
     val unreadCount = contacts.sumOf { it.unreadCount }
@@ -89,19 +87,6 @@ fun HomeScreen(
                     Column {
                         Text("守波秘钥", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                         Text("SN: ${device.deviceId.ifEmpty { "未知" }}", color = Color.White.copy(0.7f), fontSize = 12.sp)
-                    }
-                    Spacer(Modifier.weight(1f))
-                    val statusColor = if (deviceConnected) Success else Danger
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(statusColor.copy(0.2f))
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            if (deviceConnected) "已连接" else "未连接",
-                            color = statusColor, fontSize = 12.sp, fontWeight = FontWeight.Medium
-                        )
                     }
                 }
                 Spacer(Modifier.height(16.dp))

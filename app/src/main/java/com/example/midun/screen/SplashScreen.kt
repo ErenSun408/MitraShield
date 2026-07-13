@@ -1,22 +1,25 @@
 package com.example.midun.screen
 
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Security
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
+import com.example.midun.R
 import com.example.midun.data.model.SessionStatus
 import com.example.midun.navigation.Screen
 import com.example.midun.ui.theme.*
@@ -80,11 +83,12 @@ fun SplashScreen(
                 .alpha(alphaAnim)
                 .scale(scaleAnim)
         ) {
-            Icon(
-                imageVector = Icons.Default.Security,
+            Image(
+                painter = painterResource(R.drawable.bobo_icon_fg),
                 contentDescription = null,
-                tint = Accent,
-                modifier = Modifier.size(80.dp)
+                modifier = Modifier
+                    .size(96.dp)
+                    .clip(RoundedCornerShape(24.dp))
             )
             Spacer(Modifier.height(16.dp))
             Text(
