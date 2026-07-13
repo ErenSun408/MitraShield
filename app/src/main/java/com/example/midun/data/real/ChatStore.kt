@@ -1,5 +1,7 @@
 package com.example.midun.data.real
 
+import com.example.midun.data.local.LocalAuthManager
+import com.example.midun.data.local.LocalFileSystem
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
@@ -23,23 +25,23 @@ data class ChatSnapshot(
  * 聊天记录的真卡持久化后端（M11.5.5）。把 [com.example.midun.data.ChatRepository] 的内存联系人
  * 与消息序列化为隐藏区侧车 [CHAT_PATH] 的 JSON，使聊天跨会话留存于安全卡。
  *
- * 活动条件 / 依赖选型同 [OperationLogStore]：判据 = [RealUsbManager] AUTHENTICATED（盘已打开）。
- * 依赖 `RealUsbManager` 叶子而非 `SecurityCardManager`（后者注入 [ChatRepository]→本类，注入会成 DI 环）。
+ * 活动条件 / 依赖选型同 [OperationLogStore]：判据 = [LocalAuthManager] AUTHENTICATED（已登录 + DEK 解锁）。
+ * 依赖 `LocalAuthManager` 叶子而非 `SecurityCardManager`（后者注入 [ChatRepository]→本类，注入会成 DI 环）。
  * 未认证态下 [load] 回 null、[save] no-op（仅内存）。
  */
 @Singleton
 class ChatStore @Inject constructor(
-    private val real: RealFileSystem,
-    private val realUsb: RealUsbManager
+    private val fs: LocalFileSystem,
+    private val auth: LocalAuthManager
 ) {
     private fun active(): Boolean =
-        realUsb.deviceStatus.value.status == UsbDeviceStatus.AUTHENTICATED
+        auth.deviceStatus.value.status == UsbDeviceStatus.AUTHENTICATED
 
     suspend fun load(): ChatSnapshot? = withContext(Dispatchers.IO) {
         if (!active()) return@withContext null
         runCatching {
             val out = ByteArrayOutputStream()
-            if (real.readFile(CHAT_PATH, out).isFailure) {
+            if (fs.readFile(CHAT_PATH, out).isFailure) {
                 return@runCatching ChatSnapshot(emptyList(), emptyMap()) // 文件不存在=空
             }
             fromJson(out.toString(Charsets.UTF_8.name()))
@@ -48,7 +50,7 @@ class ChatStore @Inject constructor(
 
     suspend fun save(snapshot: ChatSnapshot) = withContext(Dispatchers.IO) {
         if (!active()) return@withContext
-        runCatching { real.writeFile(CHAT_PATH, toJson(snapshot).byteInputStream()) }
+        runCatching { fs.writeFile(CHAT_PATH, toJson(snapshot).byteInputStream()) }
         Unit
     }
 

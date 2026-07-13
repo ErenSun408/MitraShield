@@ -5,9 +5,9 @@ import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.local.LocalAuthManager
 import com.example.midun.data.real.ChatSnapshot
 import com.example.midun.data.real.ChatStore
-import com.example.midun.data.real.RealUsbManager
 import com.example.midun.data.staging.StagingStore
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -21,26 +21,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 聊天仓库（联系人 + 消息，内存态 + 真卡持久化）。
+ * 聊天仓库（联系人 + 消息，内存态 + 本地隐私库持久化）。
  *
- * **持久化（M11.5.5）**：内存态空启动；真卡认证成功即经 [ChatStore] 从卡加载历史、每次变更写穿到卡；
- * 锁定/拔卡清内存明文。依赖选型见 [ChatStore]。
+ * **持久化**：内存态空启动；登录认证成功即经 [ChatStore] 从本地加载历史、每次变更写穿到盘；
+ * 登出清内存明文。依赖选型见 [ChatStore]。
  */
 @Singleton
 class ChatRepository @Inject constructor(
     private val store: ChatStore,
     private val stagingStore: StagingStore,
-    realUsbManager: RealUsbManager
+    authManager: LocalAuthManager
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
-        // 真卡认证成功（盘已打开）→ 从卡加载聊天；锁定/拔卡（离开 AUTHENTICATED）→ 清内存明文。
-        // wasAuthed 守卫：初始 false 的首个发射不触发清理，仅真正离开认证态才清（M11.6.3 安全加固）。
+        // 登录认证成功 → 从本地加载聊天；登出（离开 AUTHENTICATED）→ 清内存明文。
+        // wasAuthed 守卫：初始 false 的首个发射不触发清理，仅真正离开认证态才清。
         scope.launch {
             var wasAuthed = false
-            realUsbManager.deviceStatus
+            authManager.deviceStatus
                 .map { it.status == UsbDeviceStatus.AUTHENTICATED }
                 .distinctUntilChanged()
                 .collect { authed ->

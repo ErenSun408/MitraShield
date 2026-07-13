@@ -3,8 +3,8 @@ package com.example.midun.data
 import com.example.midun.data.model.OperationLog
 import com.example.midun.data.model.OperationType
 import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.local.LocalAuthManager
 import com.example.midun.data.real.OperationLogStore
-import com.example.midun.data.real.RealUsbManager
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -23,13 +23,13 @@ import kotlinx.coroutines.launch
  *
  * 以 [StateFlow] 暴露，首页可响应式刷新。最新记录在头部，上限 [MAX_ENTRIES] 条。
  *
- * **持久化（M11.5.4）**：经 [OperationLogStore] 落安全卡隐藏区。内存态空启动；真卡认证成功即从卡加载历史、
- * 每次变更写穿到卡；未认证时 store no-op（仅内存，进程重启即清空，贴合「不留痕」）。
+ * **持久化**：经 [OperationLogStore] 落本地隐私库。内存态空启动；登录认证成功即从本地加载历史、
+ * 每次变更写穿到盘；未认证时 store no-op（仅内存，进程重启即清空，贴合「不留痕」）。
  */
 @Singleton
 class OperationLogRepository @Inject constructor(
     private val store: OperationLogStore,
-    realUsbManager: RealUsbManager
+    authManager: LocalAuthManager
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -38,11 +38,11 @@ class OperationLogRepository @Inject constructor(
     val logs: StateFlow<List<OperationLog>> = _logs.asStateFlow()
 
     init {
-        // 真卡认证成功（盘已打开）→ 从卡加载历史日志；锁定/拔卡（离开 AUTHENTICATED）→ 清内存明文。
-        // wasAuthed 守卫：初始 false 的首个发射不触发清理，仅真正离开认证态才清（M11.6.3 安全加固）。
+        // 登录认证成功 → 从本地加载历史日志；登出（离开 AUTHENTICATED）→ 清内存明文。
+        // wasAuthed 守卫：初始 false 的首个发射不触发清理，仅真正离开认证态才清。
         scope.launch {
             var wasAuthed = false
-            realUsbManager.deviceStatus
+            authManager.deviceStatus
                 .map { it.status == UsbDeviceStatus.AUTHENTICATED }
                 .distinctUntilChanged()
                 .collect { authed ->

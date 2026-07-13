@@ -1,5 +1,7 @@
 package com.example.midun.data.real
 
+import com.example.midun.data.local.LocalAuthManager
+import com.example.midun.data.local.LocalFileSystem
 import com.example.midun.data.model.OperationLog
 import com.example.midun.data.model.OperationType
 import com.example.midun.data.model.UsbDeviceStatus
@@ -15,32 +17,32 @@ import org.json.JSONObject
  * 操作日志的真卡持久化后端（M11.5.4）。把 [com.example.midun.data.OperationLogRepository] 的内存日志
  * 序列化为隐藏区侧车 [LOG_PATH] 的 JSON，使日志跨会话/重启留存于安全卡。
  *
- * **活动条件 = [RealUsbManager] 认证态**：盘已打开（`SFOpenDiskEx` 成功）即进入 AUTHENTICATED，是
- * 「隐藏区可读写」的精确判据。**有意不注入 `SecurityCardManager`**——它注入 [OperationLogRepository]→本类，
- * 注入会成 DI 环；`RealUsbManager` 是叶子、无环。未认证态下 [load] 回 null、[save] no-op（仅内存）。
+ * **活动条件 = [LocalAuthManager] 认证态**：已登录 + DEK 解锁即 AUTHENTICATED，是「隐私库可读写」的精确判据。
+ * **有意不注入 `SecurityCardManager`**——它注入 [OperationLogRepository]→本类，注入会成 DI 环；
+ * `LocalAuthManager` 是叶子、无环。未认证态下 [load] 回 null、[save] no-op（仅内存）。
  */
 @Singleton
 class OperationLogStore @Inject constructor(
-    private val real: RealFileSystem,
-    private val realUsb: RealUsbManager
+    private val fs: LocalFileSystem,
+    private val auth: LocalAuthManager
 ) {
     private fun active(): Boolean =
-        realUsb.deviceStatus.value.status == UsbDeviceStatus.AUTHENTICATED
+        auth.deviceStatus.value.status == UsbDeviceStatus.AUTHENTICATED
 
-    /** 真卡模式从卡读历史日志；非活动态回 null（调用方保留内存）；文件不存在视为空列表。 */
+    /** 从本地隐私库读历史日志；非活动态回 null（调用方保留内存）；文件不存在视为空列表。 */
     suspend fun load(): List<OperationLog>? = withContext(Dispatchers.IO) {
         if (!active()) return@withContext null
         runCatching {
             val out = ByteArrayOutputStream()
-            if (real.readFile(LOG_PATH, out).isFailure) return@runCatching emptyList()
+            if (fs.readFile(LOG_PATH, out).isFailure) return@runCatching emptyList()
             fromJson(out.toString(Charsets.UTF_8.name()))
         }.getOrNull()
     }
 
-    /** 真卡模式写穿到卡（整表覆盖写）；非活动态 no-op。 */
+    /** 写穿到本地隐私库（整表覆盖写）；非活动态 no-op。 */
     suspend fun save(logs: List<OperationLog>) = withContext(Dispatchers.IO) {
         if (!active()) return@withContext
-        runCatching { real.writeFile(LOG_PATH, toJson(logs).byteInputStream()) }
+        runCatching { fs.writeFile(LOG_PATH, toJson(logs).byteInputStream()) }
         Unit
     }
 
