@@ -6,7 +6,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import com.example.midun.data.FileCachePaths
 import com.example.midun.data.FileRepository
-import com.example.midun.data.real.RealFileSystem
+import com.example.midun.data.local.LocalFileSystem
 import com.example.midun.data.staging.StagingStore
 import com.example.midun.media.CardFileDataSource
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -14,14 +14,14 @@ import javax.inject.Inject
 
 /**
  * 文件预览数据访问（方案 B）。图片走 [FileRepository.readImageBytes]（暂存缓存命中则读 StagingStore，
- * 否则卡内内存解密）；视频用 [videoFactory]/[videoUri] 构造流式 DataSource。
+ * 否则本地内存解密）；视频用 [videoFactory]/[videoUri] 构造流式 DataSource。
  */
 @HiltViewModel
 class PreviewViewModel @Inject constructor(
     private val fileRepo: FileRepository,
     private val stagingStore: StagingStore,
-    /** 隐私文件夹视频流式 DataSource（卡内随机读解密）用；暂存缓存改走 [videoFactory]。 */
-    val realFileSystem: RealFileSystem
+    /** 隐私文件夹视频流式 DataSource（本地随机读解密）用；暂存缓存改走 [videoFactory]。 */
+    val localFileSystem: LocalFileSystem
 ) : ViewModel() {
 
     suspend fun readImageBytes(fileId: String): Result<ByteArray> = fileRepo.readFileBytes(fileId)
@@ -33,7 +33,7 @@ class PreviewViewModel @Inject constructor(
     @UnstableApi
     fun videoFactory(path: String): DataSource.Factory =
         if (FileCachePaths.isCachePath(path)) stagingStore.videoDataSourceFactory(path)
-        else CardFileDataSource.Factory(realFileSystem, path)
+        else CardFileDataSource.Factory(localFileSystem, path)
 
     /** 喂给 ExoPlayer 的 MediaItem uri：暂存缓存由 [StagingStore] 给（本地为真实 file://），隐私文件夹用占位。 */
     fun videoUri(path: String): Uri =

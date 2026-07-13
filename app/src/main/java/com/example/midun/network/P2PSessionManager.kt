@@ -5,7 +5,7 @@ import com.example.midun.data.FileCachePaths
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.ChatRepository
 import com.example.midun.data.OperationLogRepository
-import com.example.midun.data.real.RealFileSystem
+import com.example.midun.data.local.LocalFileSystem
 import com.example.midun.data.staging.StagingStore
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
@@ -68,10 +68,10 @@ class P2PSessionManager @Inject constructor(
     private val chatRepo: ChatRepository,
     private val operationLog: OperationLogRepository,
     private val cardManager: SecurityCardManager,
-    // 文件收发暂存（M11.5.3 + 无卡测试 T2）：经 StagingStore——真卡落卡、无卡测试落手机本地。
+    // 文件收发暂存（`.recv_`/`.sent_`）：经 StagingStore 落本地隐私库 vault 根级隐藏文件。
     private val stagingStore: StagingStore,
-    // 仅用于把暂存复制进隐私文件夹（saveReceivedFile，卡内操作、测试模式不触发）。
-    private val realFileSystem: RealFileSystem
+    // 把暂存复制进隐私文件夹（saveReceivedFile）：暂存与隐私库同在 vault → copyWithinCard 无需跨区。
+    private val localFileSystem: LocalFileSystem
 ) {
 
     /** 接收循环 / 身份发送的常驻协程作用域（单例，独占 socket，跨屏存活）。 */
@@ -767,7 +767,7 @@ class P2PSessionManager @Inject constructor(
         }
         // 保存到隐私文件夹是卡内复制（copyWithinCard 读卡内 staging）；测试模式无隐私文件夹、此路径不触发（T3 UI 禁用）。
         val dest = uniqueDestPath(folderId, fileName)
-        if (!realFileSystem.copyWithinCard(staging, dest)) {
+        if (!localFileSystem.copyWithinCard(staging, dest)) {
             return@withContext Result.failure(IllegalStateException("保存到文件夹失败"))
         }
         chatRepo.setFileSaved(msgId, contactId, folderId, dest.substringAfterLast('/'))
@@ -778,8 +778,8 @@ class P2PSessionManager @Inject constructor(
     /** 目标文件夹内文件名冲突则加序号（`a.pdf`→`a(1).pdf`）。 */
     private fun uniqueDestPath(folderId: String, fileName: String): String {
         fun exists(path: String): Boolean {
-            val h = realFileSystem.streamOpen(path)
-            return if (h > 0) { realFileSystem.streamClose(h); true } else false
+            val h = localFileSystem.streamOpen(path)
+            return if (h > 0) { localFileSystem.streamClose(h); true } else false
         }
         val base = "$folderId/$fileName"
         if (!exists(base)) return base

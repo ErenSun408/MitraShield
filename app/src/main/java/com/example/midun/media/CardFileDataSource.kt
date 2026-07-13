@@ -8,20 +8,20 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import com.example.midun.crypto.FileCrypto
 import com.example.midun.crypto.FileHeader
-import com.example.midun.data.real.RealFileSystem
+import com.example.midun.data.local.LocalFileSystem
 import java.io.IOException
 
 /**
- * media3 DataSource，从安全卡隐藏区**流式解密**读取（方案 B，视频预览）。ExoPlayer 按需向卡要字节
- * （`SFOpen`/`SFSeek64`/`SFRead`），**不把整段视频解密落盘**——秒开、可拖动、明文不离卡。仅真卡模式可用。
+ * media3 DataSource，从本地隐私库**流式解密**读取（方案 B，视频预览）。ExoPlayer 按需要字节
+ * （`streamOpen`/`streamSeek`/`streamRead`），**不把整段视频解密落盘**——秒开、可拖动、明文不落临时文件。
  *
- * **M12.3 加密随机读**：加密用户文件（文件头 MAGIC 命中）按「明文偏移 → 密文块 → 解块」映射服务任意 seek——
- * 明文位置 `p` 落在第 `p/64KB` 块，块的卡内密文偏移 = `头长 + 块号·(64KB+tag)`，seek 到该处读一块密文解密、
- * 从块内 `p%64KB` 起供字节。未加密的缓存视频（`.recv_`/`.sent_`，Option-1 不叠 DEK）走原始字节直读。
+ * **加密随机读**：加密用户文件（文件头 MAGIC 命中）按「明文偏移 → 密文块 → 解块」映射服务任意 seek——
+ * 明文位置 `p` 落在第 `p/64KB` 块，密文偏移 = `头长 + 块号·(64KB+tag)`，seek 到该处读一块密文解密、
+ * 从块内 `p%64KB` 起供字节。未加密的缓存视频（`.recv_`/`.sent_`，不叠 DEK）走原始字节直读。
  */
 @UnstableApi
 class CardFileDataSource(
-    private val fs: RealFileSystem,
+    private val fs: LocalFileSystem,
     private val path: String
 ) : BaseDataSource(/* isNetwork = */ false) {
 
@@ -136,9 +136,9 @@ class CardFileDataSource(
         transferEnded()
     }
 
-    /** 工厂：固定一个卡内路径，供 ExoPlayer 的 MediaSource 用。 */
+    /** 工厂：固定一个本地隐私库路径，供 ExoPlayer 的 MediaSource 用。 */
     @UnstableApi
-    class Factory(private val fs: RealFileSystem, private val path: String) : DataSource.Factory {
+    class Factory(private val fs: LocalFileSystem, private val path: String) : DataSource.Factory {
         override fun createDataSource(): DataSource = CardFileDataSource(fs, path)
     }
 
