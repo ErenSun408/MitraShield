@@ -4,7 +4,7 @@ import com.example.midun.data.model.OperationLog
 import com.example.midun.data.model.OperationType
 import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.data.local.LocalAuthManager
-import com.example.midun.data.real.OperationLogStore
+import com.example.midun.data.local.OperationLogStore
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope

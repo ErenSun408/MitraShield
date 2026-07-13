@@ -1,7 +1,5 @@
-package com.example.midun.data.real
+package com.example.midun.data.local
 
-import com.example.midun.data.local.LocalAuthManager
-import com.example.midun.data.local.LocalFileSystem
 import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus

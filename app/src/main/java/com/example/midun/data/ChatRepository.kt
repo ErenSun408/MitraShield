@@ -5,9 +5,9 @@ import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.local.ChatSnapshot
+import com.example.midun.data.local.ChatStore
 import com.example.midun.data.local.LocalAuthManager
-import com.example.midun.data.real.ChatSnapshot
-import com.example.midun.data.real.ChatStore
 import com.example.midun.data.staging.StagingStore
 import javax.inject.Inject
 import javax.inject.Singleton
