@@ -67,7 +67,18 @@
 - **NC5.2** 删 `app/libs/seczure.*.jar`、`jniLibs/**`、`device_filter.xml`；清 `build.gradle` jniLibs 打包 + `AndroidManifest` usb 条目
 - **NC5.3** 全量编译 + lint，清理孤儿 import/字符串
 
-### NC6 — 装机冒烟（模拟器 + 真机双机）
+### NC6 — 纯 App 术语重命名（删卡后独立 pass，Account/Session 风格）
+> 机械重命名，只改**幸存**类；改前编译验证。保留 `FileSystemOps`/`DeviceInfo`/`deviceId`/`boundPhoneId`；
+> 枚举**值**不动，只改类型名。代价：bobo 上碰这些类型的共享改动 cherry-pick 会有小冲突（可接受，两产品独立）。
+
+| 现名 | 新名 |
+|---|---|
+| `SecurityCardManager` | `AccountManager` |
+| `UsbCardOps` | `AuthOps` |
+| `UsbDeviceStatus`（类型名） | `SessionStatus` |
+| `CardFileDataSource` | `VaultFileDataSource` |
+
+### NC7 — 装机冒烟（模拟器 + 真机双机）
 - 两机 P2P 建联、文本/文件/语音收发、阅后即焚、视频预览、导入/导出加密容器、恢复出厂/一键清理/退出自动清理、Android Keystore 在无 StrongBox 机型的降级路径
 
 ## 4. 关注点 / 风险
