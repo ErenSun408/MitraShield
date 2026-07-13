@@ -39,37 +39,35 @@
 
 ## 3. 阶段拆分（每子阶段一提交、保证可编译）
 
-> 策略：**先加 `Local*` 并切 DI（App 变纯软件、Real 暂留但不被引用）→ 最后统一删 Real**。
-> 这样每个中间提交都能编译，末态完全干净。
+> 策略：**先加 `Local*`（App 编译时并存、Real 暂留不被引用）→ 切 DI → 最后统一删 Real**。
+> 这样每个中间提交都能编译，末态完全干净。执行顺序按依赖调整：认证后端要调 `LocalFileSystem.clear()`，
+> 故文件系统先于认证建（NC1 = 存储基座，认证顺延 NC2）。
 
-### NC1 — 本地身份 + 认证后端
-- **NC1.1** `LocalDeviceIdentity`：UUID 持久化 + 读取
-- **NC1.2** `LocalKeystore`：Android Keystore 包裹 DEK（先于 auth，登录要解锁它）
-- **NC1.3** `LocalAuthManager : UsbCardOps`：初始化/登录/校验/登出/绑定/恢复出厂/退出清理偏好
-- **NC1.4** DI 切换：`SecurityCardManager` 门面路由到 `LocalAuthManager`（`@Binds` 或直接注入）
+### NC1 — 本地存储基座 ✅（均已编译通过、未引用）
+- **NC1.1** `LocalDeviceIdentity`：UUID 持久化 → P2P deviceSn ✅ `70915b0`
+- **NC1.2** `LocalKeystore`：Android Keystore 硬件 KEK（StrongBox→TEE→模拟器软件后端）包裹 DEK ✅ `8e4cf6d`
+- **NC1.3** `LocalFileSystem : FileSystemOps`：`RealFileSystem` 全量 drop-in（CRUD+加密+stream+keystore raw IO+容器）✅ `8a5fd0d`
 
-### NC2 — 本地文件系统
-- **NC2.1** `LocalFileSystem : FileSystemOps` 骨架 + 文件夹/文件 CRUD（未加密先跑通列表/增删）
-- **NC2.2** 加密写入（复用 `FileHeader.build`+`FileCrypto.encryptChunk`，DEK 来自 `LocalKeystore`）
-- **NC2.3** 加密读取/导出 + 视频预览随机读（`CardFileDataSource` 对接本地句柄）
-- **NC2.4** 加密导出 `.midun` 容器（`FileContainer`）+ 拷贝策略侧车
-- **NC2.5** DI 切换：`FileRepository` 路由到 `LocalFileSystem`
+### NC2 — 认证后端 + DI 切换
+- **NC2.1** `LocalAuthManager : UsbCardOps`：init/登录/校验/登出/绑定/恢复出厂/一键清理/退出偏好 ✅ `f7d26f0`
+- **NC2.2** DI 切换：`SecurityCardManager` 门面路由到 `LocalAuthManager`；`FileRepository` 路由到 `LocalFileSystem`
+- **NC2.3** DI 切换：`StagingStore`/`P2PSessionManager`/`CardFileDataSource`/`PreviewViewModel`/`FileViewModel` 改指本地
+- **NC2.4** DI 切换：`ChatStore`/`OperationLogStore` 改指本地（判活「AUTHENTICATED」语义保留=已登录+DEK 解锁）
 
-### NC3 — 聊天/日志/身份接线
-- **NC3.1** `ChatStore`/`OperationLogStore` 重指向本地后端（判活条件由「AUTHENTICATED」改为「已登录」本地态）
-- **NC3.2** `P2PSessionManager` deviceSn → `LocalDeviceIdentity`
+### NC3 — 身份接线 + 启动路径
+- **NC3.1** `P2PSessionManager` deviceSn → `LocalDeviceIdentity`（经门面）
+- **NC3.2** `SplashScreen` 路由按 `.auth`；`DeviceViewModel`/`SecurityCardManager` 用 `connect()` 替 onUsbAttached
 
-### NC4 — 启动路径 + 移除插拔 UI
-- **NC4.1** `SplashScreen` 路由：按 `.auth` 是否存在 → 登录 / 初始化向导（去掉「等待插卡」中间态）
-- **NC4.2** `MainActivity`：删 USB 广播注册/接收、`UsbDisconnectedOverlay` 挂载
-- **NC4.3** 删无卡等待背景页与相关 drawable 引用
+### NC4 — 移除插拔 UI / 广播
+- **NC4.1** `MainActivity`：删 USB 广播注册/接收、`UsbDisconnectedOverlay` 挂载
+- **NC4.2** 删无卡等待背景页、`UsbDisconnectedOverlay`、相关 drawable 引用
 
 ### NC5 — 彻底清除真卡代码与依赖
-- **NC5.1** 删 `RealUsbManager`/`RealFileSystem`/`CardKeystore` + 卡专用工具
+- **NC5.1** 删 `RealUsbManager`/`RealFileSystem`/`CardKeystore`/`data/real`+`data/staging` 卡分支/`CardFileDataSource` 卡专用/`TestModeManager`
 - **NC5.2** 删 `app/libs/seczure.*.jar`、`jniLibs/**`、`device_filter.xml`；清 `build.gradle` jniLibs 打包 + `AndroidManifest` usb 条目
 - **NC5.3** 全量编译 + lint，清理孤儿 import/字符串
 
-### NC6 — 装机冒烟（真机双机）
+### NC6 — 装机冒烟（模拟器 + 真机双机）
 - 两机 P2P 建联、文本/文件/语音收发、阅后即焚、视频预览、导入/导出加密容器、恢复出厂/一键清理/退出自动清理、Android Keystore 在无 StrongBox 机型的降级路径
 
 ## 4. 关注点 / 风险
