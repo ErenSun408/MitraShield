@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.ui.theme.*
+import com.example.midun.util.PhoneFormat
 import com.example.midun.viewmodel.AuthViewModel
 import com.example.midun.viewmodel.DeviceViewModel
 import kotlinx.coroutines.delay
@@ -43,7 +44,8 @@ fun InitScreen(
     val phoneModel = remember { "${Build.MANUFACTURER} ${Build.MODEL}" }
 
     var step by remember { mutableIntStateOf(0) }
-    // 0=检测设备 1=设置密码 2=绑定设备 3=初始化中 4=完成
+    // 0=检测设备 1=设置账号密码 2=绑定设备 3=初始化中 4=完成
+    var phone by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmPassword by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
@@ -135,11 +137,26 @@ fun InitScreen(
                 1 -> {
                     Icon(Icons.Default.Lock, null, tint = Primary, modifier = Modifier.size(64.dp))
                     Spacer(Modifier.height(16.dp))
-                    Text("设置安全密码", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text("设置账号与密码", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
-                    Text("密码将通过SHA256加密存储在设备中", fontSize = 12.sp, color = TextSecondary)
+                    Text("手机号作为登录账号，密码经加密存储在本机", fontSize = 12.sp, color = TextSecondary)
                     Spacer(Modifier.height(24.dp))
 
+                    OutlinedTextField(
+                        value = phone,
+                        onValueChange = { if (it.length <= 11 && it.all { c -> c.isDigit() }) phone = it },
+                        label = { Text("手机号") },
+                        leadingIcon = { Icon(Icons.Default.PhoneAndroid, null) },
+                        singleLine = true,
+                        isError = phone.isNotEmpty() && !PhoneFormat.isValidChinaMobile(phone),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                            imeAction = ImeAction.Next
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
@@ -175,7 +192,8 @@ fun InitScreen(
 
                     Button(
                         onClick = { step = 2 },
-                        enabled = password.length >= 6 && password == confirmPassword,
+                        enabled = PhoneFormat.isValidChinaMobile(phone) &&
+                            password.length >= 6 && password == confirmPassword,
                         modifier = Modifier.fillMaxWidth().height(48.dp),
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Primary)
@@ -261,7 +279,7 @@ fun InitScreen(
                 3 -> {
                     // M3.3: 触发一次真实初始化；结果由顶部的 LaunchedEffect(initState) 推进到 step 4 或回退。
                     LaunchedEffect(Unit) {
-                        authViewModel.initDevice(password, confirmPassword, bindDevice)
+                        authViewModel.initDevice(phone, password, confirmPassword, bindDevice)
                     }
                     Spacer(Modifier.height(40.dp))
                     CircularProgressIndicator(color = Accent, modifier = Modifier.size(64.dp))

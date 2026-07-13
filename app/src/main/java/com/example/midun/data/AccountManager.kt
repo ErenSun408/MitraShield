@@ -37,10 +37,10 @@ class AccountManager @Inject constructor(
     }
 
     // —— AuthOps 路由（全转发本地后端）——
-    override suspend fun initDevice(password: String, bindDevice: Boolean) =
-        local.initDevice(password, bindDevice)
+    override suspend fun initDevice(phone: String, password: String, bindDevice: Boolean) =
+        local.initDevice(phone, password, bindDevice)
 
-    override suspend fun authenticate(password: String) = local.authenticate(password)
+    override suspend fun authenticate(phone: String, password: String) = local.authenticate(phone, password)
     override fun verifyPassword(password: String) = local.verifyPassword(password)
     override fun logout() = local.logout()
 

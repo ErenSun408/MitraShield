@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.AccountManager
 import com.example.midun.data.model.OperationType
+import com.example.midun.util.PhoneFormat
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,7 +41,11 @@ class AuthViewModel @Inject constructor(
 
     private var loginAttempts = 0
 
-    fun initDevice(password: String, confirmPassword: String, bindDevice: Boolean) {
+    fun initDevice(phone: String, password: String, confirmPassword: String, bindDevice: Boolean) {
+        if (!PhoneFormat.isValidChinaMobile(phone)) {
+            _initState.value = InitState.Error("请输入正确的手机号")
+            return
+        }
         if (password != confirmPassword) {
             _initState.value = InitState.Error("两次密码不一致")
             return
@@ -51,20 +56,20 @@ class AuthViewModel @Inject constructor(
         }
         viewModelScope.launch {
             _initState.value = InitState.Loading
-            accountManager.initDevice(password, bindDevice)
+            accountManager.initDevice(phone, password, bindDevice)
                 .onSuccess { _initState.value = InitState.Success(bindDevice) }
                 .onFailure { _initState.value = InitState.Error(it.message ?: "初始化失败") }
         }
     }
 
-    fun login(password: String) {
+    fun login(phone: String, password: String) {
         if (loginAttempts >= MAX_ATTEMPTS) {
             _loginState.value = LoginState.Error(LOCKOUT_MESSAGE, 0)
             return
         }
         viewModelScope.launch {
             _loginState.value = LoginState.Loading
-            accountManager.authenticate(password)
+            accountManager.authenticate(phone, password)
                 .onSuccess {
                     loginAttempts = 0
                     operationLog.record(OperationType.LOGIN, "密码验证通过，设备ID匹配")

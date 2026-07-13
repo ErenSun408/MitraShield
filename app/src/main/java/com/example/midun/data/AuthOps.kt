@@ -23,11 +23,11 @@ interface AuthOps {
     /** 设备状态流（连接/认证态、设备 ID、绑定、是否已初始化）。 */
     val deviceStatus: StateFlow<DeviceInfo>
 
-    /** 初始化设备：设置登录密码（+ 可选绑定本机）。真卡 = 把默认密码改成用户密码哈希。 */
-    suspend fun initDevice(password: String, bindDevice: Boolean): Result<Unit>
+    /** 初始化账户：注册手机号 + 登录密码（+ 可选绑定本机）。手机号为本地账户标识（NC7），密码经 PBKDF2 存哈希。 */
+    suspend fun initDevice(phone: String, password: String, bindDevice: Boolean): Result<Unit>
 
-    /** 密码认证（登录）。真卡 = `SFOpenDiskEx(diskName, sha256(password))`，打开盘即认证。 */
-    suspend fun authenticate(password: String): Result<Unit>
+    /** 登录认证：校验手机号 + 密码（二者皆对才通过），随后解锁 keystore、载入 DEK。 */
+    suspend fun authenticate(phone: String, password: String): Result<Unit>
 
     /**
      * 校验密码（**不重开盘**）。登录后对敏感操作（改密钥/绑定/一键清理/恢复出厂）二次确认用。

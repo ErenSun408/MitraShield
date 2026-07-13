@@ -56,12 +56,13 @@ class LocalAuthManager @Inject constructor(
      * deviceId = 本机稳定 id。总是成功。
      */
     suspend fun connect(): Result<Unit> = withContext(Dispatchers.IO) {
-        val initialized = readAuth() != null
+        val record = readAuth()
         _deviceStatus.value = DeviceInfo(
-            isInitialized = initialized,
+            isInitialized = record != null,
             deviceId = identity.deviceId(),
             status = SessionStatus.CONNECTED,
-            boundPhoneId = readBoundId()
+            boundPhoneId = readBoundId(),
+            registeredPhone = record?.phone
         )
         Result.success(Unit)
     }
@@ -70,11 +71,11 @@ class LocalAuthManager @Inject constructor(
      * 初始化：写登录凭证 `.auth`（PBKDF2 盐+哈希）、生成并落盘 keystore（硬件 KEK 包裹全新 DEK）、可选绑定本机。
      * 完成后 lock keystore + 清会话（回「已初始化、未认证」态），登录时再解锁——与真卡「init 后关盘、登录重开」对齐。
      */
-    override suspend fun initDevice(password: String, bindDevice: Boolean): Result<Unit> =
+    override suspend fun initDevice(phone: String, password: String, bindDevice: Boolean): Result<Unit> =
         withContext(Dispatchers.IO) {
             val salt = ByteArray(SALT_BYTES).also { SecureRandom().nextBytes(it) }
             val hash = pbkdf2(password, salt)
-            if (!writeAuth(salt, hash)) {
+            if (!writeAuth(phone, salt, hash)) {
                 return@withContext Result.failure(IllegalStateException("初始化写入失败，请重试"))
             }
             // keystore：生成全新 DEK/KEK，原始 blob 落盘。失败必须让 init 失败——否则留下「已初始化却无 keystore」。
@@ -90,7 +91,8 @@ class LocalAuthManager @Inject constructor(
                 isInitialized = true,
                 status = SessionStatus.CONNECTED,
                 deviceId = identity.deviceId(),
-                boundPhoneId = boundId
+                boundPhoneId = boundId,
+                registeredPhone = phone
             )
             Result.success(Unit)
         }
@@ -99,11 +101,13 @@ class LocalAuthManager @Inject constructor(
      * 认证（登录）：校验 PBKDF2 密码哈希 → 载入 keystore 解出 DEK → 绑定校验 → 退出自动清理补清 → AUTHENTICATED。
      * keystore 缺失/损坏 → 拒登，不静默跑明文。
      */
-    override suspend fun authenticate(password: String): Result<Unit> = withContext(Dispatchers.IO) {
+    override suspend fun authenticate(phone: String, password: String): Result<Unit> = withContext(Dispatchers.IO) {
         val record = readAuth()
             ?: return@withContext Result.failure(IllegalStateException("尚未初始化"))
-        if (!constantTimeEquals(pbkdf2(password, record.salt), record.hash)) {
-            return@withContext Result.failure(IllegalStateException("密码错误"))
+        // 手机号 + 密码任一不符都回同一条模糊提示，不泄露「是手机号错还是密码错」。
+        val passwordOk = constantTimeEquals(pbkdf2(password, record.salt), record.hash)
+        if (phone != record.phone || !passwordOk) {
+            return@withContext Result.failure(IllegalStateException("手机号或密码错误"))
         }
         val boundId = readBoundId()
         if (boundId != null && boundId != androidId()) {
@@ -209,29 +213,34 @@ class LocalAuthManager @Inject constructor(
         _deviceStatus.value = _deviceStatus.value.copy(totalBytes = total, freeBytes = free)
     }
 
-    // —— 凭证 `.auth` 读写（PBKDF2 盐 + 哈希，原始字节；`.` 前缀根级文件不加密）——
+    // —— 凭证 `.auth` 读写（NC7：JSON `{phone, salt(hex), hash(hex), iters}`；`.` 前缀根级文件不加密）——
+    // 手机号明存（非秘密，仅本地账户标识）；密码经 PBKDF2 存盐+哈希，绝不明存密码。旧 53 字节二进制格式
+    // 无迁移（预发布）——parse 失败即视为未初始化，走初始化向导重建。
 
-    private data class AuthRecord(val salt: ByteArray, val hash: ByteArray)
+    private data class AuthRecord(val phone: String, val salt: ByteArray, val hash: ByteArray)
 
-    private fun writeAuth(salt: ByteArray, hash: ByteArray): Boolean {
-        val blob = ByteArray(AUTH_MAGIC.size + 1 + SALT_BYTES + HASH_BYTES)
-        System.arraycopy(AUTH_MAGIC, 0, blob, 0, AUTH_MAGIC.size)
-        blob[AUTH_MAGIC.size] = AUTH_VERSION
-        System.arraycopy(salt, 0, blob, AUTH_MAGIC.size + 1, SALT_BYTES)
-        System.arraycopy(hash, 0, blob, AUTH_MAGIC.size + 1 + SALT_BYTES, HASH_BYTES)
-        return fileSystem.writeFile(AUTH_PATH, blob.inputStream()).isSuccess
+    private fun writeAuth(phone: String, salt: ByteArray, hash: ByteArray): Boolean {
+        val json = JSONObject()
+            .put("v", AUTH_VERSION.toInt())
+            .put("phone", phone)
+            .put("salt", toHex(salt))
+            .put("hash", toHex(hash))
+            .put("iters", PBKDF2_ITERS)
+            .toString()
+        return fileSystem.writeFile(AUTH_PATH, json.byteInputStream()).isSuccess
     }
 
     private fun readAuth(): AuthRecord? {
         val out = ByteArrayOutputStream()
         if (fileSystem.readFile(AUTH_PATH, out).isFailure) return null
-        val blob = out.toByteArray()
-        val expected = AUTH_MAGIC.size + 1 + SALT_BYTES + HASH_BYTES
-        if (blob.size != expected) return null
-        if (!AUTH_MAGIC.indices.all { blob[it] == AUTH_MAGIC[it] } || blob[AUTH_MAGIC.size] != AUTH_VERSION) return null
-        val salt = blob.copyOfRange(AUTH_MAGIC.size + 1, AUTH_MAGIC.size + 1 + SALT_BYTES)
-        val hash = blob.copyOfRange(AUTH_MAGIC.size + 1 + SALT_BYTES, expected)
-        return AuthRecord(salt, hash)
+        return runCatching {
+            val o = JSONObject(out.toString(Charsets.UTF_8.name()))
+            val phone = o.getString("phone")
+            val salt = fromHex(o.getString("salt"))
+            val hash = fromHex(o.getString("hash"))
+            if (phone.isEmpty() || salt.isEmpty() || hash.isEmpty()) return null
+            AuthRecord(phone, salt, hash)
+        }.getOrNull()
     }
 
     // —— 绑定 `.bind` / 退出偏好 `.midun_exitclear.json` ——
@@ -273,6 +282,12 @@ class LocalAuthManager @Inject constructor(
     /** 恒定时间比较（防哈希比对时序侧信道）。 */
     private fun constantTimeEquals(a: ByteArray, b: ByteArray): Boolean = MessageDigest.isEqual(a, b)
 
+    private fun toHex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
+
+    private fun fromHex(hex: String): ByteArray =
+        runCatching { ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(16).toByte() } }
+            .getOrDefault(ByteArray(0))
+
     private companion object {
         const val AUTH_PATH = "0:/.midun_auth"
         const val BIND_PATH = "0:/.bind"
@@ -280,7 +295,6 @@ class LocalAuthManager @Inject constructor(
         const val OPLOG_SIDECAR = "0:/.midun_oplog.json"
         const val EXITCLEAR_PATH = "0:/.midun_exitclear.json"
 
-        val AUTH_MAGIC = byteArrayOf('M'.code.toByte(), 'D'.code.toByte(), 'A'.code.toByte(), '1'.code.toByte())
         const val AUTH_VERSION: Byte = 1
         const val SALT_BYTES = 16
         const val HASH_BYTES = 32

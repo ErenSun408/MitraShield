@@ -33,6 +33,7 @@ fun LoginScreen(
     authViewModel: AuthViewModel = hiltViewModel(),
     deviceViewModel: DeviceViewModel = hiltViewModel()
 ) {
+    var phone by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var showForgotDialog by remember { mutableStateOf(false) }
@@ -45,8 +46,12 @@ fun LoginScreen(
 
     val context = LocalContext.current
     val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
-    // 真实数据：安全卡 SN（真卡=SFDiskGetSN）+ 本机 ANDROID_ID（绑定标识），替换原写死占位。
     val phoneId = remember { Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "未知" }
+
+    // 预填注册手机号（NC7）：connect() 读出的 registeredPhone 到达后填入，不覆盖用户已输入的内容。
+    LaunchedEffect(deviceStatus.registeredPhone) {
+        if (phone.isEmpty()) deviceStatus.registeredPhone?.let { phone = it }
+    }
 
     LaunchedEffect(loginState) {
         if (loginState is AuthViewModel.LoginState.Success) onLoginSuccess()
@@ -94,8 +99,24 @@ fun LoginScreen(
             ) {
                 Text("安全登录", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
-                Text("密码经SHA256加密传输至设备验证", fontSize = 12.sp, color = TextSecondary)
+                Text("手机号 + 密码登录本机账户", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(24.dp))
+
+                OutlinedTextField(
+                    value = phone,
+                    onValueChange = { if (it.length <= 11 && it.all { c -> c.isDigit() }) phone = it },
+                    label = { Text("手机号") },
+                    leadingIcon = { Icon(Icons.Default.PhoneAndroid, null) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                        imeAction = ImeAction.Next
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                Spacer(Modifier.height(12.dp))
 
                 OutlinedTextField(
                     value = password,
@@ -122,7 +143,7 @@ fun LoginScreen(
                         }
                     } else null,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { authViewModel.login(password) }),
+                    keyboardActions = KeyboardActions(onDone = { authViewModel.login(phone, password) }),
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp),
                     singleLine = true
@@ -131,8 +152,8 @@ fun LoginScreen(
                 Spacer(Modifier.height(20.dp))
 
                 Button(
-                    onClick = { authViewModel.login(password) },
-                    enabled = password.isNotEmpty() && !isLoading && error?.attemptsLeft != 0,
+                    onClick = { authViewModel.login(phone, password) },
+                    enabled = phone.isNotEmpty() && password.isNotEmpty() && !isLoading && error?.attemptsLeft != 0,
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Primary)
