@@ -3,7 +3,7 @@ package com.example.midun.data.local
 import android.content.Context
 import android.provider.Settings
 import com.example.midun.data.ExitClearPrefs
-import com.example.midun.data.UsbCardOps
+import com.example.midun.data.AuthOps
 import com.example.midun.data.model.DeviceInfo
 import com.example.midun.data.model.SessionStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -23,7 +23,7 @@ import org.json.JSONObject
 
 /**
  * 无卡版认证/生命周期管理器（NC2.1）。真卡版 [com.example.midun.data.real.RealUsbManager] 的纯软件孪生，
- * 实现 [UsbCardOps]，由 [com.example.midun.data.SecurityCardManager] 门面路由。
+ * 实现 [AuthOps]，由 [com.example.midun.data.SecurityCardManager] 门面路由。
  *
  * **无「插卡/开盘」概念**：真卡登录 = `SFOpenDiskEx(密码)` 开隐藏盘（密码即开盘凭证）。无卡把它拆成两件独立的事：
  * - **登录门禁**：密码经 PBKDF2 派生哈希存 `.auth`；[authenticate] 比对哈希放行（防他人在已解锁的手机上进 App）。
@@ -42,7 +42,7 @@ class LocalAuthManager @Inject constructor(
     private val fileSystem: LocalFileSystem,
     private val keystore: LocalKeystore,
     private val identity: LocalDeviceIdentity
-) : UsbCardOps {
+) : AuthOps {
 
     private val _deviceStatus = MutableStateFlow(DeviceInfo())
     override val deviceStatus: StateFlow<DeviceInfo> = _deviceStatus.asStateFlow()

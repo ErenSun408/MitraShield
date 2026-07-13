@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
- * 账户/会话门面（无卡版）。把 [UsbCardOps] 业务方法 / 设备状态统一转发到纯软件后端 [LocalAuthManager]，
+ * 账户/会话门面（无卡版）。把 [AuthOps] 业务方法 / 设备状态统一转发到纯软件后端 [LocalAuthManager]，
  * 并在 wipe 成功后清共享聊天/日志仓库（本地文件清在 [LocalAuthManager]）。
  *
  * **无插拔**：无卡设备恒在，本类在构造时 [LocalAuthManager.connect] 一次，把状态从 DISCONNECTED 直接置
@@ -25,7 +25,7 @@ class SecurityCardManager @Inject constructor(
     // wipe 成功后清共享聊天/日志仓库（清本地侧车 / 内存明文）。
     private val chatRepo: ChatRepository,
     private val operationLog: OperationLogRepository
-) : UsbCardOps {
+) : AuthOps {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -36,7 +36,7 @@ class SecurityCardManager @Inject constructor(
         scope.launch { local.connect() }
     }
 
-    // —— UsbCardOps 路由（全转发本地后端）——
+    // —— AuthOps 路由（全转发本地后端）——
     override suspend fun initDevice(password: String, bindDevice: Boolean) =
         local.initDevice(password, bindDevice)
 
