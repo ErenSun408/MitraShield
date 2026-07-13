@@ -78,7 +78,15 @@
 | `UsbDeviceStatus`（类型名） | `SessionStatus` |
 | `CardFileDataSource` | `VaultFileDataSource` |
 
-### NC7 — 装机冒烟（模拟器 + 真机双机）
+### NC7 — 手机号登录（方案 A：本地手机号当用户名，无服务器）
+> 决策 2026-07-13：客户只要「更熟悉的登录体验」+ **不要服务器、保持纯本地**。手机号仅是本地登录标签，
+> **不改**加密/P2P/硬件 KEK。放在 NC6 重命名之后做（避免撞车）。
+- **NC7.1** `.auth` 升级为 JSON `{phone, salt, hash, iters}`（手机号明存、非秘密；密码仍 PBKDF2）；`LocalAuthManager`（`AccountManager` 后端）init/authenticate 加 phone 参、存/验手机号（错误统一提示「手机号或密码错误」）。旧 53 字节二进制 `.auth` 无迁移（预发布，已建账户重置或重装）。
+- **NC7.2** `AuthViewModel` init/authenticate 加 phone 参；`InitScreen` 加手机号输入框 + **国内 11 位校验**（`1[3-9]\d{9}`）。
+- **NC7.3** `LoginScreen`：手机号字段**预填**注册号（可改）+ 密码；两者都对才放行。
+- **诚实边界**（UI 不吹）：无短信验证、换机/重装=新账户、忘密码仍只能恢复出厂。不做二维码显示名。
+
+### NC8 — 装机冒烟（模拟器 + 真机双机）
 - 两机 P2P 建联、文本/文件/语音收发、阅后即焚、视频预览、导入/导出加密容器、恢复出厂/一键清理/退出自动清理、Android Keystore 在无 StrongBox 机型的降级路径
 
 ## 4. 关注点 / 风险
