@@ -24,7 +24,7 @@ data class ChatSnapshot(
  * 与消息序列化为隐藏区侧车 [CHAT_PATH] 的 JSON，使聊天跨会话留存于安全卡。
  *
  * 活动条件 / 依赖选型同 [OperationLogStore]：判据 = [LocalAuthManager] AUTHENTICATED（已登录 + DEK 解锁）。
- * 依赖 `LocalAuthManager` 叶子而非 `SecurityCardManager`（后者注入 [ChatRepository]→本类，注入会成 DI 环）。
+ * 依赖 `LocalAuthManager` 叶子而非 `AccountManager`（后者注入 [ChatRepository]→本类，注入会成 DI 环）。
  * 未认证态下 [load] 回 null、[save] no-op（仅内存）。
  */
 @Singleton

@@ -64,7 +64,7 @@ class OperationLogRepository @Inject constructor(
         persist()
     }
 
-    /** 清空日志。由一键清理 / 恢复出厂触发（SecurityCardManager.wipeUserData / wipeAll）。 */
+    /** 清空日志。由一键清理 / 恢复出厂触发（AccountManager.wipeUserData / wipeAll）。 */
     fun clear() {
         _logs.value = emptyList()
         persist()

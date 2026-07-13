@@ -10,14 +10,14 @@ import javax.inject.Singleton
 
 /**
  * 隐私文件系统门面（无卡版）。App 面向纯软件本地隐私库 [LocalFileSystem]；本类统一转发 [FileSystemOps] 调用，
- * 并在增删后经 [SecurityCardManager] 刷新「已用空间」。
+ * 并在增删后经 [AccountManager] 刷新「已用空间」。
  *
  * 历史：真卡版转发到 `RealFileSystem`（FSShell 隐藏区）；bobo-nocard 收成本地单路径。
  */
 @Singleton
 class FileRepository @Inject constructor(
     private val local: LocalFileSystem,
-    private val cardManager: SecurityCardManager,
+    private val accountManager: AccountManager,
     private val stagingStore: StagingStore
 ) : FileSystemOps {
 
@@ -34,7 +34,7 @@ class FileRepository @Inject constructor(
         isCancelled: () -> Boolean,
         onProgress: (written: Long) -> Unit
     ) = local.importFile(folderId, fileName, size, openStream, isCancelled, onProgress)
-        .also { cardManager.refreshCapacity() } // 导入后刷新「已用空间」（取消时半成品已删，刷新也对）
+        .also { accountManager.refreshCapacity() } // 导入后刷新「已用空间」（取消时半成品已删，刷新也对）
 
     override suspend fun exportFile(
         fileId: String,
@@ -68,11 +68,11 @@ class FileRepository @Inject constructor(
 
     // 删除类操作后刷新「已用空间」（释放了本地空间）。
     override suspend fun deleteFile(fileId: String) =
-        local.deleteFile(fileId).also { cardManager.refreshCapacity() }
+        local.deleteFile(fileId).also { accountManager.refreshCapacity() }
     override suspend fun deleteAllFilesInFolder(folderId: String) =
-        local.deleteAllFilesInFolder(folderId).also { cardManager.refreshCapacity() }
+        local.deleteAllFilesInFolder(folderId).also { accountManager.refreshCapacity() }
     override suspend fun deleteFolder(folderId: String) =
-        local.deleteFolder(folderId).also { cardManager.refreshCapacity() }
+        local.deleteFolder(folderId).also { accountManager.refreshCapacity() }
     override suspend fun renameFolder(folderId: String, newName: String) = local.renameFolder(folderId, newName)
     override suspend fun renameFile(fileId: String, newName: String) = local.renameFile(fileId, newName)
 

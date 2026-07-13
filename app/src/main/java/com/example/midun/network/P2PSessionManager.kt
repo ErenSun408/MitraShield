@@ -2,7 +2,7 @@ package com.example.midun.network
 
 import android.util.Base64
 import com.example.midun.data.FileCachePaths
-import com.example.midun.data.SecurityCardManager
+import com.example.midun.data.AccountManager
 import com.example.midun.data.ChatRepository
 import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.local.LocalFileSystem
@@ -67,7 +67,7 @@ import org.json.JSONObject
 class P2PSessionManager @Inject constructor(
     private val chatRepo: ChatRepository,
     private val operationLog: OperationLogRepository,
-    private val cardManager: SecurityCardManager,
+    private val accountManager: AccountManager,
     // 文件收发暂存（`.recv_`/`.sent_`）：经 StagingStore 落本地隐私库 vault 根级隐藏文件。
     private val stagingStore: StagingStore,
     // 把暂存复制进隐私文件夹（saveReceivedFile）：暂存与隐私库同在 vault → copyWithinCard 无需跨区。
@@ -139,7 +139,7 @@ class P2PSessionManager @Inject constructor(
      * 标识」；未认证 / 读取失败回退 [fallbackSn]。每次取用即读，避免认证前后过期。
      */
     private fun currentDeviceSn(): String =
-        cardManager.realSerialNumber()?.takeIf { it.isNotBlank() } ?: fallbackSn
+        accountManager.realSerialNumber()?.takeIf { it.isNotBlank() } ?: fallbackSn
 
     /** A 侧临时密钥对：generateConnectionInfo 生成、startListening 握手时消费。 */
     private var listenerKeyPair: KeyPair? = null

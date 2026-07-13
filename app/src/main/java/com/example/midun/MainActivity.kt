@@ -16,7 +16,7 @@ import dagger.hilt.android.AndroidEntryPoint
 
 /**
  * 应用入口（无卡版）。无安全卡 = 无 USB 插拔、无「等待插卡」中间态：账户门面在启动时即
- * [com.example.midun.data.SecurityCardManager] `connect()`，状态直达 CONNECTED，Splash 据本地 `.auth`
+ * [com.example.midun.data.AccountManager] `connect()`，状态直达 CONNECTED，Splash 据本地 `.auth`
  * 是否存在路由到登录 / 初始化。故本 Activity 只保留防截屏、前后台自动锁定钩子，并始终渲染 NavGraph。
  *
  * 历史：真卡版在此注册 USB 广播、按卡插拔渲染 NavGraph / 显 `UsbDisconnectedOverlay` 等待遮罩——

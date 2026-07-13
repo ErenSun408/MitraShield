@@ -20,7 +20,7 @@ import kotlinx.coroutines.launch
  * 历史：真卡版路由到 `RealUsbManager`（FSShell 开盘=认证）；bobo-nocard 收成纯软件单路径。
  */
 @Singleton
-class SecurityCardManager @Inject constructor(
+class AccountManager @Inject constructor(
     private val local: LocalAuthManager,
     // wipe 成功后清共享聊天/日志仓库（清本地侧车 / 内存明文）。
     private val chatRepo: ChatRepository,

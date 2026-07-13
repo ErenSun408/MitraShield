@@ -4,7 +4,7 @@ import android.hardware.usb.UsbDevice
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.ExitClearPrefs
-import com.example.midun.data.SecurityCardManager
+import com.example.midun.data.AccountManager
 import com.example.midun.data.SettingsStore
 import com.example.midun.data.ChatRepository
 import com.example.midun.data.model.SessionStatus
@@ -22,7 +22,7 @@ import kotlinx.coroutines.launch
 
 @HiltViewModel
 class DeviceViewModel @Inject constructor(
-    private val cardManager: SecurityCardManager,
+    private val accountManager: AccountManager,
     private val settingsStore: SettingsStore,
     private val chatRepository: ChatRepository
 ) : ViewModel() {
@@ -37,7 +37,7 @@ class DeviceViewModel @Inject constructor(
         viewModelScope.launch { onResult(chatRepository.clearCache()) }
     }
 
-    val deviceStatus = cardManager.deviceStatus
+    val deviceStatus = accountManager.deviceStatus
 
     val isUsbConnected: StateFlow<Boolean> = deviceStatus.map {
         it.status != SessionStatus.DISCONNECTED
@@ -55,7 +55,7 @@ class DeviceViewModel @Inject constructor(
         viewModelScope.launch {
             deviceStatus.collect {
                 if (it.status == SessionStatus.AUTHENTICATED) {
-                    _exitClearPrefs.value = cardManager.getExitClearPrefs()
+                    _exitClearPrefs.value = accountManager.getExitClearPrefs()
                 }
             }
         }
@@ -74,27 +74,27 @@ class DeviceViewModel @Inject constructor(
         onSuccess: () -> Unit, onError: (String) -> Unit
     ) {
         viewModelScope.launch {
-            if (enabling && (password == null || !cardManager.verifyPassword(password))) {
+            if (enabling && (password == null || !accountManager.verifyPassword(password))) {
                 onError("密码错误")
                 return@launch
             }
-            cardManager.setExitClearPrefs(target)
+            accountManager.setExitClearPrefs(target)
                 .onSuccess { _exitClearPrefs.value = target; onSuccess() }
                 .onFailure { onError(it.message ?: "设置失败") }
         }
     }
 
     fun onUsbAttached(device: UsbDevice?) {
-        cardManager.onUsbAttached()
+        accountManager.onUsbAttached()
     }
 
     fun onUsbDetached() {
-        cardManager.onUsbDetached()
+        accountManager.onUsbDetached()
         clearSensitiveMemory()
     }
 
     fun logout() {
-        cardManager.logout()
+        accountManager.logout()
     }
 
     /**
@@ -104,7 +104,7 @@ class DeviceViewModel @Inject constructor(
      */
     fun wipeAndReset(onComplete: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            cardManager.wipeAll()
+            accountManager.wipeAll()
                 .onSuccess { onComplete() }
                 .onFailure { onError(it.message ?: "恢复出厂失败") }
         }
@@ -117,8 +117,8 @@ class DeviceViewModel @Inject constructor(
      */
     fun wipeUserData(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            if (cardManager.verifyPassword(password)) {
-                cardManager.wipeUserData()
+            if (accountManager.verifyPassword(password)) {
+                accountManager.wipeUserData()
                 onSuccess()
             } else onError("密码错误")
         }
@@ -131,11 +131,11 @@ class DeviceViewModel @Inject constructor(
      */
     fun factoryReset(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            if (!cardManager.verifyPassword(password)) {
+            if (!accountManager.verifyPassword(password)) {
                 onError("密码错误")
                 return@launch
             }
-            cardManager.wipeAll()
+            accountManager.wipeAll()
                 .onSuccess { onSuccess() }
                 .onFailure { onError(it.message ?: "恢复出厂失败") }
         }
@@ -147,35 +147,35 @@ class DeviceViewModel @Inject constructor(
      */
     fun updateBinding(password: String, bind: Boolean, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            if (!cardManager.verifyPassword(password)) {
+            if (!accountManager.verifyPassword(password)) {
                 onError("密码错误")
                 return@launch
             }
-            cardManager.updateBinding(bind)
+            accountManager.updateBinding(bind)
                 .onSuccess { onSuccess() }
                 .onFailure { onError(it.message ?: (if (bind) "绑定失败" else "解绑失败")) }
         }
     }
 
     /**
-     * 密钥更新（M12.6）：校验密码 → App 层 KEK 轮换（[SecurityCardManager.updateKey] 重生成 KEK 重包不变的
+     * 密钥更新（M12.6）：校验密码 → App 层 KEK 轮换（[AccountManager.updateKey] 重生成 KEK 重包不变的
      * DEK、覆盖卡内 keystore）→ 按 **Result 分流**。修掉旧实现「吞掉 Result、密码对就无条件报成功」的假实现：
      * 轮换失败（盘问题/写卡失败）如实报错，不再对用户撒谎。
      */
     fun updateKey(password: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
-            if (!cardManager.verifyPassword(password)) {
+            if (!accountManager.verifyPassword(password)) {
                 onError("密码错误")
                 return@launch
             }
-            cardManager.updateKey()
+            accountManager.updateKey()
                 .onSuccess { onSuccess() }
                 .onFailure { onError(it.message ?: "密钥更新失败") }
         }
     }
 
     /**
-     * 拔卡敏感数据清理（M11.6.3）：真卡 `SFCloseDisk` 已由 `cardManager.onUsbDetached()`→`real.closeDevice()`
+     * 拔卡敏感数据清理（M11.6.3）：真卡 `SFCloseDisk` 已由 `accountManager.onUsbDetached()`→`real.closeDevice()`
      * 完成；内存明文（聊天/操作日志）清理由各仓库响应式监听 `deviceStatus` 离开 AUTHENTICATED 自动处理。
      * 此处保留为额外的进程内敏感态清理挂钩（当前无新增项）。
      */
@@ -196,7 +196,7 @@ class DeviceViewModel @Inject constructor(
         inactivityJob?.cancel()
         inactivityJob = viewModelScope.launch {
             delay(inactivityTimeoutMinutes.value * 60_000L)
-            cardManager.logout()
+            accountManager.logout()
         }
     }
 

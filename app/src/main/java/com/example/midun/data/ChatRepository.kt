@@ -396,7 +396,7 @@ class ChatRepository @Inject constructor(
         persist()
     }
 
-    /** 整卡擦除时调用：清空所有联系人与消息。由 SecurityCardManager.wipeAll()/wipeUserData() 统一触发。 */
+    /** 整卡擦除时调用：清空所有联系人与消息。由 AccountManager.wipeAll()/wipeUserData() 统一触发。 */
     fun clear() {
         contacts.clear()
         messages.clear()

@@ -16,7 +16,7 @@ import org.json.JSONObject
  * 序列化为隐藏区侧车 [LOG_PATH] 的 JSON，使日志跨会话/重启留存于安全卡。
  *
  * **活动条件 = [LocalAuthManager] 认证态**：已登录 + DEK 解锁即 AUTHENTICATED，是「隐私库可读写」的精确判据。
- * **有意不注入 `SecurityCardManager`**——它注入 [OperationLogRepository]→本类，注入会成 DI 环；
+ * **有意不注入 `AccountManager`**——它注入 [OperationLogRepository]→本类，注入会成 DI 环；
  * `LocalAuthManager` 是叶子、无环。未认证态下 [load] 回 null、[save] no-op（仅内存）。
  */
 @Singleton

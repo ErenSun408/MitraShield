@@ -16,7 +16,7 @@ data class ExitClearPrefs(
 )
 
 /**
- * USB 安全卡业务操作接口（M11.3）。由 `RealUsbManager`（真卡 FSShell）实现，`SecurityCardManager`
+ * USB 安全卡业务操作接口（M11.3）。由 `RealUsbManager`（真卡 FSShell）实现，`AccountManager`
  * facade 转发到它。USB 连接靠系统插拔广播 + `RealUsbManager.connectUsb`（非接口方法）。
  */
 interface AuthOps {

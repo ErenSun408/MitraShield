@@ -3,7 +3,7 @@ package com.example.midun.viewmodel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.OperationLogRepository
-import com.example.midun.data.SecurityCardManager
+import com.example.midun.data.AccountManager
 import com.example.midun.data.model.OperationType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
 
 @HiltViewModel
 class AuthViewModel @Inject constructor(
-    private val cardManager: SecurityCardManager,
+    private val accountManager: AccountManager,
     private val operationLog: OperationLogRepository
 ) : ViewModel() {
 
@@ -51,7 +51,7 @@ class AuthViewModel @Inject constructor(
         }
         viewModelScope.launch {
             _initState.value = InitState.Loading
-            cardManager.initDevice(password, bindDevice)
+            accountManager.initDevice(password, bindDevice)
                 .onSuccess { _initState.value = InitState.Success(bindDevice) }
                 .onFailure { _initState.value = InitState.Error(it.message ?: "初始化失败") }
         }
@@ -64,7 +64,7 @@ class AuthViewModel @Inject constructor(
         }
         viewModelScope.launch {
             _loginState.value = LoginState.Loading
-            cardManager.authenticate(password)
+            accountManager.authenticate(password)
                 .onSuccess {
                     loginAttempts = 0
                     operationLog.record(OperationType.LOGIN, "密码验证通过，设备ID匹配")
