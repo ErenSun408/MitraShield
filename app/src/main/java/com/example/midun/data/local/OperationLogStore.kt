@@ -2,7 +2,7 @@ package com.example.midun.data.local
 
 import com.example.midun.data.model.OperationLog
 import com.example.midun.data.model.OperationType
-import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.model.SessionStatus
 import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -25,7 +25,7 @@ class OperationLogStore @Inject constructor(
     private val auth: LocalAuthManager
 ) {
     private fun active(): Boolean =
-        auth.deviceStatus.value.status == UsbDeviceStatus.AUTHENTICATED
+        auth.deviceStatus.value.status == SessionStatus.AUTHENTICATED
 
     /** 从本地隐私库读历史日志；非活动态回 null（调用方保留内存）；文件不存在视为空列表。 */
     suspend fun load(): List<OperationLog>? = withContext(Dispatchers.IO) {

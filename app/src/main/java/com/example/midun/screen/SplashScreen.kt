@@ -17,7 +17,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavController
-import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.model.SessionStatus
 import com.example.midun.navigation.Screen
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.DeviceViewModel
@@ -51,10 +51,10 @@ fun SplashScreen(
         if (!animationDone) return@LaunchedEffect
         val target = when {
             // 启动瞬间账户门面 connect() 尚未完成（DISCONNECTED）→ 停留本页，等状态到 CONNECTED 再路由。
-            deviceStatus.status == UsbDeviceStatus.DISCONNECTED ||
-                deviceStatus.status == UsbDeviceStatus.CONNECTING -> null
+            deviceStatus.status == SessionStatus.DISCONNECTED ||
+                deviceStatus.status == SessionStatus.CONNECTING -> null
             !deviceStatus.isInitialized -> Screen.Init.route
-            deviceStatus.status == UsbDeviceStatus.AUTHENTICATED -> Screen.Main.route
+            deviceStatus.status == SessionStatus.AUTHENTICATED -> Screen.Main.route
             else -> Screen.Login.route
         }
         if (target != null) {

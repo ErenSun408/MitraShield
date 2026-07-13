@@ -4,7 +4,7 @@ import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
-import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.model.SessionStatus
 import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -33,7 +33,7 @@ class ChatStore @Inject constructor(
     private val auth: LocalAuthManager
 ) {
     private fun active(): Boolean =
-        auth.deviceStatus.value.status == UsbDeviceStatus.AUTHENTICATED
+        auth.deviceStatus.value.status == SessionStatus.AUTHENTICATED
 
     suspend fun load(): ChatSnapshot? = withContext(Dispatchers.IO) {
         if (!active()) return@withContext null

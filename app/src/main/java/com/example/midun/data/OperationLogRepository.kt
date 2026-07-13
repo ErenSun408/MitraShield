@@ -2,7 +2,7 @@ package com.example.midun.data
 
 import com.example.midun.data.model.OperationLog
 import com.example.midun.data.model.OperationType
-import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.model.SessionStatus
 import com.example.midun.data.local.LocalAuthManager
 import com.example.midun.data.local.OperationLogStore
 import javax.inject.Inject
@@ -43,7 +43,7 @@ class OperationLogRepository @Inject constructor(
         scope.launch {
             var wasAuthed = false
             authManager.deviceStatus
-                .map { it.status == UsbDeviceStatus.AUTHENTICATED }
+                .map { it.status == SessionStatus.AUTHENTICATED }
                 .distinctUntilChanged()
                 .collect { authed ->
                     if (authed) {

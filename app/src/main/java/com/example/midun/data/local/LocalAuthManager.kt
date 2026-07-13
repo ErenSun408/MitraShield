@@ -5,7 +5,7 @@ import android.provider.Settings
 import com.example.midun.data.ExitClearPrefs
 import com.example.midun.data.UsbCardOps
 import com.example.midun.data.model.DeviceInfo
-import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.model.SessionStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
@@ -60,7 +60,7 @@ class LocalAuthManager @Inject constructor(
         _deviceStatus.value = DeviceInfo(
             isInitialized = initialized,
             deviceId = identity.deviceId(),
-            status = UsbDeviceStatus.CONNECTED,
+            status = SessionStatus.CONNECTED,
             boundPhoneId = readBoundId()
         )
         Result.success(Unit)
@@ -88,7 +88,7 @@ class LocalAuthManager @Inject constructor(
             session = null
             _deviceStatus.value = _deviceStatus.value.copy(
                 isInitialized = true,
-                status = UsbDeviceStatus.CONNECTED,
+                status = SessionStatus.CONNECTED,
                 deviceId = identity.deviceId(),
                 boundPhoneId = boundId
             )
@@ -120,7 +120,7 @@ class LocalAuthManager @Inject constructor(
         if (exitClear.clearFiles) fileSystem.clear()
         val (total, free) = capacity()
         _deviceStatus.value = _deviceStatus.value.copy(
-            status = UsbDeviceStatus.AUTHENTICATED,
+            status = SessionStatus.AUTHENTICATED,
             deviceId = identity.deviceId(),
             totalBytes = total,
             freeBytes = free,
@@ -139,7 +139,7 @@ class LocalAuthManager @Inject constructor(
     override fun logout() {
         keystore.lock()
         session = null
-        _deviceStatus.value = _deviceStatus.value.copy(status = UsbDeviceStatus.CONNECTED)
+        _deviceStatus.value = _deviceStatus.value.copy(status = SessionStatus.CONNECTED)
     }
 
     /**
@@ -155,7 +155,7 @@ class LocalAuthManager @Inject constructor(
         session = null
         _deviceStatus.value = DeviceInfo(
             isInitialized = false,
-            status = UsbDeviceStatus.CONNECTED,
+            status = SessionStatus.CONNECTED,
             deviceId = identity.deviceId()
         )
         Result.success(Unit)
@@ -178,7 +178,7 @@ class LocalAuthManager @Inject constructor(
 
     /** 密钥更新：轮换硬件 KEK 重包不变的 DEK，安全覆盖 keystore blob。DEK 不变 → 文件不丢。需已认证。 */
     override suspend fun updateKey(): Result<Unit> = withContext(Dispatchers.IO) {
-        if (_deviceStatus.value.status != UsbDeviceStatus.AUTHENTICATED) {
+        if (_deviceStatus.value.status != SessionStatus.AUTHENTICATED) {
             return@withContext Result.failure(IllegalStateException("请先登录后再更新密钥"))
         }
         val blob = keystore.rewrap()
@@ -204,7 +204,7 @@ class LocalAuthManager @Inject constructor(
 
     /** 文件增删后刷新「已用空间」（重读手机存储容量）。仅已认证时有效。 */
     fun refreshCapacity() {
-        if (_deviceStatus.value.status != UsbDeviceStatus.AUTHENTICATED) return
+        if (_deviceStatus.value.status != SessionStatus.AUTHENTICATED) return
         val (total, free) = capacity()
         _deviceStatus.value = _deviceStatus.value.copy(totalBytes = total, freeBytes = free)
     }

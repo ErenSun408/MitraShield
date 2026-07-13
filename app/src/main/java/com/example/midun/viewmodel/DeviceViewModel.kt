@@ -7,7 +7,7 @@ import com.example.midun.data.ExitClearPrefs
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.SettingsStore
 import com.example.midun.data.ChatRepository
-import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.model.SessionStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -40,11 +40,11 @@ class DeviceViewModel @Inject constructor(
     val deviceStatus = cardManager.deviceStatus
 
     val isUsbConnected: StateFlow<Boolean> = deviceStatus.map {
-        it.status != UsbDeviceStatus.DISCONNECTED
+        it.status != SessionStatus.DISCONNECTED
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val isAuthenticated: StateFlow<Boolean> = deviceStatus.map {
-        it.status == UsbDeviceStatus.AUTHENTICATED
+        it.status == SessionStatus.AUTHENTICATED
     }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // 退出自动清理偏好（卡内持久，下次登录补清）：认证成功后从卡加载当前值供设置页显示。
@@ -54,7 +54,7 @@ class DeviceViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             deviceStatus.collect {
-                if (it.status == UsbDeviceStatus.AUTHENTICATED) {
+                if (it.status == SessionStatus.AUTHENTICATED) {
                     _exitClearPrefs.value = cardManager.getExitClearPrefs()
                 }
             }

@@ -26,7 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.data.model.OperationType
-import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.model.SessionStatus
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
 import com.example.midun.util.formatStorage
@@ -64,8 +64,8 @@ fun HomeScreen(
     val contacts by chatViewModel.contacts.collectAsState()
     val logs by operationLogViewModel.logs.collectAsState()
 
-    val deviceConnected = device.status == UsbDeviceStatus.AUTHENTICATED ||
-        device.status == UsbDeviceStatus.CONNECTED
+    val deviceConnected = device.status == SessionStatus.AUTHENTICATED ||
+        device.status == SessionStatus.CONNECTED
     val folderCount = fileState.folders.size
     val fileCount = fileState.totalFileCount
     val unreadCount = contacts.sumOf { it.unreadCount }

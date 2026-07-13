@@ -4,7 +4,7 @@ import com.example.midun.data.model.ChatMessage
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
-import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.model.SessionStatus
 import com.example.midun.data.local.ChatSnapshot
 import com.example.midun.data.local.ChatStore
 import com.example.midun.data.local.LocalAuthManager
@@ -41,7 +41,7 @@ class ChatRepository @Inject constructor(
         scope.launch {
             var wasAuthed = false
             authManager.deviceStatus
-                .map { it.status == UsbDeviceStatus.AUTHENTICATED }
+                .map { it.status == SessionStatus.AUTHENTICATED }
                 .distinctUntilChanged()
                 .collect { authed ->
                     if (authed) {
