@@ -8,7 +8,7 @@ import com.example.midun.data.FileCachePaths
 import com.example.midun.data.FileRepository
 import com.example.midun.data.local.LocalFileSystem
 import com.example.midun.data.staging.StagingStore
-import com.example.midun.media.CardFileDataSource
+import com.example.midun.media.VaultFileDataSource
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 
@@ -28,12 +28,12 @@ class PreviewViewModel @Inject constructor(
 
     /**
      * 视频预览的 media3 DataSource 工厂：聊天暂存缓存（`.recv_`/`.sent_`）走 [StagingStore]（无卡测试落本地
-     * 文件直读），隐私文件夹文件走卡内流式解密（[CardFileDataSource]）。
+     * 文件直读），隐私文件夹文件走卡内流式解密（[VaultFileDataSource]）。
      */
     @UnstableApi
     fun videoFactory(path: String): DataSource.Factory =
         if (FileCachePaths.isCachePath(path)) stagingStore.videoDataSourceFactory(path)
-        else CardFileDataSource.Factory(localFileSystem, path)
+        else VaultFileDataSource.Factory(localFileSystem, path)
 
     /** 喂给 ExoPlayer 的 MediaItem uri：暂存缓存由 [StagingStore] 给（本地为真实 file://），隐私文件夹用占位。 */
     fun videoUri(path: String): Uri =

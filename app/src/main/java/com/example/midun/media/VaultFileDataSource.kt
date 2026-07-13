@@ -20,7 +20,7 @@ import java.io.IOException
  * 从块内 `p%64KB` 起供字节。未加密的缓存视频（`.recv_`/`.sent_`，不叠 DEK）走原始字节直读。
  */
 @UnstableApi
-class CardFileDataSource(
+class VaultFileDataSource(
     private val fs: LocalFileSystem,
     private val path: String
 ) : BaseDataSource(/* isNetwork = */ false) {
@@ -139,7 +139,7 @@ class CardFileDataSource(
     /** 工厂：固定一个本地隐私库路径，供 ExoPlayer 的 MediaSource 用。 */
     @UnstableApi
     class Factory(private val fs: LocalFileSystem, private val path: String) : DataSource.Factory {
-        override fun createDataSource(): DataSource = CardFileDataSource(fs, path)
+        override fun createDataSource(): DataSource = VaultFileDataSource(fs, path)
     }
 
     private companion object {

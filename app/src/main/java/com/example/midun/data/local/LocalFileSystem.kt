@@ -147,7 +147,7 @@ class LocalFileSystem @Inject constructor(
         }
     }
 
-    // —— 视频预览随机读原语（供 CardFileDataSource 流式解密，句柄型 API 与真卡一致）——
+    // —— 视频预览随机读原语（供 VaultFileDataSource 流式解密，句柄型 API 与真卡一致）——
     fun streamOpen(path: String): Int = sfOpen(path)
     fun streamSize(handle: Int): Long = sfSize(handle)
     fun streamSeek(handle: Int, pos: Long): Long = sfSeek(handle, pos)

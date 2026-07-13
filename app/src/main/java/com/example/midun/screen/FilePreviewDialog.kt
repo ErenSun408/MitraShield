@@ -45,7 +45,7 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileType
-import com.example.midun.media.CardFileDataSource
+import com.example.midun.media.VaultFileDataSource
 import com.example.midun.viewmodel.PreviewViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

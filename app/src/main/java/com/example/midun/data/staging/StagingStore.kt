@@ -4,7 +4,7 @@ import android.net.Uri
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import com.example.midun.data.local.LocalFileSystem
-import com.example.midun.media.CardFileDataSource
+import com.example.midun.media.VaultFileDataSource
 import java.io.InputStream
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -44,7 +44,7 @@ class StagingStore @Inject constructor(
     // —— 视频预览 media3 DataSource（按需随机读，不落整文件）——
     /** 暂存视频的 DataSource 工厂：本地隐私库流式读（`.recv_`/`.sent_` 未加密 → 原始字节直读）。 */
     @UnstableApi
-    fun videoDataSourceFactory(path: String): DataSource.Factory = CardFileDataSource.Factory(fs, path)
+    fun videoDataSourceFactory(path: String): DataSource.Factory = VaultFileDataSource.Factory(fs, path)
 
     /** 喂给 ExoPlayer 的 MediaItem uri：路径在工厂里固定，用占位。 */
     fun videoUri(path: String): Uri = Uri.parse("card://preview")
