@@ -122,6 +122,9 @@ class LocalAuthManager @Inject constructor(
         val exitClear = readExitClearPrefs()
         if (exitClear.clearContacts) fileSystem.streamDelete(CHAT_SIDECAR)
         if (exitClear.clearFiles) fileSystem.clear()
+        // 任一「退出时清空」开启，一并清首页最近操作日志（删在置 AUTHENTICATED 之前，
+        // OperationLogRepository 随后 store.load() 自然读到空，无竞态）。
+        if (exitClear.clearContacts || exitClear.clearFiles) fileSystem.streamDelete(OPLOG_SIDECAR)
         val (total, free) = capacity()
         _deviceStatus.value = _deviceStatus.value.copy(
             status = SessionStatus.AUTHENTICATED,

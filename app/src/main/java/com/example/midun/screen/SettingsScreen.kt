@@ -219,7 +219,7 @@ fun SettingsScreen(
                 SettingsActionItem(
                     icon = Icons.Default.PersonRemove,
                     title = "退出时清空联系人",
-                    subtitle = "开启后每次退出自动清空所有联系人与聊天记录",
+                    subtitle = "开启后每次退出自动清空所有联系人与聊天记录，并清空最近操作",
                     iconTint = Warning,
                     trailing = {
                         Switch(
@@ -241,7 +241,7 @@ fun SettingsScreen(
                 SettingsActionItem(
                     icon = Icons.Default.FolderDelete,
                     title = "退出时清空隐私文件",
-                    subtitle = "开启后每次退出自动清空隐私文件夹内所有文件",
+                    subtitle = "开启后每次退出自动清空隐私文件夹内所有文件，并清空最近操作",
                     iconTint = Warning,
                     trailing = {
                         Switch(
@@ -407,9 +407,9 @@ fun SettingsScreen(
                 Column {
                     Text(
                         if (isContacts)
-                            "开启后，每次退出时将自动清空所有联系人与聊天记录，且不可恢复。请谨慎开启。\n\n请输入当前密码确认："
+                            "开启后，每次退出时将自动清空所有联系人与聊天记录，并清空最近操作，且不可恢复。请谨慎开启。\n\n请输入当前密码确认："
                         else
-                            "开启后，每次退出时将自动清空隐私文件夹内所有历史文件，且不可恢复。请谨慎开启。\n\n请输入当前密码确认：",
+                            "开启后，每次退出时将自动清空隐私文件夹内所有历史文件，并清空最近操作，且不可恢复。请谨慎开启。\n\n请输入当前密码确认：",
                         color = TextSecondary
                     )
                     Spacer(Modifier.height(12.dp))
