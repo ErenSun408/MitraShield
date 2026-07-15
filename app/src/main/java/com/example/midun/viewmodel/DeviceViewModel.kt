@@ -207,4 +207,34 @@ class DeviceViewModel @Inject constructor(
     fun onAppForeground() {
         inactivityJob?.cancel()
     }
+
+    private var screenOffJob: Job? = null
+
+    // 息屏自动退出（彻底杀进程）配置：-1 关闭 / 0 立即 / N 秒延迟。存手机本地，重启不丢。
+    val screenOffExitSeconds: StateFlow<Int> = settingsStore.screenOffExitSeconds
+        .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsStore.SCREEN_OFF_EXIT_OFF)
+
+    fun setScreenOffExitSeconds(seconds: Int) {
+        viewModelScope.launch { settingsStore.setScreenOffExitSeconds(seconds) }
+    }
+
+    /**
+     * 息屏事件：仅在已认证且功能开启时武装退出。立即档（0 秒）下一 tick 即退；延迟档启动计时器，
+     * 期间 [onScreenOn]（亮屏/回前台）会取消。退出动作（finishAndRemoveTask + killProcess）由
+     * Activity 经 [onExit] 执行——ViewModel 不持有 Activity 引用。
+     */
+    fun onScreenOff(onExit: () -> Unit) {
+        if (!isAuthenticated.value) return
+        val delaySec = screenOffExitSeconds.value
+        if (delaySec < 0) return // 关闭
+        screenOffJob?.cancel()
+        screenOffJob = viewModelScope.launch {
+            if (delaySec > 0) delay(delaySec * 1000L)
+            onExit()
+        }
+    }
+
+    fun onScreenOn() {
+        screenOffJob?.cancel()
+    }
 }
