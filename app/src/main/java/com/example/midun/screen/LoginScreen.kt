@@ -181,7 +181,12 @@ fun LoginScreen(
                         Text("设备SN: ${deviceStatus.deviceId.ifEmpty { "未知" }}", fontSize = 11.sp, color = TextSecondary)
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text("本机ID: $phoneId", fontSize = 11.sp, color = TextSecondary)
+                    // 本机ID 行配对等图标，使两行文本左缘对齐（原来无图标从 0 起、与 SN 行错位）。
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Smartphone, null, tint = TextSecondary, modifier = Modifier.size(14.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("本机ID: $phoneId", fontSize = 11.sp, color = TextSecondary)
+                    }
                 }
             }
         }
