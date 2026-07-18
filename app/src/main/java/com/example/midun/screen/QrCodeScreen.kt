@@ -274,7 +274,7 @@ fun QrCodeScreen(
                         } else {
                             Icon(Icons.Default.QrCode, null)
                             Spacer(Modifier.width(8.dp))
-                            Text("生成临时ECDH密钥对并创建二维码")
+                            Text("生成连接二维码")
                         }
                     }
 
