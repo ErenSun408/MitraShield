@@ -370,8 +370,9 @@ class P2PSessionManager @Inject constructor(
         val msgId = generateMessageId()
         val fileNonce = P2PCrypto.newFileNonce()
         val totalChunks = ((size + FILE_CHUNK_BYTES - 1) / FILE_CHUNK_BYTES).toInt().coerceAtLeast(1)
-        // 阅后即焚（`[chat-voice]` 扩展）：开启态下**仅语音**焚（mime audio/*）；其余文件仍不焚（范围决策）。
-        val burning = _burnMode.value.enabled && mime.startsWith("audio/")
+        // 阅后即焚：开启态下所有文件（语音/图片/视频/文档）均焚。接收端 handleFileBegin 通用解析 burn/ttl、
+        // ChatDetailScreen 对图/视频走一次性预览、文档走只读卡片，读后按 ttl 双端焚毁。
+        val burning = _burnMode.value.enabled
         val burnTtl = if (burning) _burnMode.value.ttlSeconds else 0
 
         // 发送方预览副本：手机来源在真卡模式下边发边落 `.sent_<msgId>`；落不成则不留（localPath 保持 null）。
@@ -396,7 +397,7 @@ class P2PSessionManager @Inject constructor(
                 put("nonce", Base64.encodeToString(fileNonce, Base64.NO_WRAP))
                 put("chunks", totalChunks)
                 if (durationSec > 0) put("durationSec", durationSec) // 语音消息时长（接收端建 AUDIO 气泡用）
-                if (burning) { put("burn", true); put("ttl", burnTtl) } // 语音阅后即焚标记 + 时长
+                if (burning) { put("burn", true); put("ttl", burnTtl) } // 阅后即焚标记 + 时长
             }.toString()
             channel.sendFrame(FileTransferChannel.FILE_BEGIN, P2PCrypto.encrypt(key, beginJson))
 
@@ -469,8 +470,8 @@ class P2PSessionManager @Inject constructor(
         val sentCopyPath = if (sourceCardPath == null) FileCachePaths.sent(msgId) else null
         // 有副本要写 → 起始 SENDING 显进度；无副本 → 直接 FAILED 未送达。
         val initialStatus = if (sentCopyPath != null) MessageStatus.SENDING else MessageStatus.FAILED
-        // 离线语音也按焚毁模式标记（对端收不到，本端焚毁退化为本地删；同文字离线焚毁语义）。
-        val burning = _burnMode.value.enabled && mime.startsWith("audio/")
+        // 离线文件也按焚毁模式标记（对端收不到，本端焚毁退化为本地删；同文字/语音离线焚毁语义）。
+        val burning = _burnMode.value.enabled
         chatRepo.addFileMessage(
             contactId, msgId, isMine = true, fileName, size, initialStatus, localPath = sourceCardPath,
             type = fileMessageType(mime), audioDurationSec = durationSec,
@@ -695,7 +696,7 @@ class P2PSessionManager @Inject constructor(
         val totalChunks = json.getInt("chunks")
         val msgType = fileMessageType(json.optString("mime"))
         val durationSec = json.optInt("durationSec")
-        val burning = json.optBoolean("burn", false) // 语音阅后即焚标记 + 时长（计时在「听完」时才起）
+        val burning = json.optBoolean("burn", false) // 阅后即焚标记 + 时长（语音计时在「听完」时才起，图/视频/文档在退出预览后起）
         val burnTtl = json.optInt("ttl", 0)
         val stagingPath = FileCachePaths.recv(msgId)
         val handle = stagingStore.create(stagingPath)
