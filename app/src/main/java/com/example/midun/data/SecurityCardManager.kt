@@ -57,8 +57,8 @@ class SecurityCardManager @Inject constructor(
     override suspend fun setExitClearPrefs(prefs: ExitClearPrefs): Result<Unit> = real.setExitClearPrefs(prefs)
 
     // —— USB 插拔事件路由（来自 MainActivity 广播，经 DeviceViewModel）——
-    fun onUsbAttached() {
-        scope.launch { real.connectUsb() }
+    fun onUsbAttached(device: android.hardware.usb.UsbDevice?) {
+        scope.launch { real.connectUsb(device) }
     }
 
     fun onUsbDetached() {

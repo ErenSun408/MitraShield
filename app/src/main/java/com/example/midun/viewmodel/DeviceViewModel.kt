@@ -85,7 +85,7 @@ class DeviceViewModel @Inject constructor(
     }
 
     fun onUsbAttached(device: UsbDevice?) {
-        cardManager.onUsbAttached()
+        cardManager.onUsbAttached(device)
     }
 
     fun onUsbDetached() {

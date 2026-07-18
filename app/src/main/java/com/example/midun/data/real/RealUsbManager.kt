@@ -1,6 +1,8 @@
 package com.example.midun.data.real
 
 import android.content.Context
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -70,10 +72,13 @@ class RealUsbManager @Inject constructor(
      * 初始化向导）；开不了=密码已改=**已初始化**（走登录）。探测后立即关盘。
      * ⚠️ 若卡有硬件失败次数锁定，已初始化卡的这次探测会消耗一次尝试——真机需确认。
      */
-    suspend fun connectUsb(): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun connectUsb(device: UsbDevice? = null): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val helper = USBStorageHelper(context, context.packageName).also { usbHelper = it }
             helper.PermissionHandler = Handler(Looper.getMainLooper(), Handler.Callback { true })
+            // 双保险信号源（客户机型 SDK 私有权限标志时序对不上）：用 Android 系统 UsbManager.hasPermission
+            // 作可靠的授权真信号，[awaitPermissionAndReopen] 优先据此重开，不再只依赖 SDK 标志。
+            val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
 
             val list = helper.GetList()
             if (list.count == 0) {
@@ -84,7 +89,7 @@ class RealUsbManager @Inject constructor(
             // SDK 怪癖（javap 核实 RequestPermission）：未授权时首次 Open 会异步弹授权框、但**立即返回 false**
             // （返回的是请求前的旧 hasPermission）。故首次失败后等授权结果：授权了再 Open 一次即成功（此时
             // hasPermission 已被系统缓存为 true）；拒绝/超时/真·打开失败 → 保持 DISCONNECTED（白屏等待、不退出）。
-            if (!helper.Open(name) && !awaitPermissionAndReopen(helper, name)) {
+            if (!helper.Open(name) && !awaitPermissionAndReopen(helper, name, device, usbManager)) {
                 _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
                 return@withContext Result.failure(
                     IllegalStateException("打开 USB 失败（未授权或被拒绝）")
@@ -118,17 +123,33 @@ class RealUsbManager @Inject constructor(
 
     /**
      * 首次 [USBStorageHelper.Open] 失败后等待 USB 授权结果并重试一次（SDK 怪癖见 [connectUsb]）。
-     * SDK 的 onReceive 在收到授权广播时设公共标志：`FReceivePermission`（已收到结果）/`FGrantedPermission`
-     * （是否授权）。仅当确实发起了授权请求（`FRequestingPermission` 或已收到结果）才等待，避免「真·打开失败」
-     * 时空等满超时；轮询到结果后,授权通过则再 Open 一次。拒绝/超时/再次失败 → false。
+     *
+     * **双保险（客户机型：SDK 私有权限标志时序对不上 → 首插授权后不进、须重启，`f5eec8e` 修复的遗留风险）**：
+     * 主信号改用 Android 系统的 [UsbManager.hasPermission]（设备无关、始终反映真实授权态），不再只依赖 SDK 的
+     * `FReceivePermission/FGrantedPermission`——那两个标志在部分机型不按预期置位，导致原实现直接判「真失败」退出。
+     * 一旦系统或 SDK 任一确认已授权即再 `Open` 一次；系统+SDK 均确认被拒 → 立即 false；否则轮询到超时。
      */
-    private suspend fun awaitPermissionAndReopen(helper: USBStorageHelper, name: String): Boolean {
-        if (!helper.FRequestingPermission && !helper.FReceivePermission) return false // 非权限问题=真失败
+    private suspend fun awaitPermissionAndReopen(
+        helper: USBStorageHelper, name: String, device: UsbDevice?, usbManager: UsbManager?
+    ): Boolean {
+        // 系统级授权真信号（可查时优先）。
+        fun sysGranted(): Boolean = device != null && usbManager != null && usbManager.hasPermission(device)
+        // 已授权（系统或 SDK 任一确认）。
+        fun granted(): Boolean = sysGranted() || (helper.FReceivePermission && helper.FGrantedPermission)
+        // 明确被拒：SDK 收到结果且未授权，且系统也确认无权限。
+        fun denied(): Boolean = helper.FReceivePermission && !helper.FGrantedPermission && !sysGranted()
+
+        if (granted()) return helper.Open(name)
+        // 无 device 可观察（理论仅旧 mock 路径）时退回原 SDK-标志判据，避免真失败空等满超时。
+        if (device == null && !helper.FRequestingPermission && !helper.FReceivePermission) return false
+
         var waited = 0
-        while (!helper.FReceivePermission && waited < PERMISSION_TIMEOUT_MS) {
+        while (waited < PERMISSION_TIMEOUT_MS) {
+            if (granted()) return helper.Open(name)
+            if (denied()) return false
             delay(PERMISSION_POLL_MS.toLong()); waited += PERMISSION_POLL_MS
         }
-        return helper.FGrantedPermission && helper.Open(name)
+        return false
     }
 
     /** 读真卡 SN（`SFDiskGetSN` 需盘已打开；打开后 driveName 参数被忽略，传 ""）。读不到回空串。 */
