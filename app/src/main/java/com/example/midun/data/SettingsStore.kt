@@ -34,8 +34,26 @@ class SettingsStore @Inject constructor(
         store.edit { it[KEY_INACTIVITY_TIMEOUT_MIN] = minutes }
     }
 
+    /**
+     * 息屏自动退出（彻底杀进程）延迟，单位秒。取值约定：
+     * - [SCREEN_OFF_EXIT_OFF]（-1）= 关闭（默认，不因息屏退出）
+     * - [SCREEN_OFF_EXIT_IMMEDIATE]（0）= 息屏即退出
+     * - 正数 = 息屏后延迟 N 秒退出（期间亮屏/回前台则取消）
+     * 与「自动锁定」正交：前者杀进程，后者仅登出。
+     */
+    val screenOffExitSeconds: Flow<Int> =
+        store.data.map { it[KEY_SCREEN_OFF_EXIT_SEC] ?: SCREEN_OFF_EXIT_OFF }
+
+    suspend fun setScreenOffExitSeconds(seconds: Int) {
+        store.edit { it[KEY_SCREEN_OFF_EXIT_SEC] = seconds }
+    }
+
     companion object {
         const val DEFAULT_TIMEOUT_MIN = 5
         private val KEY_INACTIVITY_TIMEOUT_MIN = intPreferencesKey("inactivity_timeout_min")
+
+        const val SCREEN_OFF_EXIT_OFF = -1
+        const val SCREEN_OFF_EXIT_IMMEDIATE = 0
+        private val KEY_SCREEN_OFF_EXIT_SEC = intPreferencesKey("screen_off_exit_sec")
     }
 }

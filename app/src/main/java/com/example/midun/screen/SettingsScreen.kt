@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.BuildConfig
+import com.example.midun.data.SettingsStore
 import com.example.midun.ui.theme.*
 import com.example.midun.util.formatStorage
 import com.example.midun.viewmodel.DeviceViewModel
@@ -79,6 +80,11 @@ fun SettingsScreen(
     val timeoutMin by deviceViewModel.inactivityTimeoutMinutes.collectAsState()
     var showTimeoutDialog by remember { mutableStateOf(false) }
     var pickedTimeout by remember { mutableIntStateOf(timeoutMin) }
+
+    // 息屏自动退出（关闭 / 立即 / 10 秒）：与自动锁定同款滚轮 picker，暂选值确定才写回 VM。
+    val screenOffSec by deviceViewModel.screenOffExitSeconds.collectAsState()
+    var showScreenOffDialog by remember { mutableStateOf(false) }
+    var pickedScreenOff by remember { mutableIntStateOf(screenOffSec) }
 
     var showAboutDialog by remember { mutableStateOf(false) }
 
@@ -175,8 +181,27 @@ fun SettingsScreen(
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 SettingsActionItem(
+                    icon = Icons.Default.MobileOff,
+                    title = "息屏退出",
+                    subtitle = "息屏后自动退出应用",
+                    iconTint = Accent,
+                    trailing = {
+                        Text(
+                            screenOffExitLabel(screenOffSec),
+                            color = Primary,
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 14.sp
+                        )
+                    },
+                    onClick = {
+                        pickedScreenOff = screenOffSec
+                        showScreenOffDialog = true
+                    }
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                SettingsActionItem(
                     icon = Icons.Default.CleaningServices,
-                    title = "清除文件缓存",
+                    title = "清除缓存",
                     subtitle = "聊天图片/视频预览缓存" +
                         (cacheBytes?.let { "（占用 ${formatStorage(it)}）" } ?: ""),
                     iconTint = Accent,
@@ -734,6 +759,44 @@ fun SettingsScreen(
         )
     }
 
+    if (showScreenOffDialog) {
+        AlertDialog(
+            onDismissRequest = { showScreenOffDialog = false },
+            icon = { Icon(Icons.Default.MobileOff, null, tint = Accent) },
+            title = { Text("息屏退出") },
+            text = {
+                Column {
+                    Text(
+                        "请选择息屏多久后自动退出应用",
+                        color = TextSecondary,
+                        fontSize = 13.sp
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    WheelTimePicker(
+                        options = SCREEN_OFF_OPTIONS,
+                        initialValue = pickedScreenOff,
+                        onSelectionChanged = { pickedScreenOff = it },
+                        label = ::screenOffExitLabel
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        deviceViewModel.setScreenOffExitSeconds(pickedScreenOff)
+                        showScreenOffDialog = false
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Accent)
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showScreenOffDialog = false }) {
+                    Text("取消", color = TextSecondary)
+                }
+            }
+        )
+    }
+
     if (showAboutDialog) {
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
@@ -819,6 +882,20 @@ private fun SettingsInfoItem(label: String, value: String) {
 /** 自动锁定可选时长（分钟）。位置居中、首尾留余更利于 wheel 滚动手感。 */
 private val TIMEOUT_OPTIONS_MIN = listOf(1, 3, 5, 10, 15, 30, 60)
 
+/** 息屏自动退出可选档：SettingsStore 秒数约定（-1 关闭 / 0 立即 / 10 秒），显示文案见 [screenOffExitLabel]。 */
+private val SCREEN_OFF_OPTIONS = listOf(
+    SettingsStore.SCREEN_OFF_EXIT_OFF,
+    SettingsStore.SCREEN_OFF_EXIT_IMMEDIATE,
+    10
+)
+
+/** 息屏退出档位的行尾简短标签。 */
+private fun screenOffExitLabel(seconds: Int): String = when (seconds) {
+    SettingsStore.SCREEN_OFF_EXIT_OFF -> "关闭"
+    SettingsStore.SCREEN_OFF_EXIT_IMMEDIATE -> "立即"
+    else -> "$seconds 秒"
+}
+
 /**
  * 滚轮时长选择：LazyColumn + rememberSnapFlingBehavior，中间一格为选中态。
  * - 初次进入按 [initialValue] 滚到对应项。
@@ -829,7 +906,8 @@ private val TIMEOUT_OPTIONS_MIN = listOf(1, 3, 5, 10, 15, 30, 60)
 private fun WheelTimePicker(
     options: List<Int>,
     initialValue: Int,
-    onSelectionChanged: (Int) -> Unit
+    onSelectionChanged: (Int) -> Unit,
+    label: (Int) -> String = { "$it 分钟" }
 ) {
     val itemHeight = 48.dp
     val listState = rememberLazyListState()
@@ -871,7 +949,7 @@ private fun WheelTimePicker(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        "$value 分钟",
+                        label(value),
                         fontSize = if (isCenter) 20.sp else 14.sp,
                         fontWeight = if (isCenter) FontWeight.Bold else FontWeight.Normal,
                         color = if (isCenter) Primary else TextSecondary.copy(0.5f)
