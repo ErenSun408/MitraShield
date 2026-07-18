@@ -730,7 +730,7 @@ fun SettingsScreen(
             text = {
                 Column {
                     Text(
-                        "选择后台无操作多久后自动退出登录（重启后回默认 5 分钟）。",
+                        "请选择后台无操作多久后自动退出登录。",
                         color = TextSecondary,
                         fontSize = 13.sp
                     )
