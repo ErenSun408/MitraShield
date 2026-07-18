@@ -318,7 +318,9 @@ fun SettingsScreen(
                         label = { Text("当前密码") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        // 用默认输入法（不设 Password 类型，避免第三方输入法回退到系统自带键盘）；
+                        // 打码靠 PasswordVisualTransformation，无痕靠窗口 FLAG_SECURE。
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                         isError = cleanError.isNotEmpty(),
                         supportingText = {
                             if (cleanError.isNotEmpty()) Text(cleanError, color = Danger)
@@ -394,7 +396,9 @@ fun SettingsScreen(
                         label = { Text("当前密码") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        // 用默认输入法（不设 Password 类型，避免第三方输入法回退到系统自带键盘）；
+                        // 打码靠 PasswordVisualTransformation，无痕靠窗口 FLAG_SECURE。
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                         isError = exitClearError.isNotEmpty(),
                         supportingText = { if (exitClearError.isNotEmpty()) Text(exitClearError, color = Danger) },
                         enabled = !exitClearLoading,
@@ -450,7 +454,9 @@ fun SettingsScreen(
                         label = { Text("当前密码") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        // 用默认输入法（不设 Password 类型，避免第三方输入法回退到系统自带键盘）；
+                        // 打码靠 PasswordVisualTransformation，无痕靠窗口 FLAG_SECURE。
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                         isError = resetError.isNotEmpty(),
                         supportingText = {
                             if (resetError.isNotEmpty()) Text(resetError, color = Danger)
@@ -534,7 +540,9 @@ fun SettingsScreen(
                         label = { Text("当前密码") },
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        // 用默认输入法（不设 Password 类型，避免第三方输入法回退到系统自带键盘）；
+                        // 打码靠 PasswordVisualTransformation，无痕靠窗口 FLAG_SECURE。
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                         isError = bindError.isNotEmpty(),
                         supportingText = {
                             if (bindError.isNotEmpty()) Text(bindError, color = Danger)
@@ -625,7 +633,9 @@ fun SettingsScreen(
                             label = { Text("当前密码") },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            // 用默认输入法（不设 Password 类型，避免第三方输入法回退到系统自带键盘）；
+                        // 打码靠 PasswordVisualTransformation，无痕靠窗口 FLAG_SECURE。
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                             isError = keyError.isNotEmpty(),
                             supportingText = {
                                 if (keyError.isNotEmpty()) Text(keyError, color = Danger)
