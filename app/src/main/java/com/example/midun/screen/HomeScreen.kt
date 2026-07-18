@@ -86,11 +86,16 @@ fun HomeScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Security, null, tint = Accent, modifier = Modifier.size(40.dp))
                     Spacer(Modifier.width(12.dp))
-                    Column {
+                    // 中间列吃掉剩余宽度、SN 单行省略号，避免长 SN 把右侧状态徽章挤到换行溢出（机型适配）。
+                    Column(modifier = Modifier.weight(1f)) {
                         Text("守波秘钥", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Text("SN: ${device.deviceId.ifEmpty { "未知" }}", color = Color.White.copy(0.7f), fontSize = 12.sp)
+                        Text(
+                            "SN: ${device.deviceId.ifEmpty { "未知" }}",
+                            color = Color.White.copy(0.7f), fontSize = 12.sp,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
                     }
-                    Spacer(Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
                     val statusColor = if (deviceConnected) Success else Danger
                     Box(
                         modifier = Modifier
@@ -100,7 +105,8 @@ fun HomeScreen(
                     ) {
                         Text(
                             if (deviceConnected) "已连接" else "未连接",
-                            color = statusColor, fontSize = 12.sp, fontWeight = FontWeight.Medium
+                            color = statusColor, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                            maxLines = 1, softWrap = false
                         )
                     }
                 }
