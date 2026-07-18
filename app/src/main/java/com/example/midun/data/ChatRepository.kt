@@ -257,23 +257,6 @@ class ChatRepository @Inject constructor(
         persist()
     }
 
-    /**
-     * 无卡测试模式种子联系人「测试1」（[[project_midun_nocard_testmode]]，T1）：进入测试模式时种一个占位联系人，
-     * 让主页/通信 Tab 不空。它本身无活动会话 → 直接发消息会显「未送达」；真正收发靠两台无卡机互扫自建联系人。
-     * 幂等：已存在同 deviceId 则不重复种。仅内存（未认证 persist 为 no-op，不写卡）。
-     */
-    fun seedTestContact() {
-        if (contacts.any { it.deviceId == TEST_CONTACT_DEVICE_ID }) return
-        contacts.add(
-            Contact(
-                id = "c_test_seed",
-                deviceId = TEST_CONTACT_DEVICE_ID,
-                remark = "测试1",
-                lastMessageTime = System.currentTimeMillis()
-            )
-        )
-    }
-
     /** 修改联系人备注（用户在联系人资料页编辑）。由 ChatViewModel.updateRemark 调用。 */
     fun updateRemark(contactId: String, remark: String) {
         contacts.indexOfFirst { it.id == contactId }
@@ -465,7 +448,5 @@ class ChatRepository @Inject constructor(
     private companion object {
         /** 文件预览缓存存活时长：7 天（用户定，file-transfer 阶段3）。 */
         const val CACHE_TTL_MS = 7L * 24 * 60 * 60 * 1000
-        /** 无卡测试模式种子联系人「测试1」的设备标识（去重用）。 */
-        const val TEST_CONTACT_DEVICE_ID = "TEST-CONTACT-1"
     }
 }

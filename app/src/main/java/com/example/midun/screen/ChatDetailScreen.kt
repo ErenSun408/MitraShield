@@ -61,7 +61,6 @@ import com.example.midun.data.model.MessageType
 import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
-import com.example.midun.viewmodel.DeviceViewModel
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -76,11 +75,8 @@ fun ChatDetailScreen(
     onBack: () -> Unit,
     onOpenProfile: () -> Unit = {},
     onGoConnect: () -> Unit = {},
-    chatViewModel: ChatViewModel = hiltViewModel(),
-    deviceViewModel: DeviceViewModel = hiltViewModel()
+    chatViewModel: ChatViewModel = hiltViewModel()
 ) {
-    // 无卡测试模式（T3）：隐藏「从隐私文件夹」发送来源、禁用「保存到文件夹」（无卡、无隐私文件夹）。
-    val isTestMode by deviceViewModel.isTestMode.collectAsState()
     val contacts by chatViewModel.contacts.collectAsState()
     val messages by chatViewModel.messages.collectAsState()
     val contact = contacts.find { it.id == contactId }
@@ -421,18 +417,15 @@ fun ChatDetailScreen(
                                 leadingIcon = { Icon(Icons.Default.PhoneAndroid, null, tint = Primary) },
                                 onClick = { showSourceMenu = false; pickFileLauncher.launch("*/*") }
                             )
-                            // 无卡测试模式无隐私文件夹（无卡）→ 仅保留「从手机存储」。
-                            if (!isTestMode) {
-                                DropdownMenuItem(
-                                    text = { Text("从文件夹") },
-                                    leadingIcon = { Icon(Icons.Default.Folder, null, tint = Primary) },
-                                    onClick = {
-                                        showSourceMenu = false
-                                        showPickDialog = true
-                                        chatViewModel.loadSaveFolders()
-                                    }
-                                )
-                            }
+                            DropdownMenuItem(
+                                text = { Text("从文件夹") },
+                                leadingIcon = { Icon(Icons.Default.Folder, null, tint = Primary) },
+                                onClick = {
+                                    showSourceMenu = false
+                                    showPickDialog = true
+                                    chatViewModel.loadSaveFolders()
+                                }
+                            )
                         }
                     }
                 }
@@ -489,7 +482,6 @@ fun ChatDetailScreen(
                         msg = msg,
                         burnDeadline = burnTimers[msg.id],
                         transferFraction = transferProgress[msg.id],
-                        testMode = isTestMode,
                         onReveal = { chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl) },
                         onDelete = { chatViewModel.deleteMessage(msg.id) },
                         onRecall = { chatViewModel.recallMessage(msg.id) },
@@ -551,14 +543,9 @@ fun ChatDetailScreen(
                                 // 接收方收到、未保存：媒体免保存直接预览暂存区（点预览里再选保存）；非媒体走保存弹窗。
                                 !msg.isMine && msg.type == MessageType.FILE && msg.savedFolderId == null &&
                                     msg.status == MessageStatus.RECEIVED && !transferring -> {
-                                    // 无卡测试模式：媒体仍可预览，但不提供「保存到文件夹」（saveTarget=null）；非媒体仅提示不支持保存。
                                     if (isMedia) openMediaPreview(
-                                        chatViewModel.stagingPathFor(msg.id), msg.fileName ?: "", ft,
-                                        if (isTestMode) null else msg, null
+                                        chatViewModel.stagingPathFor(msg.id), msg.fileName ?: "", ft, msg, null
                                     )
-                                    else if (isTestMode) scope.launch {
-                                        snackbarHostState.showSnackbar("无卡测试版不支持保存到文件夹（无设备）")
-                                    }
                                     else {
                                         fileToSave = msg
                                         chatViewModel.loadSaveFolders()
@@ -928,7 +915,7 @@ private fun fileIconOf(name: String): Pair<ImageVector, Color> =
 
 /** 文件气泡内容（M11.5.3）：名/大小 + 进度条（传输中）/ 状态提示（待保存 / 已保存 / 失败）。 */
 @Composable
-private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, contentColor: Color, testMode: Boolean = false) {
+private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, contentColor: Color) {
     val ft = fileTypeOf(msg.fileName ?: "")
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -978,9 +965,6 @@ private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, conten
                 msg.burnAfterRead && !msg.isMine -> null to contentColor
                 // 发送方自己发的图/视频可点击预览（功能保留），但不再显文字提示。
                 msg.isMine -> null to contentColor
-                // 无卡测试模式不支持保存到文件夹（无卡）→ 媒体仍可预览、非媒体提示不支持。
-                !msg.isMine && msg.savedFolderId == null && testMode ->
-                    (if (isMedia) "👁 点击预览" else "无卡测试·暂不支持保存") to Accent
                 !msg.isMine && msg.savedFolderId == null ->
                     (if (isMedia) "👁 点击预览 · 可保存" else "📥 点击保存到文件夹") to Accent
                 msg.savedFolderId != null ->
@@ -1168,8 +1152,7 @@ private fun ChatBubble(
     onFileTap: () -> Unit = {},
     onAudioTap: () -> Unit = {},
     audioPlaying: Boolean = false,
-    audioBurnOpened: Boolean = false,
-    testMode: Boolean = false
+    audioBurnOpened: Boolean = false
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val isFile = msg.type == MessageType.FILE
@@ -1239,7 +1222,7 @@ private fun ChatBubble(
                             }
                         } else {
                         when {
-                            isFile -> FileBubbleContent(msg, transferFraction, contentColor, testMode)
+                            isFile -> FileBubbleContent(msg, transferFraction, contentColor)
                             isVideo -> Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
                                     Icons.Default.VideoFile, null,

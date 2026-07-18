@@ -7,7 +7,6 @@ import com.example.midun.data.ExitClearPrefs
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.SettingsStore
 import com.example.midun.data.ChatRepository
-import com.example.midun.data.TestModeManager
 import com.example.midun.data.model.UsbDeviceStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
@@ -25,21 +24,8 @@ import kotlinx.coroutines.launch
 class DeviceViewModel @Inject constructor(
     private val cardManager: SecurityCardManager,
     private val settingsStore: SettingsStore,
-    private val chatRepository: ChatRepository,
-    private val testModeManager: TestModeManager
+    private val chatRepository: ChatRepository
 ) : ViewModel() {
-
-    /** 无卡测试模式标志（进程内）：UI 据此放行无卡渲染/路由、显隐三点面板入口。 */
-    val isTestMode: StateFlow<Boolean> = testModeManager.isTestMode
-
-    /**
-     * 进入无卡测试模式（[[project_midun_nocard_testmode]]，T1）：置位标志 + 种子联系人「测试1」。
-     * 不可逆，退出靠重启 App。
-     */
-    fun enableTestMode() {
-        testModeManager.enable()
-        chatRepository.seedTestContact()
-    }
 
     /** 文件预览缓存统计（设置页「清除缓存」副标题）：返回 (文件数, 总字节)。 */
     fun loadCacheStats(onResult: (count: Int, bytes: Long) -> Unit) {
