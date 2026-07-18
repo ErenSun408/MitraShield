@@ -208,6 +208,9 @@ class RealUsbManager @Inject constructor(
         val exitClear = readExitClearPrefs()
         if (exitClear.clearContacts) runCatching { realFileSystem.deleteFile(CHAT_SIDECAR) }
         if (exitClear.clearFiles) realFileSystem.clear()
+        // 任一「退出时清空」开启，一并清首页最近操作日志（删在置 AUTHENTICATED 之前，
+        // OperationLogRepository 随后 store.load() 读到空、_logs 维持登出时清空的 emptyList，无竞态）。
+        if (exitClear.clearContacts || exitClear.clearFiles) runCatching { realFileSystem.deleteFile(OPLOG_SIDECAR) }
         val sn = readSn() // 盘已打开，补读真实 SN（已初始化卡在 connectUsb 阶段读不到）
         val (total, free) = readCapacity()
         _deviceStatus.value = _deviceStatus.value.copy(
