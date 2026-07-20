@@ -36,6 +36,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.navigation.compose.rememberNavController
 import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.navigation.NavGraph
+import com.example.midun.navigation.Screen
 import com.example.midun.screen.UsbDisconnectedOverlay
 import com.example.midun.ui.theme.MiDunTheme
 import com.example.midun.viewmodel.DeviceViewModel
@@ -134,6 +135,34 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(status) {
                     if (status == UsbDeviceStatus.CONNECTED || status == UsbDeviceStatus.AUTHENTICATED) {
                         hasConnectedBefore = true
+                    }
+                }
+
+                // de-auth 守卫（修复闪退根因A）：自动锁定 / 会话失效使状态从 AUTHENTICATED 跌回 CONNECTED 时，
+                // 主流程界面（Main/私藏/会话等）仍停在已 SFCloseDisk 的盘上，用户下一次卡操作会命中已关闭句柄 →
+                // 原生 SIGSEGV 崩溃。此处监听「认证态跌落且未拔卡」，导回 Splash 让其重新路由到登录页。
+                // 拔卡（DISCONNECTED）另由下方全屏遮罩兜底，不在此处理。
+                var wasAuthenticated by remember { mutableStateOf(false) }
+                LaunchedEffect(status) {
+                    when (status) {
+                        UsbDeviceStatus.AUTHENTICATED -> wasAuthenticated = true
+                        // 仅拦「已初始化卡的认证态跌落」（自动锁定/会话失效）。恢复出厂会把状态置为
+                        // CONNECTED+isInitialized=false，那条路径由其自身的 navigate(Init) 收尾，不在此拦截，
+                        // 否则会多插一次 Splash 闪屏。
+                        UsbDeviceStatus.CONNECTED -> if (wasAuthenticated && deviceStatus.isInitialized) {
+                            wasAuthenticated = false
+                            // 已在登录/初始化/闪屏区（如设置里手动登出已自行导航）则不重复导航。
+                            val route = navController.currentDestination?.route
+                            if (route != Screen.Splash.route &&
+                                route != Screen.Login.route &&
+                                route != Screen.Init.route
+                            ) {
+                                navController.navigate(Screen.Splash.route) {
+                                    popUpTo(0) { inclusive = true }
+                                }
+                            }
+                        }
+                        else -> { /* DISCONNECTED / CONNECTING / ERROR：不在此处理 */ }
                     }
                 }
 
