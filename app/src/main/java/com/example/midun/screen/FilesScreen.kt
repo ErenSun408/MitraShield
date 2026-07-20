@@ -651,7 +651,11 @@ fun FileDetailScreen(
         FolderExportDialog(it, onCancel = { fileViewModel.cancelTransfer() })
     }
 
-    previewFile?.let { FilePreviewDialog(file = it, onClose = { previewFile = null }) }
+    previewFile?.let { pf ->
+        // 图片预览可在同文件夹图片间左右滑（siblings 仅图片）；视频/其它走单文件预览。
+        val imageSiblings = if (pf.type == FileType.IMAGE) files.filter { it.type == FileType.IMAGE } else null
+        FilePreviewDialog(file = pf, onClose = { previewFile = null }, siblings = imageSiblings)
+    }
 
     // 加密导出口令弹框（M12.5）：单文件或文件夹加密导出前收口令，确认后带口令启动选取器。
     if (passphraseForFile != null || passphraseForFolder) {
