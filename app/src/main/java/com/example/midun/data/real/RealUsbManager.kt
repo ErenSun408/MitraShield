@@ -14,6 +14,7 @@ import com.example.midun.data.model.UsbDeviceStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +62,13 @@ class RealUsbManager @Inject constructor(
     /** 本次会话登录密码的 sha256（认证/初始化成功时记，登出/拔卡清）。供 [verifyPassword] 不重开盘校验。 */
     private var sessionPwdHash: String? = null
 
+    /**
+     * 连接单飞标志（登录慢/闪退/反复密码错误的公共病根修复）：[connectUsb] 入口 CAS 置位、退出清零。
+     * 鸿蒙等机型会重复/杂散地发 `ACTION_USB_DEVICE_ATTACHED` 广播，原实现每次都并发重跑 [connectUsb] →
+     * 覆盖已认证会话、并发踩踏 native 单例。置位期间到达的重复 attach 直接忽略。
+     */
+    private val connecting = AtomicBoolean(false)
+
     private val _deviceStatus = MutableStateFlow(DeviceInfo())
     override val deviceStatus: StateFlow<DeviceInfo> = _deviceStatus.asStateFlow()
 
@@ -73,7 +81,16 @@ class RealUsbManager @Inject constructor(
      * ⚠️ 若卡有硬件失败次数锁定，已初始化卡的这次探测会消耗一次尝试——真机需确认。
      */
     suspend fun connectUsb(device: UsbDevice? = null): Result<Unit> = withContext(Dispatchers.IO) {
+        // 单飞去重：已有一次连接流程在跑 → 忽略这次杂散/重复 attach（鸿蒙常连发多条广播）。
+        if (!connecting.compareAndSet(false, true)) return@withContext Result.success(Unit)
         try {
+            // 已连接/已认证时的重复 attach 直接忽略：绝不重跑探测把 AUTHENTICATED 覆盖成 CONNECTED 且盘不关
+            //（那正是「登录后被踢回登录页、之后反复报密码错误、须重启 App」的根因）。
+            val cur = _deviceStatus.value.status
+            if (usbHelper != null &&
+                (cur == UsbDeviceStatus.CONNECTED || cur == UsbDeviceStatus.AUTHENTICATED)) {
+                return@withContext Result.success(Unit)
+            }
             val helper = USBStorageHelper(context, context.packageName).also { usbHelper = it }
             helper.PermissionHandler = Handler(Looper.getMainLooper(), Handler.Callback { true })
             // 双保险信号源（客户机型 SDK 私有权限标志时序对不上）：用 Android 系统 UsbManager.hasPermission
@@ -103,11 +120,11 @@ class RealUsbManager @Inject constructor(
             // SFDiskGetSN 需盘已打开才能读。先试免密直读（部分卡可经 USB 句柄读硬件序列号）；读不到则在
             // 默认密码探测打开盘时顺带读（盘临时打开）。默认密码能开 = 未初始化。已初始化卡此处读不到 SN
             // （需密码开盘）→ 登录后由 authenticate 补读。
-            var sn = runCatching { fsShell.SFDiskGetSN(dn) }.getOrNull().orEmpty()
-            val canOpenDefault = fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) == 0
+            var sn = runCatching { synchronized(fsShell) { fsShell.SFDiskGetSN(dn) } }.getOrNull().orEmpty()
+            val canOpenDefault = synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) } == 0
             if (canOpenDefault) {
                 if (sn.isEmpty()) sn = readSn()
-                runCatching { fsShell.SFCloseDisk() }
+                runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
             }
             _deviceStatus.value = DeviceInfo(
                 isInitialized = !canOpenDefault,
@@ -118,6 +135,8 @@ class RealUsbManager @Inject constructor(
         } catch (e: Exception) {
             _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
             Result.failure(e)
+        } finally {
+            connecting.set(false)
         }
     }
 
@@ -153,7 +172,7 @@ class RealUsbManager @Inject constructor(
     }
 
     /** 读真卡 SN（`SFDiskGetSN` 需盘已打开；打开后 driveName 参数被忽略，传 ""）。读不到回空串。 */
-    private fun readSn(): String = runCatching { fsShell.SFDiskGetSN("") }.getOrNull().orEmpty()
+    private fun readSn(): String = runCatching { synchronized(fsShell) { fsShell.SFDiskGetSN("") } }.getOrNull().orEmpty()
 
     /**
      * 初始化：用默认密码打开 → `SFDiskSetPassword(sha256(新密码))` 改密码 → 读 SN/写绑定 → **关盘**，
@@ -166,12 +185,12 @@ class RealUsbManager @Inject constructor(
     override suspend fun initDevice(password: String, bindDevice: Boolean): Result<Unit> =
         withContext(Dispatchers.IO) {
             val dn = diskName ?: return@withContext Result.failure(IllegalStateException("USB 未连接"))
-            if (fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) != 0) {
+            if (synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) } != 0) {
                 return@withContext Result.failure(IllegalStateException("默认密码打开失败（卡可能已初始化）"))
             }
-            val ret = fsShell.SFDiskSetPassword(sha256(password))
+            val ret = synchronized(fsShell) { fsShell.SFDiskSetPassword(sha256(password)) }
             if (ret != 0) {
-                runCatching { fsShell.SFCloseDisk() }
+                runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
                 return@withContext Result.failure(IllegalStateException("设置密码失败，错误码=$ret"))
             }
             // 绑定（M11.6.6）：选中绑定则写卡内 0:/.bind = 本机 androidId（需盘已打开）。写卡失败 → 视为未绑定
@@ -181,13 +200,13 @@ class RealUsbManager @Inject constructor(
             // DEK 同时入内存，但本次 init 完会关盘+清会话 → 登录时再由 authenticate 载入。
             // M12.4：落盘失败必须让 init 失败——否则会留下「已初始化却无 keystore」的卡 → 后续静默明文。
             if (!realFileSystem.saveKeystoreRaw(cardKeystore.createNew())) {
-                runCatching { fsShell.SFCloseDisk() }
+                runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
                 cardKeystore.lock()
                 return@withContext Result.failure(IllegalStateException("密钥库写入失败，请恢复出厂后重试"))
             }
             val sn = readSn() // 盘已打开，补读真实 SN
             // 关盘，回到「已初始化、未认证」态 → 登录页用新密码 SFOpenDiskEx 重新干净开盘。
-            runCatching { fsShell.SFCloseDisk() }
+            runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
             cardKeystore.lock() // init 后即关盘，DEK 不应留存——登录时重新载入
             sessionPwdHash = null
             _deviceStatus.value = _deviceStatus.value.copy(
@@ -206,20 +225,20 @@ class RealUsbManager @Inject constructor(
      */
     override suspend fun authenticate(password: String): Result<Unit> = withContext(Dispatchers.IO) {
         val dn = diskName ?: return@withContext Result.failure(IllegalStateException("USB 未连接"))
-        val ret = fsShell.SFOpenDiskEx(dn, sha256(password))
+        val ret = synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, sha256(password)) }
         if (ret != 0) {
             return@withContext Result.failure(IllegalStateException("密码错误或打开失败，错误码=$ret"))
         }
         val boundId = readBoundId()
         if (boundId != null && boundId != androidId()) {
-            runCatching { fsShell.SFCloseDisk() }
+            runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
             return@withContext Result.failure(IllegalStateException("此卡已绑定其他设备，无法在本机登录"))
         }
         // App 层密钥库（M12.1）：开盘后载入 keystore、解出 DEK 驻内存。
         // M12.4：keystore 缺失/损坏 → 拒登并关盘，**不静默跑明文**。正常卡（恢复出厂 + 重新 init）必有 keystore；
         // 走到这里 = 异常卡（旧卡未重置 / keystore 损坏），提示恢复出厂重新初始化。
         if (!cardKeystore.load(realFileSystem.loadKeystoreRaw())) {
-            runCatching { fsShell.SFCloseDisk() }
+            runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
             cardKeystore.lock()
             return@withContext Result.failure(IllegalStateException("密钥库缺失或损坏，请恢复出厂后重新初始化"))
         }
@@ -251,7 +270,7 @@ class RealUsbManager @Inject constructor(
     /** 读隐藏区容量（M11.6.1）：`SFGetCapacity(root, long[2])` → [总字节, 空闲字节]；需盘已打开。失败回 0,0。 */
     private fun readCapacity(): Pair<Long, Long> {
         val out = LongArray(2)
-        return if (fsShell.SFGetCapacity("0:/", out) == 0) out[0] to out[1] else 0L to 0L
+        return if (synchronized(fsShell) { fsShell.SFGetCapacity("0:/", out) } == 0) out[0] to out[1] else 0L to 0L
     }
 
     /**
@@ -268,7 +287,7 @@ class RealUsbManager @Inject constructor(
 
     /** 退出登录：关盘但保留 USB 句柄，状态退回 CONNECTED。 */
     override fun logout() {
-        runCatching { fsShell.SFCloseDisk() }
+        runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
         sessionPwdHash = null
         cardKeystore.lock() // 锁定后清内存 DEK（M12.1）
         _deviceStatus.value = _deviceStatus.value.copy(status = UsbDeviceStatus.CONNECTED)
@@ -276,7 +295,7 @@ class RealUsbManager @Inject constructor(
 
     /** 拔卡 / 完全释放：关盘 + 关 USB 句柄，状态 DISCONNECTED。 */
     suspend fun closeDevice(): Result<Unit> = withContext(Dispatchers.IO) {
-        runCatching { fsShell.SFCloseDisk() }
+        runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
         runCatching { usbHelper?.Close() }
         usbHelper = null
         diskName = null
@@ -319,7 +338,7 @@ class RealUsbManager @Inject constructor(
                 listOf(CHAT_SIDECAR, OPLOG_SIDECAR, BIND_PATH).forEach { runCatching { realFileSystem.deleteFile(it) } }
             }
             // 回出厂默认密码（SFFormat 是否自动重置密码未知，显式兜底确保未初始化态）。
-            val ret = fsShell.SFDiskSetPassword(DEFAULT_PASSWORD)
+            val ret = synchronized(fsShell) { fsShell.SFDiskSetPassword(DEFAULT_PASSWORD) }
             if (ret != 0) throw IllegalStateException("重置密码失败，错误码=$ret")
             finishReset()
         }
@@ -327,7 +346,7 @@ class RealUsbManager @Inject constructor(
 
     /** 恢复出厂收尾：关盘、清会话密码、状态退回未初始化（CONNECTED）→ connectUsb 重探测走 Init 向导。 */
     private fun finishReset() {
-        runCatching { fsShell.SFCloseDisk() }
+        runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
         sessionPwdHash = null
         cardKeystore.lock() // 恢复出厂：keystore 已被格式化/清除，清内存 DEK（M12.1），下次 init 重生成
         _deviceStatus.value = DeviceInfo(
@@ -423,7 +442,7 @@ class RealUsbManager @Inject constructor(
     }
 
     /** 真卡唯一序列号（接 P2P deviceSn 用，M11.6）。打开后 driveName 参数被忽略。 */
-    fun getSerialNumber(): String? = runCatching { fsShell.SFDiskGetSN("") }.getOrNull()
+    fun getSerialNumber(): String? = runCatching { synchronized(fsShell) { fsShell.SFDiskGetSN("") } }.getOrNull()
 
     private fun androidId(): String =
         Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
