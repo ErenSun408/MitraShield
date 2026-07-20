@@ -966,7 +966,7 @@ private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, conten
                 // 发送方自己发的图/视频可点击预览（功能保留），但不再显文字提示。
                 msg.isMine -> null to contentColor
                 !msg.isMine && msg.savedFolderId == null ->
-                    (if (isMedia) "👁 点击预览 · 可保存" else "📥 点击保存到文件夹") to Accent
+                    (if (isMedia) "点击预览 · 可保存" else "📥 点击保存到文件夹") to Accent
                 msg.savedFolderId != null ->
                     (if (isMedia) "✓ 已保存 · 点击预览" else "✓ 已保存到文件夹") to
                         contentColor.copy(alpha = 0.7f)
