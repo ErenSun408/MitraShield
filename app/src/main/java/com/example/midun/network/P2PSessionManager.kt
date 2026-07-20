@@ -528,14 +528,14 @@ class P2PSessionManager @Inject constructor(
     suspend fun setBurnMode(enabled: Boolean, ttlSeconds: Int): Result<Unit> = withContext(Dispatchers.IO) {
         val session = _activeSession.value
             ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
-        val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT }
-            ?: return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
+        if (session.contactId == UNKNOWN_CONTACT) {
+            return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
+        }
         try {
             writeFrame(session, generateMessageId(), BURN_MODE_TYPE, if (enabled) "on:$ttlSeconds" else "off")
             _burnMode.value = BurnMode(enabled, if (enabled) ttlSeconds else 0)
-            val text = if (enabled) "🔥 你开启了阅后即焚（${formatTtl(ttlSeconds)}）" else "🔥 你关闭了阅后即焚"
-            chatRepo.addSystemMessage(contactId, text)
-            _incomingMessages.emit(contactId)
+            // 开/关阅后即焚不再插入系统提示行（客户反馈：双方开关无需留提醒）。
+            // 模式状态仍由 _burnMode 驱动会话内火苗图标高亮，功能不受影响。
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -855,16 +855,8 @@ class P2PSessionManager @Inject constructor(
                 _incomingMessages.emit(contactId)
             }
             BURN_MODE_TYPE -> {
-                // 对端开/关阅后即焚（B 阶段）：plaintext="on:<秒>" / "off"，插一条「对方…」系统行。
-                val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
-                val text = if (plaintext.startsWith("on")) {
-                    val ttl = plaintext.substringAfter(':', "").toIntOrNull() ?: 0
-                    "🔥 对方开启了阅后即焚（${formatTtl(ttl)}）"
-                } else {
-                    "🔥 对方关闭了阅后即焚"
-                }
-                chatRepo.addSystemMessage(contactId, text)
-                _incomingMessages.emit(contactId)
+                // 对端开/关阅后即焚：仅消费该帧，不再插入「对方…」系统提示行（客户反馈：双方开关无需留提醒）。
+                // 实际焚毁按每条消息自带的 burn 标记处理，与此提示无关，去掉不影响焚毁功能。
             }
             BURN_TYPE -> {
                 // 对端焚毁（B 阶段）：plaintext = 目标消息 id，本地焚毁对应消息为焚毁墓碑 + 删本端媒体缓存。
