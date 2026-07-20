@@ -798,7 +798,7 @@ private fun FileItemCard(
     onExportFile: () -> Unit,
     onDelete: () -> Unit,
     onPreview: () -> Unit,
-    loadThumbnail: (suspend (String) -> ImageBitmap?)? = null
+    loadThumbnail: (suspend (FileItem) -> ImageBitmap?)? = null
 ) {
     val previewable = file.type == FileType.IMAGE || file.type == FileType.VIDEO
     var showMenu by remember { mutableStateOf(false) }
@@ -824,14 +824,28 @@ private fun FileItemCard(
                 modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(iconData.second.copy(0.1f)),
                 contentAlignment = Alignment.Center
             ) {
-                // 图片项显示卡内解密缩略图（客户反馈：原来只有通用图标，看不出是哪张图）；未就绪/失败退回通用图标。
+                // 图片/视频项显示卡内解密缩略图（客户反馈：原来只有通用图标，看不出内容）；视频缩略图右下角
+                // 叠播放三角标示可播放。未就绪/失败退回通用图标。
                 var thumb by remember(file.id) { mutableStateOf<ImageBitmap?>(null) }
-                if (file.type == FileType.IMAGE && loadThumbnail != null) {
-                    LaunchedEffect(file.id) { thumb = loadThumbnail(file.id) }
+                if (previewable && loadThumbnail != null) {
+                    LaunchedEffect(file.id) { thumb = loadThumbnail(file) }
                 }
                 val tb = thumb
                 if (tb != null) {
                     Image(tb, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    if (file.type == FileType.VIDEO) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(2.dp)
+                                .size(16.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(0.45f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(12.dp))
+                        }
+                    }
                 } else {
                     Icon(iconData.first, null, tint = iconData.second, modifier = Modifier.size(22.dp))
                 }

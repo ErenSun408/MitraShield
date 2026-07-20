@@ -1,6 +1,7 @@
 package com.example.midun.viewmodel
 
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.LruCache
@@ -15,14 +16,20 @@ import com.example.midun.data.TransferCancelledException
 import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
+import com.example.midun.data.model.FileType
 import com.example.midun.data.model.OperationType
+import com.example.midun.data.real.RealFileSystem
+import com.example.midun.media.CardMediaDataSource
 import com.example.midun.util.decodeSampledBitmap
+import com.example.midun.util.scaleDownBitmap
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.IOException
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,6 +76,8 @@ data class ExportProgress(
 @HiltViewModel
 class FileViewModel @Inject constructor(
     private val fileSystem: FileRepository,
+    // 视频首帧提取需卡内随机读解密（经 CardMediaDataSource），故直接依赖 RealFileSystem（同 PreviewViewModel）。
+    private val realFileSystem: RealFileSystem,
     private val operationLog: OperationLogRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
@@ -143,18 +152,47 @@ class FileViewModel @Inject constructor(
      */
     private val thumbnailCache = LruCache<String, ImageBitmap>(THUMB_CACHE_ENTRIES)
 
+    /** 视频首帧提取串行锁：真卡随机读慢、MediaMetadataRetriever 重，串行避免多个并发压垮卡/SDK。 */
+    private val videoThumbMutex = Mutex()
+
     /**
-     * 读图片文件 [fileId] 的缩略图（客户反馈：列表原来只有通用图标，看不出是哪张图）。命中缓存直接返回；
-     * 否则卡内解密到内存（不落盘）→ 下采样解码成小图。读/解码失败回 null（UI 退回通用图标）。
+     * 读文件 [file] 的缩略图（客户反馈：列表原来只有通用图标，看不出内容）。命中缓存直接返回；图片走内存
+     * 解密+下采样，视频走首帧提取。读/解码失败回 null（UI 退回通用图标）。
      */
-    suspend fun loadThumbnail(fileId: String): ImageBitmap? {
-        thumbnailCache.get(fileId)?.let { return it }
-        val bytes = fileSystem.readFileBytes(fileId).getOrNull() ?: return null
-        val bmp = withContext(Dispatchers.Default) {
-            decodeSampledBitmap(bytes, THUMB_MAX_PX)?.asImageBitmap()
+    suspend fun loadThumbnail(file: FileItem): ImageBitmap? {
+        thumbnailCache.get(file.id)?.let { return it }
+        val bmp = when (file.type) {
+            FileType.IMAGE -> {
+                val bytes = fileSystem.readFileBytes(file.id).getOrNull() ?: return null
+                withContext(Dispatchers.Default) { decodeSampledBitmap(bytes, THUMB_MAX_PX)?.asImageBitmap() }
+            }
+            FileType.VIDEO -> loadVideoFrame(file.id)
+            else -> null
         } ?: return null
-        thumbnailCache.put(fileId, bmp)
+        thumbnailCache.put(file.id, bmp)
         return bmp
+    }
+
+    /**
+     * 提取视频 [fileId] 的首帧作缩略图：自定义 [CardMediaDataSource] 喂 MediaMetadataRetriever，卡内随机读
+     * 解密、**不落盘**。取不到帧（异常编码/不支持等）回 null → UI 退回通用视频图标。
+     */
+    private suspend fun loadVideoFrame(fileId: String): ImageBitmap? = videoThumbMutex.withLock {
+        withContext(Dispatchers.IO) {
+            val retriever = MediaMetadataRetriever()
+            val source = CardMediaDataSource(realFileSystem, fileId)
+            try {
+                retriever.setDataSource(source)
+                val frame = retriever.getFrameAtTime(-1, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    ?: retriever.frameAtTime
+                frame?.let { scaleDownBitmap(it, THUMB_MAX_PX).asImageBitmap() }
+            } catch (e: Exception) {
+                null
+            } finally {
+                runCatching { retriever.release() }
+                runCatching { source.close() }
+            }
+        }
     }
 
     fun createFolder(name: String, policy: CopyPolicy) {
