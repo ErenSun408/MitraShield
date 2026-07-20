@@ -502,8 +502,11 @@ fun FileDetailScreen(
                     IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "返回") }
                 },
                 actions = {
-                    IconButton(onClick = { importLauncher.launch("*/*") }) {
-                        Icon(Icons.Default.FileUpload, "导入")
+                    // 导入入口带文字（客户反馈：纯图标不易识别是「导入」）。
+                    TextButton(onClick = { importLauncher.launch("*/*") }) {
+                        Icon(Icons.Default.FileUpload, null, tint = Color.White, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("导入", color = Color.White)
                     }
                     IconButton(onClick = { showMenu = !showMenu }) {
                         Icon(Icons.Default.MoreVert, "更多")
