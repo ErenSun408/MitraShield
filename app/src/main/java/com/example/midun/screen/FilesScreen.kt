@@ -2,6 +2,7 @@ package com.example.midun.screen
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -17,6 +18,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -604,7 +607,8 @@ fun FileDetailScreen(
                             else { pendingExportPass = null; fileToExport = file; exportLauncher.launch(file.name) }
                         },
                         onDelete = { fileToDelete = file },
-                        onPreview = { previewFile = file }
+                        onPreview = { previewFile = file },
+                        loadThumbnail = fileViewModel::loadThumbnail
                     )
                 }
             }
@@ -793,7 +797,8 @@ private fun FileItemCard(
     onMove: (FileItem) -> Unit,
     onExportFile: () -> Unit,
     onDelete: () -> Unit,
-    onPreview: () -> Unit
+    onPreview: () -> Unit,
+    loadThumbnail: (suspend (String) -> ImageBitmap?)? = null
 ) {
     val previewable = file.type == FileType.IMAGE || file.type == FileType.VIDEO
     var showMenu by remember { mutableStateOf(false) }
@@ -819,7 +824,17 @@ private fun FileItemCard(
                 modifier = Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)).background(iconData.second.copy(0.1f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(iconData.first, null, tint = iconData.second, modifier = Modifier.size(22.dp))
+                // 图片项显示卡内解密缩略图（客户反馈：原来只有通用图标，看不出是哪张图）；未就绪/失败退回通用图标。
+                var thumb by remember(file.id) { mutableStateOf<ImageBitmap?>(null) }
+                if (file.type == FileType.IMAGE && loadThumbnail != null) {
+                    LaunchedEffect(file.id) { thumb = loadThumbnail(file.id) }
+                }
+                val tb = thumb
+                if (tb != null) {
+                    Image(tb, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                } else {
+                    Icon(iconData.first, null, tint = iconData.second, modifier = Modifier.size(22.dp))
+                }
             }
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {

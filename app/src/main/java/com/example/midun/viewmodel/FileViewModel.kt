@@ -3,6 +3,9 @@ package com.example.midun.viewmodel
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.LruCache
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -13,12 +16,14 @@ import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.OperationType
+import com.example.midun.util.decodeSampledBitmap
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.io.IOException
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -130,6 +135,26 @@ class FileViewModel @Inject constructor(
             val files = fileSystem.getFilesInFolder(folderId)
             _uiState.update { it.copy(currentFolderId = folderId, currentFiles = files) }
         }
+    }
+
+    /**
+     * 图片缩略图缓存（隐私文件夹列表用）：真卡每张图都要 SFOpen+解密+解码，代价高，用 LruCache 兜住
+     * 列表滚动/重组的重复加载。按条数上限，缩略图小、内存可控。key = fileId。
+     */
+    private val thumbnailCache = LruCache<String, ImageBitmap>(THUMB_CACHE_ENTRIES)
+
+    /**
+     * 读图片文件 [fileId] 的缩略图（客户反馈：列表原来只有通用图标，看不出是哪张图）。命中缓存直接返回；
+     * 否则卡内解密到内存（不落盘）→ 下采样解码成小图。读/解码失败回 null（UI 退回通用图标）。
+     */
+    suspend fun loadThumbnail(fileId: String): ImageBitmap? {
+        thumbnailCache.get(fileId)?.let { return it }
+        val bytes = fileSystem.readFileBytes(fileId).getOrNull() ?: return null
+        val bmp = withContext(Dispatchers.Default) {
+            decodeSampledBitmap(bytes, THUMB_MAX_PX)?.asImageBitmap()
+        } ?: return null
+        thumbnailCache.put(fileId, bmp)
+        return bmp
     }
 
     fun createFolder(name: String, policy: CopyPolicy) {
@@ -492,5 +517,7 @@ class FileViewModel @Inject constructor(
 
     private companion object {
         const val MAX_IMPORT_BYTES = 100L * 1024 * 1024 // 100MB（需求上限，与 RealFileSystem 一致）
+        const val THUMB_MAX_PX = 256      // 缩略图最长边像素（列表 40dp 项足够清晰）
+        const val THUMB_CACHE_ENTRIES = 48 // 缩略图缓存条数上限（256px 小图，内存可控）
     }
 }
