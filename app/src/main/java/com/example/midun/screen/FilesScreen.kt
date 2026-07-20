@@ -311,7 +311,7 @@ private fun FolderCard(
                             .background(Primary.copy(0.1f))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
-                        Text("AES-256加密", fontSize = 10.sp, color = Primary)
+                        Text("已加密", fontSize = 10.sp, color = Primary)
                     }
                 }
             }
@@ -581,7 +581,7 @@ fun FileDetailScreen(
                                 Text("拷贝策略", fontSize = 11.sp, color = TextSecondary)
                             }
                             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
-                                Text("AES-256", fontWeight = FontWeight.Bold, color = Primary)
+                                Text("已加密", fontWeight = FontWeight.Bold, color = Primary)
                                 Text("加密方式", fontSize = 11.sp, color = TextSecondary)
                             }
                         }

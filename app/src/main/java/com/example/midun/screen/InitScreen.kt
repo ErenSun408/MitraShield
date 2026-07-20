@@ -137,7 +137,7 @@ fun InitScreen(
                     Spacer(Modifier.height(16.dp))
                     Text("设置安全密码", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
-                    Text("密码将通过SHA256加密存储在设备中", fontSize = 12.sp, color = TextSecondary)
+                    Text("密码加密后存储在设备中", fontSize = 12.sp, color = TextSecondary)
                     Spacer(Modifier.height(24.dp))
 
                     OutlinedTextField(
@@ -268,7 +268,7 @@ fun InitScreen(
                     Spacer(Modifier.height(24.dp))
                     Text("正在初始化设备...", fontSize = 16.sp)
                     Spacer(Modifier.height(8.dp))
-                    Text("生成ECDH密钥对(secp256r1)", fontSize = 12.sp, color = TextSecondary)
+                    Text("生成安全密钥", fontSize = 12.sp, color = TextSecondary)
                 }
                 4 -> {
                     Spacer(Modifier.height(40.dp))

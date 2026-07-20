@@ -110,7 +110,7 @@ fun LoginScreen(
             ) {
                 Text("安全登录", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
-                Text("密码经SHA256加密传输至设备验证", fontSize = 12.sp, color = TextSecondary)
+                Text("密码加密后传输至设备验证", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(24.dp))
 
                 OutlinedTextField(

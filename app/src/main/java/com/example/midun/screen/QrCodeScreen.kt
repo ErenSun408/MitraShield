@@ -249,7 +249,6 @@ fun QrCodeScreen(
                             InfoRow("设备SN", "本机设备")
                             InfoRow("IPv6地址", "生成时获取本机地址")
                             InfoRow("会话ID", "随机生成")
-                            InfoRow("临时公钥", "P-256 临时 ECDH 公钥")
                             InfoRow("有效期", "120秒")
                         }
                     }
