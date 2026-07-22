@@ -122,7 +122,6 @@ fun SettingsScreen(
             colors = CardDefaults.cardColors(containerColor = Primary.copy(0.05f))
         ) {
             Column(Modifier.padding(16.dp)) {
-                SettingsInfoItem("设备ID", deviceStatus.deviceId.ifEmpty { "未知" })
                 SettingsInfoItem(
                     "绑定状态",
                     if (deviceStatus.boundPhoneId != null) "已绑定本机" else "未绑定"

@@ -87,14 +87,9 @@ fun HomeScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Security, null, tint = Accent, modifier = Modifier.size(40.dp))
                     Spacer(Modifier.width(12.dp))
-                    // 中间列吃掉剩余宽度、SN 单行省略号，避免长 SN 把右侧状态徽章挤到换行溢出（机型适配）。
+                    // 中间列吃掉剩余宽度，避免标题把右侧状态徽章挤到换行溢出（机型适配）。
                     Column(modifier = Modifier.weight(1f)) {
                         Text("守波秘钥", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Text(
-                            "SN: ${device.deviceId.ifEmpty { "未知" }}",
-                            color = Color.White.copy(0.7f), fontSize = 12.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis
-                        )
                     }
                     Spacer(Modifier.width(8.dp))
                     val statusColor = if (deviceConnected) Success else Danger

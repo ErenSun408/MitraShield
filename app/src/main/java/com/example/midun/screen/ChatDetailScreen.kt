@@ -235,7 +235,7 @@ fun ChatDetailScreen(
                         Column(modifier = Modifier.clickable { onOpenProfile() }) {
                             Text(contact?.remark ?: "聊天", fontSize = 16.sp)
                             Text(
-                                "已加密 · 设备ID: ${contact?.deviceId ?: ""}",
+                                "已加密",
                                 fontSize = 10.sp,
                                 color = Color.White.copy(0.7f)
                             )

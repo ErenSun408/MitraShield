@@ -22,7 +22,7 @@ import com.example.midun.viewmodel.ChatViewModel
 
 /**
  * 联系人资料页（v4 外增量，2026-06-09）：由 ChatDetailScreen 点顶栏标题进入。
- * 展示备注 / 设备 ID / 在线态，提供「编辑备注」与「删除联系人」。
+ * 展示/编辑备注，提供「删除联系人」。
  * 叶子屏幕用回调（onBack / onContactDeleted），不持 navController（全局约定）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -101,7 +101,7 @@ fun ContactProfileScreen(
 
             Spacer(Modifier.height(24.dp))
 
-            // 信息卡：备注（可编辑） + 设备 ID（只读）。
+            // 信息卡：备注（可编辑）。
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(12.dp),
@@ -113,8 +113,6 @@ fun ContactProfileScreen(
                         value = contact?.remark ?: "",
                         onClick = { showEditDialog = true }
                     )
-                    HorizontalDivider(color = Surface)
-                    InfoReadRow(label = "设备 ID", value = contact?.deviceId ?: "")
                 }
             }
 
@@ -217,18 +215,5 @@ private fun InfoEditRow(label: String, value: String, onClick: () -> Unit) {
         Text(value, fontSize = 14.sp, color = TextPrimary, fontWeight = FontWeight.Medium)
         Spacer(Modifier.width(8.dp))
         Icon(Icons.Default.Edit, "编辑", tint = Primary, modifier = Modifier.size(18.dp))
-    }
-}
-
-/** 只读信息行。 */
-@Composable
-private fun InfoReadRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, fontSize = 14.sp, color = TextSecondary)
-        Spacer(Modifier.weight(1f))
-        Text(value, fontSize = 14.sp, color = TextPrimary, fontWeight = FontWeight.Medium)
     }
 }

@@ -36,10 +36,7 @@ fun InitScreen(
     authViewModel: AuthViewModel = hiltViewModel(),
     deviceViewModel: DeviceViewModel = hiltViewModel()
 ) {
-    val context = LocalContext.current
-    val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
-    // 真实本机标识（绑定用的就是 ANDROID_ID）+ 机型；安全卡 SN 来自已连接的卡（真卡=SFDiskGetSN）。
-    val phoneId = remember { Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "未知" }
+    // 机型仅用于初始化页展示（设备标识类文案已按客户要求移除）。
     val phoneModel = remember { "${Build.MANUFACTURER} ${Build.MODEL}" }
 
     var step by remember { mutableIntStateOf(0) }
@@ -208,18 +205,8 @@ fun InitScreen(
                     ) {
                         Column(Modifier.padding(16.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("设备ID：", color = TextSecondary, fontSize = 14.sp)
-                                Text(phoneId, fontWeight = FontWeight.Medium)
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("设备型号：", color = TextSecondary, fontSize = 14.sp)
                                 Text(phoneModel, fontWeight = FontWeight.Medium)
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("设备SN：", color = TextSecondary, fontSize = 14.sp)
-                                Text(deviceStatus.deviceId.ifEmpty { "未知" }, fontWeight = FontWeight.Medium)
                             }
                         }
                     }

@@ -47,11 +47,6 @@ fun LoginScreen(
     val isLoading = loginState is AuthViewModel.LoginState.Loading
     val error = loginState as? AuthViewModel.LoginState.Error
 
-    val context = LocalContext.current
-    val deviceStatus by deviceViewModel.deviceStatus.collectAsState()
-    // 真实数据：安全卡 SN（真卡=SFDiskGetSN）+ 本机 ANDROID_ID（绑定标识），替换原写死占位。
-    val phoneId = remember { Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) ?: "未知" }
-
     LaunchedEffect(loginState) {
         if (loginState is AuthViewModel.LoginState.Success) onLoginSuccess()
     }
@@ -175,23 +170,6 @@ fun LoginScreen(
                         color = TextSecondary,
                         style = MaterialTheme.typography.bodySmall
                     )
-                }
-
-                Spacer(Modifier.height(16.dp))
-
-                Column {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Info, null, tint = TextSecondary, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("设备SN: ${deviceStatus.deviceId.ifEmpty { "未知" }}", fontSize = 11.sp, color = TextSecondary)
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    // 本机ID 行配对等图标，使两行文本左缘对齐（原来无图标从 0 起、与 SN 行错位）。
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Smartphone, null, tint = TextSecondary, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("本机ID: $phoneId", fontSize = 11.sp, color = TextSecondary)
-                    }
                 }
             }
         }
