@@ -31,6 +31,7 @@ import com.example.midun.BuildConfig
 import com.example.midun.data.SettingsStore
 import com.example.midun.ui.theme.*
 import com.example.midun.util.formatStorage
+import com.example.midun.util.formatStorageCoarse
 import com.example.midun.viewmodel.DeviceViewModel
 
 /**
@@ -131,7 +132,7 @@ fun SettingsScreen(
                 val used = (total - deviceStatus.freeBytes).coerceAtLeast(0L)
                 SettingsInfoItem(
                     "存储使用",
-                    if (total > 0) "${formatStorage(used)} / ${formatStorage(total)}" else "-- / --"
+                    if (total > 0) "${formatStorageCoarse(used)} / ${formatStorage(total)}" else "-- / --"
                 )
             }
         }
@@ -203,7 +204,7 @@ fun SettingsScreen(
                     icon = Icons.Default.CleaningServices,
                     title = "清除缓存",
                     subtitle = "聊天图片/视频预览缓存" +
-                        (cacheBytes?.let { "（占用 ${formatStorage(it)}）" } ?: ""),
+                        (cacheBytes?.let { "（占用 ${if (it <= 0L) "0 KB" else formatStorage(it)}）" } ?: ""),
                     iconTint = Accent,
                     onClick = { showCacheDialog = true }
                 )

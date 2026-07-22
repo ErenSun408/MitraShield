@@ -30,6 +30,7 @@ import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
 import com.example.midun.util.formatStorage
+import com.example.midun.util.formatStorageCoarse
 import com.example.midun.viewmodel.DeviceViewModel
 import com.example.midun.viewmodel.FileViewModel
 import com.example.midun.viewmodel.OperationLogViewModel
@@ -118,7 +119,7 @@ fun HomeScreen(
                     val total = device.totalBytes
                     val used = (device.totalBytes - device.freeBytes).coerceAtLeast(0L)
                     StatusItem("存储容量", if (total > 0) formatStorage(total) else "--")
-                    StatusItem("已用空间", if (total > 0) formatStorage(used) else "--")
+                    StatusItem("已用空间", if (total > 0) formatStorageCoarse(used) else "--")
                 }
             }
         }
