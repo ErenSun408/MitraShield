@@ -201,6 +201,7 @@ class FileViewModel @Inject constructor(
             fileSystem.createFolder(name, policy)
                 .onSuccess {
                     loadFolders()
+                    operationLog.record(OperationType.FOLDER_CREATE, "新建文件夹「$name」")
                     _operationResult.emit(OperationResult.Success("文件夹创建成功"))
                 }
                 .onFailure {
@@ -397,6 +398,7 @@ class FileViewModel @Inject constructor(
     }
 
     fun renameFolder(folderId: String, newName: String) {
+        val oldName = _uiState.value.folders.find { it.id == folderId }?.name ?: "文件夹"
         viewModelScope.launch {
             val trimmedName = newName.trim()
             if (trimmedName.isBlank()) {
@@ -407,6 +409,7 @@ class FileViewModel @Inject constructor(
             fileSystem.renameFolder(folderId, trimmedName)
                 .onSuccess {
                     loadFolders()
+                    operationLog.record(OperationType.FILE_RENAME, "重命名文件夹「$oldName」→「$trimmedName」")
                     _operationResult.emit(OperationResult.Success("文件夹已重命名"))
                 }
                 .onFailure {
@@ -416,6 +419,7 @@ class FileViewModel @Inject constructor(
     }
 
     fun renameFile(fileId: String, newName: String, folderId: String) {
+        val oldName = _uiState.value.currentFiles.find { it.id == fileId }?.name
         viewModelScope.launch {
             val trimmedName = newName.trim()
             if (trimmedName.isBlank()) {
@@ -426,6 +430,10 @@ class FileViewModel @Inject constructor(
             fileSystem.renameFile(fileId, trimmedName)
                 .onSuccess {
                     loadFiles(folderId)
+                    operationLog.record(
+                        OperationType.FILE_RENAME,
+                        if (oldName != null) "重命名文件「$oldName」→「$trimmedName」" else "重命名文件为「$trimmedName」"
+                    )
                     _operationResult.emit(OperationResult.Success("文件已重命名"))
                 }
                 .onFailure {

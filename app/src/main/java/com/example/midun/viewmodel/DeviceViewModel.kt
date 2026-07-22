@@ -7,7 +7,9 @@ import com.example.midun.data.ExitClearPrefs
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.SettingsStore
 import com.example.midun.data.ChatRepository
+import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.model.UsbDeviceStatus
+import com.example.midun.data.model.OperationType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job
@@ -24,7 +26,8 @@ import kotlinx.coroutines.launch
 class DeviceViewModel @Inject constructor(
     private val cardManager: SecurityCardManager,
     private val settingsStore: SettingsStore,
-    private val chatRepository: ChatRepository
+    private val chatRepository: ChatRepository,
+    private val operationLog: OperationLogRepository
 ) : ViewModel() {
 
     /** 文件预览缓存统计（设置页「清除缓存」副标题）：返回 (文件数, 总字节)。 */
@@ -169,7 +172,7 @@ class DeviceViewModel @Inject constructor(
                 return@launch
             }
             cardManager.updateKey()
-                .onSuccess { onSuccess() }
+                .onSuccess { operationLog.record(OperationType.KEY_UPDATE, "更新访问密钥"); onSuccess() }
                 .onFailure { onError(it.message ?: "密钥更新失败") }
         }
     }

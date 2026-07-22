@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.midun.data.FileRepository
 import com.example.midun.data.ChatRepository
+import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.model.ChatMessage
+import com.example.midun.data.model.OperationType
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
@@ -31,7 +33,8 @@ import kotlinx.coroutines.withContext
 class ChatViewModel @Inject constructor(
     private val chatRepo: ChatRepository,
     private val p2pManager: P2PSessionManager,
-    private val fileRepository: FileRepository
+    private val fileRepository: FileRepository,
+    private val operationLog: OperationLogRepository
 ) : ViewModel() {
 
     /** 文件传输进度（M11.5.3）：messageId → 0f..1f；转发 P2PSessionManager 单例，气泡据此画进度条。 */
@@ -302,7 +305,16 @@ class ChatViewModel @Inject constructor(
         val contactId = _currentContactId.value ?: return
         viewModelScope.launch {
             p2pManager.saveReceivedFile(msg.id, contactId, msg.fileName ?: msg.content, folderId)
-                .onSuccess { reloadCurrent(contactId); onResult(true, "已保存到文件夹") }
+                .onSuccess {
+                    reloadCurrent(contactId)
+                    val folderName = _saveFolders.value.find { it.id == folderId }?.name
+                    val name = msg.fileName ?: msg.content
+                    operationLog.record(
+                        OperationType.FILE_IMPORT,
+                        if (folderName != null) "保存接收文件「$name」至「$folderName」" else "保存接收文件「$name」"
+                    )
+                    onResult(true, "已保存到文件夹")
+                }
                 .onFailure { onResult(false, it.message ?: "保存失败") }
         }
     }

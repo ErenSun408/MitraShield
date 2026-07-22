@@ -12,6 +12,9 @@ enum class OperationType(val label: String) {
     FILE_EXPORT("文件导出"),
     FILE_MOVE("文件移动"),
     FILE_DELETE("文件删除"),
+    FOLDER_CREATE("新建文件夹"),
+    FILE_RENAME("重命名"),
+    KEY_UPDATE("密钥更新"),
     CONNECT("相逢叙话"),
 }
 

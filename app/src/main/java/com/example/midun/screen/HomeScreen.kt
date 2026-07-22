@@ -346,6 +346,9 @@ private fun iconForOperation(type: OperationType): ImageVector = when (type) {
     OperationType.FILE_EXPORT -> Icons.Default.FileDownload
     OperationType.FILE_MOVE -> Icons.Default.DriveFileMove
     OperationType.FILE_DELETE -> Icons.Default.DeleteForever
+    OperationType.FOLDER_CREATE -> Icons.Default.CreateNewFolder
+    OperationType.FILE_RENAME -> Icons.Default.DriveFileRenameOutline
+    OperationType.KEY_UPDATE -> Icons.Default.Key
     OperationType.CONNECT -> Icons.Default.Chat
 }
 
