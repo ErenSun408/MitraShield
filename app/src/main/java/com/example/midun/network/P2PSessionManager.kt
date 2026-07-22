@@ -840,7 +840,7 @@ class P2PSessionManager @Inject constructor(
         when (frame.type) {
             IDENTITY_TYPE -> {
                 // 对端身份帧：建/找联系人并绑定到会话（A 侧由此首次建联系人）。
-                val (contactId, isNew) = bindContact(plaintext, remark = plaintext)
+                val (contactId, isNew) = bindContact(plaintext, remark = "") // 无用户备注 → bindContact 给默认名
                 if (session.contactId == UNKNOWN_CONTACT) {
                     _activeSession.value = session.copy(contactId = contactId)
                     // A 侧首次身份确定 → 通知 QR 屏（新建则弹备注、否则直接进会话）。
@@ -896,11 +896,20 @@ class P2PSessionManager @Inject constructor(
     private suspend fun bindContact(deviceSn: String, remark: String): Pair<String, Boolean> {
         chatRepo.findContactByDevice(deviceSn)?.let { return it.id to false }
         val id = "c_${System.currentTimeMillis()}"
+        val name = remark.ifBlank { nextDefaultContactName() }
         chatRepo.addContact(
-            Contact(id = id, deviceId = deviceSn, remark = remark, lastMessageTime = System.currentTimeMillis())
+            Contact(id = id, deviceId = deviceSn, remark = name, lastMessageTime = System.currentTimeMillis())
         )
-        operationLog.record(OperationType.CONNECT, "与「$remark」建立加密连接")
+        operationLog.record(OperationType.CONNECT, "与「$name」建立加密连接")
         return id to true
+    }
+
+    /** 无备注时的默认联系人名：「新建联系人」+ 本机已有同类名的最大序号 +1（删号留空洞不复用，避免撞名）。 */
+    private fun nextDefaultContactName(): String {
+        val maxIndex = chatRepo.getContacts().mapNotNull {
+            Regex("^新建联系人(\\d+)$").matchEntire(it.remark)?.groupValues?.get(1)?.toIntOrNull()
+        }.maxOrNull() ?: 0
+        return "新建联系人${maxIndex + 1}"
     }
 
     /** 接收循环结束（对端断开）：若非主动 disconnect，归位为 DISCONNECTED 并抹密钥。 */

@@ -444,7 +444,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             // 连接前先判断该设备是否已是联系人 → 决定连上后弹备注（新建）还是直接进会话（重连）。
             val existedBefore = chatRepo.findContactByDevice(info.deviceSn) != null
-            p2pManager.connectTo(info, remark.ifBlank { info.deviceSn })
+            p2pManager.connectTo(info, remark) // 空备注 → bindContact 给「新建联系人N」默认名
                 .onSuccess { session ->
                     _contacts.value = chatRepo.getContacts()
                     onConnected(session.contactId, !existedBefore)

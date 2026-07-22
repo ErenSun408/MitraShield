@@ -401,14 +401,14 @@ fun QrCodeScreen(
                 ScanTab(
                     scanned = scanned,
                     onQrDetected = { value ->
-                        // 新流程：先连接（占位备注=deviceSn），成功后再弹备注；已是好友则直接进会话。
+                        // 新流程：先连接（空备注→默认「新建联系人N」），成功后再弹备注；已是好友则直接进会话。
                         scanned = true
                         scannedContent = value
                         connecting = true
                         connectError = null
                         chatViewModel.connectToContact(
                             qrContent = value,
-                            remark = "", // 空 → connectTo 用 deviceSn 占位
+                            remark = "", // 空 → bindContact 用「新建联系人N」默认名
                             onConnected = { contactId, isNew ->
                                 connecting = false
                                 if (isNew) remarkContactId = contactId else onOpenChat(contactId)
