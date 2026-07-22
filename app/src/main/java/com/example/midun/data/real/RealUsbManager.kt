@@ -246,11 +246,11 @@ class RealUsbManager @Inject constructor(
         // 退出自动清理「下次登录补清」：盘已打开、AUTHENTICATED 尚未置位（ChatRepository 未加载）→ 无竞态。
         // 开启则在进主界面前清空对应数据；开关文件是根级侧车，clear() 不会删它 → 每次登录都清。
         val exitClear = readExitClearPrefs()
-        if (exitClear.clearContacts) runCatching { realFileSystem.deleteFile(CHAT_SIDECAR) }
+        if (exitClear.clearContacts) runCatching { realFileSystem.deleteSidecar(CHAT_SIDECAR) }
         if (exitClear.clearFiles) realFileSystem.clear()
         // 任一「退出时清空」开启，一并清首页最近操作日志（删在置 AUTHENTICATED 之前，
         // OperationLogRepository 随后 store.load() 读到空、_logs 维持登出时清空的 emptyList，无竞态）。
-        if (exitClear.clearContacts || exitClear.clearFiles) runCatching { realFileSystem.deleteFile(OPLOG_SIDECAR) }
+        if (exitClear.clearContacts || exitClear.clearFiles) runCatching { realFileSystem.deleteSidecar(OPLOG_SIDECAR) }
         val sn = readSn() // 盘已打开，补读真实 SN（已初始化卡在 connectUsb 阶段读不到）
         val (total, free) = readCapacity()
         _deviceStatus.value = _deviceStatus.value.copy(
@@ -334,8 +334,10 @@ class RealUsbManager @Inject constructor(
             val fmt = synchronized(fsShell) { LibJniFSShell.SFFormat(ROOT) }
             if (fmt != 0) {
                 realFileSystem.clear() // 删所有文件夹/文件/元数据
-                // clear() 不含这些隐藏侧车，单独删（聊天 / 日志 / 绑定）。
-                listOf(CHAT_SIDECAR, OPLOG_SIDECAR, BIND_PATH).forEach { runCatching { realFileSystem.deleteFile(it) } }
+                // clear() 不含这些隐藏侧车，单独删（聊天 / 日志 含 .bak/.tmp 残留；绑定）。
+                runCatching { realFileSystem.deleteSidecar(CHAT_SIDECAR) }
+                runCatching { realFileSystem.deleteSidecar(OPLOG_SIDECAR) }
+                runCatching { realFileSystem.deleteFile(BIND_PATH) }
             }
             // 回出厂默认密码（SFFormat 是否自动重置密码未知，显式兜底确保未初始化态）。
             val ret = synchronized(fsShell) { fsShell.SFDiskSetPassword(DEFAULT_PASSWORD) }

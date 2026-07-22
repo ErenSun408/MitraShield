@@ -570,15 +570,63 @@ class RealFileSystem @Inject constructor(
      * 用备份并把它改名还原回主路径——备份包裹同一 DEK，等价于上次更新成功。
      */
     fun loadKeystoreRaw(): ByteArray? {
-        readKeystoreAt(KEYSTORE_PATH)?.let { return it }
-        val bak = readKeystoreAt(KEYSTORE_BAK) ?: return null
+        readBytesOrNull(KEYSTORE_PATH)?.let { return it }
+        val bak = readBytesOrNull(KEYSTORE_BAK) ?: return null
         synchronized(fsShell) { LibJniFSShell.SFRename(KEYSTORE_BAK, KEYSTORE_PATH) }
         return bak
     }
 
-    private fun readKeystoreAt(path: String): ByteArray? {
+    private fun readBytesOrNull(path: String): ByteArray? {
         val out = ByteArrayOutputStream()
         return if (readFile(path, out).isSuccess) out.toByteArray() else null
+    }
+
+    // —— 根级 JSON 侧车（操作日志 / 聊天记录）原子覆盖写 + 崩溃自愈读（防「直接拔卡」写坏）——
+    // 旧路径 writeRaw 是原地 SFCreate 截断再写：拔卡卡在中途 → live 文件空/半截 → 下次登录解析失败，
+    // 表现为「最近操作 / 聊天记录被清空」。沿用 keystore 的 tmp→bak→就位→删bak 策略，live 文件恒为
+    // 完整旧版或完整新版，绝不出现空/半截。
+
+    /** 原子覆盖写侧车 [path]（先写 .tmp → 旧文件改名 .bak → .tmp 就位 → 删 .bak）。首次写入无旧文件则直接就位。需盘已打开。 */
+    fun atomicWriteSidecar(path: String, bytes: ByteArray): Boolean {
+        val tmp = "$path.tmp"
+        val bak = "$path.bak"
+        synchronized(fsShell) {
+            LibJniFSShell.SFDelete(tmp)
+            LibJniFSShell.SFDelete(bak)
+        }
+        if (!writeFile(tmp, bytes.inputStream()).isSuccess) {
+            synchronized(fsShell) { LibJniFSShell.SFDelete(tmp) }
+            return false
+        }
+        return synchronized(fsShell) {
+            val hadOld = exists(path)
+            // 旧文件先改名为 .bak（而非删）→ 即便下一步崩溃，.bak 仍是完整旧版，供 readSidecarHealed 自愈。
+            if (hadOld && !LibJniFSShell.SFRename(path, bak)) {
+                LibJniFSShell.SFDelete(tmp); return@synchronized false
+            }
+            if (!LibJniFSShell.SFRename(tmp, path)) {
+                if (hadOld) LibJniFSShell.SFRename(bak, path) // 还原旧版
+                LibJniFSShell.SFDelete(tmp)
+                return@synchronized false
+            }
+            LibJniFSShell.SFDelete(bak)
+            true
+        }
+    }
+
+    /** 读侧车 [path]；主文件缺失则回读 .bak 并改名还原（原子写卡在两次 rename 间被拔卡时的自愈）。都无返回 null。需盘已打开。 */
+    fun readSidecarHealed(path: String): ByteArray? {
+        readBytesOrNull(path)?.let { return it }
+        val bak = readBytesOrNull("$path.bak") ?: return null
+        synchronized(fsShell) { LibJniFSShell.SFRename("$path.bak", path) }
+        return bak
+    }
+
+    /** 删侧车主文件及其原子写残留（.tmp/.bak）。退出清空 / 恢复出厂用，防残留 .bak 被 [readSidecarHealed] 复活已清数据。 */
+    fun deleteSidecar(path: String) = synchronized(fsShell) {
+        LibJniFSShell.SFDelete("$path.tmp")
+        LibJniFSShell.SFDelete("$path.bak")
+        LibJniFSShell.SFDelete(path)
     }
 
     /**

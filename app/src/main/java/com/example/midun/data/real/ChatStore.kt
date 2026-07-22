@@ -5,7 +5,6 @@ import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.data.model.UsbDeviceStatus
-import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -38,17 +37,15 @@ class ChatStore @Inject constructor(
     suspend fun load(): ChatSnapshot? = withContext(Dispatchers.IO) {
         if (!active()) return@withContext null
         runCatching {
-            val out = ByteArrayOutputStream()
-            if (real.readFile(CHAT_PATH, out).isFailure) {
-                return@runCatching ChatSnapshot(emptyList(), emptyMap()) // 文件不存在=空
-            }
-            fromJson(out.toString(Charsets.UTF_8.name()))
+            val bytes = real.readSidecarHealed(CHAT_PATH)
+                ?: return@runCatching ChatSnapshot(emptyList(), emptyMap()) // 文件不存在=空
+            fromJson(String(bytes, Charsets.UTF_8))
         }.getOrNull()
     }
 
     suspend fun save(snapshot: ChatSnapshot) = withContext(Dispatchers.IO) {
         if (!active()) return@withContext
-        runCatching { real.writeFile(CHAT_PATH, toJson(snapshot).byteInputStream()) }
+        runCatching { real.atomicWriteSidecar(CHAT_PATH, toJson(snapshot).toByteArray(Charsets.UTF_8)) }
         Unit
     }
 

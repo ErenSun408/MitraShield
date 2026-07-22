@@ -3,7 +3,6 @@ package com.example.midun.data.real
 import com.example.midun.data.model.OperationLog
 import com.example.midun.data.model.OperationType
 import com.example.midun.data.model.UsbDeviceStatus
-import java.io.ByteArrayOutputStream
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -31,16 +30,15 @@ class OperationLogStore @Inject constructor(
     suspend fun load(): List<OperationLog>? = withContext(Dispatchers.IO) {
         if (!active()) return@withContext null
         runCatching {
-            val out = ByteArrayOutputStream()
-            if (real.readFile(LOG_PATH, out).isFailure) return@runCatching emptyList()
-            fromJson(out.toString(Charsets.UTF_8.name()))
+            val bytes = real.readSidecarHealed(LOG_PATH) ?: return@runCatching emptyList()
+            fromJson(String(bytes, Charsets.UTF_8))
         }.getOrNull()
     }
 
-    /** 真卡模式写穿到卡（整表覆盖写）；非活动态 no-op。 */
+    /** 真卡模式写穿到卡（整表原子覆盖写，防拔卡写坏）；非活动态 no-op。 */
     suspend fun save(logs: List<OperationLog>) = withContext(Dispatchers.IO) {
         if (!active()) return@withContext
-        runCatching { real.writeFile(LOG_PATH, toJson(logs).byteInputStream()) }
+        runCatching { real.atomicWriteSidecar(LOG_PATH, toJson(logs).toByteArray(Charsets.UTF_8)) }
         Unit
     }
 
