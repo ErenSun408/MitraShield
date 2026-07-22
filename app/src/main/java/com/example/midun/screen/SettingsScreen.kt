@@ -919,9 +919,15 @@ private fun WheelTimePicker(
         listState.scrollToItem(idx)
     }
 
+    // 中心项 = 中点离视口中线最近的可见项。不用 firstVisibleItemIndex：它到不了最后一项
+    // （末项下方内容不足 3 格视口高、列表滚到底前就封顶在倒数第二项 → 末项永远选不中）。
     val centerIndex by remember {
         derivedStateOf {
-            listState.firstVisibleItemIndex.coerceIn(0, options.size - 1)
+            val info = listState.layoutInfo
+            val mid = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+            info.visibleItemsInfo
+                .minByOrNull { kotlin.math.abs((it.offset + it.size / 2f) - mid) }
+                ?.index?.coerceIn(0, options.size - 1) ?: 0
         }
     }
     LaunchedEffect(centerIndex) {
