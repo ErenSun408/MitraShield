@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
@@ -194,18 +195,20 @@ fun ChatDetailScreen(
         chatViewModel.markRead(contactId)
     }
 
-    // 自动滚到底：列表含 index 0 的加密横幅，故末条索引 = messages.size。
+    // 自动滚到底：列表首项即首条消息（加密横幅已挪进顶栏），故末条索引 = 条数 - 1。
     // 首次进会话**瞬时**跳到底（避免先停在最旧消息、再花约 1s 动画滚下来）；之后新消息才平滑滚动。
     // remember(contactId)：切换联系人时重置，使每个新打开的会话都先瞬时定位。
     var didInitialScroll by remember(contactId) { mutableStateOf(false) }
     // 同时以末条消息 id 为 key：重发会「删旧+插新」使 size 不变，但末条变化仍需滚到底。
+    // 键仍取原始 messages：搜索过滤只改可见条数，不该触发「跳到底」。
     LaunchedEffect(messages.size, messages.lastOrNull()?.id) {
-        if (messages.isNotEmpty()) {
+        if (displayMessages.isNotEmpty()) {
+            val last = displayMessages.size - 1
             if (!didInitialScroll) {
-                listState.scrollToItem(messages.size)
+                listState.scrollToItem(last)
                 didInitialScroll = true
             } else {
-                listState.animateScrollToItem(messages.size)
+                listState.animateScrollToItem(last)
             }
         }
     }
@@ -234,11 +237,33 @@ fun ChatDetailScreen(
                         // 点标题进联系人资料页（改备注 / 删除联系人）。
                         Column(modifier = Modifier.clickable { onOpenProfile() }) {
                             Text(contact?.remark ?: "聊天", fontSize = 16.sp)
-                            Text(
-                                "已加密",
-                                fontSize = 10.sp,
-                                color = Color.White.copy(0.7f)
-                            )
+                            // 连接状态跟在「已加密」右侧：原先是消息列表里的一张卡片，会被新消息顶出可视区，
+                            // 移进顶栏后常驻可见。未连接时后缀一个「建立连接」链接直达扫码建联。
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                // 「已加密」两态都是中性白、只有状态词着色：变的是连接，加密一直在。
+                                Text("已加密 · ", fontSize = 10.sp, color = Color.White.copy(0.7f))
+                                Text(
+                                    if (connectedHere) "已连接" else "未连接",
+                                    fontSize = 10.sp,
+                                    color = if (connectedHere) Accent else Danger
+                                )
+                                if (!connectedHere) {
+                                    Text(
+                                        " · ",
+                                        fontSize = 10.sp,
+                                        color = Color.White.copy(0.7f)
+                                    )
+                                    Text(
+                                        "建立连接",
+                                        fontSize = 10.sp,
+                                        color = Color.White,
+                                        textDecoration = TextDecoration.Underline,
+                                        modifier = Modifier
+                                            .clickable { onGoConnect() }
+                                            .padding(horizontal = 2.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                         }
                     }
                 },
@@ -441,28 +466,6 @@ fun ChatDetailScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 12.dp)
         ) {
-            item {
-                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Card(
-                        shape = RoundedCornerShape(8.dp),
-                        colors = CardDefaults.cardColors(containerColor = Surface)
-                    ) {
-                        Row(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            if (connectedHere) {
-                                Icon(Icons.Default.Lock, null, tint = Accent, modifier = Modifier.size(12.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("已建立端到端加密连接", fontSize = 11.sp, color = Accent)
-                            } else {
-                                Icon(Icons.Default.LockOpen, null, tint = TextSecondary, modifier = Modifier.size(12.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("未连接 · 消息无法送达（需双方同时在线）", fontSize = 11.sp, color = TextSecondary)
-                            }
-                        }
-                    }
-                }
-            }
-
             itemsIndexed(displayMessages, key = { _, m -> m.id }) { index, msg ->
                 // 微信式时间分隔行：第一条前必显；与上一条间隔 > 5 分钟才显（智能日期格式）。
                 val prev = displayMessages.getOrNull(index - 1)
