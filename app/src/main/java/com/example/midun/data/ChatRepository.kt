@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -45,6 +47,16 @@ class ChatRepository @Inject constructor(
     private val _snapshotLoaded = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
     val snapshotLoaded: SharedFlow<Unit> = _snapshotLoaded.asSharedFlow()
 
+    /**
+     * 卡 IO 串行锁 + 「卡上快照已加载」标志（同 [OperationLogRepository] 的登录竞态）：登出清空内存后，
+     * 登录时的卡读很慢，而 P2P 接收循环/系统提示行可能在这几百毫秒内就往内存写。落盘是**整表覆盖**——
+     * 若这些写抢在加载之前 [persist]，卡上整份聊天会被半截内存顶掉；若加载后盲赋值，它们又会被冲掉。
+     */
+    private val ioLock = Mutex()
+
+    @Volatile
+    private var loaded = false
+
     init {
         // 真卡认证成功（盘已打开）→ 从卡加载聊天；锁定/拔卡（离开 AUTHENTICATED）→ 清内存明文。
         // wasAuthed 守卫：初始 false 的首个发射不触发清理，仅真正离开认证态才清（M11.6.3 安全加固）。
@@ -55,11 +67,16 @@ class ChatRepository @Inject constructor(
                 .distinctUntilChanged()
                 .collect { authed ->
                     if (authed) {
-                        store.load()?.let { applySnapshot(it) }
+                        ioLock.withLock {
+                            store.load()?.let { applySnapshot(it) }
+                            loaded = true
+                        }
+                        persist() // 加载期间写入的消息此前被压着没落盘，合并后统一写回
                         sweepExpiredCache() // 7 天 TTL：清掉过期的文件预览缓存（认证后扫一遍，见 file-transfer 阶段3）
                         _snapshotLoaded.emit(Unit) // → P2PSessionManager 补焚过期的阅后即焚消息
                         wasAuthed = true
                     } else if (wasAuthed) {
+                        loaded = false
                         clearInMemory() // 已写穿到卡，重认证后重载
                         wasAuthed = false
                     }
@@ -428,6 +445,7 @@ class ChatRepository @Inject constructor(
     fun clear() {
         contacts.clear()
         messages.clear()
+        loaded = true // 记录是被主动擦掉的，没有可保护的旧内容 → 允许这次空表落盘
         persist()
     }
 
@@ -437,17 +455,38 @@ class ChatRepository @Inject constructor(
         messages.clear()
     }
 
-    /** 用卡内快照替换内存（真卡认证后加载）。 */
+    /**
+     * 把卡内快照并入内存（真卡认证后加载）。**合并而非替换**：加载这几百毫秒里可能已经有联系人/消息
+     * 落进内存（P2P 接收循环独立于本加载跑），直接 clear+addAll 会把它们冲掉。按 id 去重，卡上那份为准。
+     */
     private fun applySnapshot(s: ChatSnapshot) {
+        val pendingContacts = contacts.toList()
+        val pendingMessages = messages.mapValues { it.value.toList() }
+
         contacts.clear()
         contacts.addAll(s.contacts)
+        pendingContacts.forEach { p -> if (contacts.none { it.id == p.id }) contacts.add(p) }
+
         messages.clear()
         s.messages.forEach { (cid, list) -> messages[cid] = list.toMutableList() }
+        pendingMessages.forEach { (cid, list) ->
+            val target = messages.getOrPut(cid) { mutableListOf() }
+            list.forEach { m -> if (target.none { it.id == m.id }) target.add(m) }
+            target.sortBy { it.timestamp } // 补进来的消息按时间归位，不吊在末尾
+        }
     }
 
-    /** 写穿到隐藏区（store 内部判活动态：未认证 no-op、认证态整表覆盖写）。 */
+    /**
+     * 写穿到隐藏区（store 内部判活动态：未认证 no-op、认证态整表覆盖写）。
+     * 卡上快照加载完成前**不落盘**——此时内存不是完整视图，整表覆盖会抹掉卡上聊天记录。
+     */
     private fun persist() {
-        scope.launch { store.save(ChatSnapshot(contacts.toList(), messages.mapValues { it.value.toList() })) }
+        if (!loaded) return
+        scope.launch {
+            ioLock.withLock {
+                store.save(ChatSnapshot(contacts.toList(), messages.mapValues { it.value.toList() }))
+            }
+        }
     }
 
     private fun updateContactPreview(contactId: String) {
