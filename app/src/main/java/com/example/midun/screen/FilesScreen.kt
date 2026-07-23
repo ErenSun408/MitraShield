@@ -56,6 +56,8 @@ fun FilesScreen(
     // 把确认后的口令带进选取器回调（明文策略保持 null → 走原明文导出）。
     var passphraseForFolder by remember { mutableStateOf<FileItem?>(null) }
     var pendingExportPass by remember { mutableStateOf<String?>(null) }
+    // 导出目标弹框：点「导出文件夹」先选一次目标，确认后才跳系统选取器（客户反馈直接跳太突兀）。
+    var exportTargetFolder by remember { mutableStateOf<FileItem?>(null) }
     val folderExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { treeUri ->
         val f = pendingExportFolder
         if (treeUri != null && f != null) fileViewModel.exportFolderToTree(f.id, f.name, treeUri, pendingExportPass)
@@ -122,15 +124,7 @@ fun FilesScreen(
                         folder = folder,
                         onClick = { onFolderClick(folder.id) },
                         onRename = { newName -> fileViewModel.renameFolder(folder.id, newName) },
-                        onExportFolder = {
-                            if (folder.copyPolicy == CopyPolicy.COPY_ENCRYPTED) {
-                                passphraseForFolder = folder // 先收口令，再选目录
-                            } else {
-                                pendingExportPass = null
-                                pendingExportFolder = folder
-                                folderExportLauncher.launch(null)
-                            }
-                        },
+                        onExportFolder = { exportTargetFolder = folder },
                         onDelete = { folderToDelete = folder }
                     )
                 }
@@ -153,6 +147,26 @@ fun FilesScreen(
     // 仅「进行中」显进度弹窗；完成态由上面的 LaunchedEffect 转 Snackbar。
     exportProgress?.takeIf { !it.finished }?.let {
         FolderExportDialog(it, onCancel = { fileViewModel.cancelTransfer() })
+    }
+
+    // 导出目标弹框：确认「导出到手机」后才继续原流程（加密策略先收口令，否则直接选目录）。
+    exportTargetFolder?.let { f ->
+        ExportTargetDialog(
+            itemName = f.name,
+            isFolder = true,
+            encrypted = f.copyPolicy == CopyPolicy.COPY_ENCRYPTED,
+            onExportToPhone = {
+                exportTargetFolder = null
+                if (f.copyPolicy == CopyPolicy.COPY_ENCRYPTED) {
+                    passphraseForFolder = f // 先收口令，再选目录
+                } else {
+                    pendingExportPass = null
+                    pendingExportFolder = f
+                    folderExportLauncher.launch(null)
+                }
+            },
+            onDismiss = { exportTargetFolder = null }
+        )
     }
 
     // 加密导出口令弹框（M12.5）：拷贝密文文件夹导出前收口令，确认后带口令选目录。
@@ -447,10 +461,12 @@ fun FileDetailScreen(
     var fileToDelete by remember { mutableStateOf<FileItem?>(null) }
     var previewFile by remember { mutableStateOf<FileItem?>(null) }
     var showDeleteAllFilesDialog by remember { mutableStateOf(false) }
+    // 导出目标弹框：单文件/整夹导出都先让用户选一次目标，确认后才跳系统选取器（客户反馈直接跳太突兀）。
+    var exportTargetFile by remember { mutableStateOf<FileItem?>(null) }
+    var exportTargetAllFiles by remember { mutableStateOf(false) }
     val onExportAllFiles = {
         showMenu = false
-        if (encryptedPolicy) passphraseForFolder = true // 先收口令，再选目录
-        else { pendingExportPass = null; folderExportLauncher.launch(null) }
+        exportTargetAllFiles = true
     }
     val onDeleteAllFiles = {
         showMenu = false
@@ -602,10 +618,7 @@ fun FileDetailScreen(
                         moveTargets = uiState.folders.filter { it.id != folderId },
                         onRename = { newName -> fileViewModel.renameFile(file.id, newName, folderId) },
                         onMove = { target -> fileViewModel.moveFile(file.id, file.name, folderId, target.id) },
-                        onExportFile = {
-                            if (encryptedPolicy) passphraseForFile = file // 先收口令，再选保存位置
-                            else { pendingExportPass = null; fileToExport = file; exportLauncher.launch(file.name) }
-                        },
+                        onExportFile = { exportTargetFile = file },
                         onDelete = { fileToDelete = file },
                         onPreview = { previewFile = file },
                         loadThumbnail = fileViewModel::loadThumbnail
@@ -657,6 +670,33 @@ fun FileDetailScreen(
         FilePreviewDialog(file = pf, onClose = { previewFile = null }, siblings = imageSiblings)
     }
 
+    // 导出目标弹框：确认「导出到手机」后才继续原流程（加密策略先收口令，否则直接启动系统选取器）。
+    if (exportTargetFile != null || exportTargetAllFiles) {
+        val f = exportTargetFile
+        ExportTargetDialog(
+            itemName = f?.name ?: folder?.name ?: "当前文件夹",
+            isFolder = f == null,
+            encrypted = encryptedPolicy,
+            onExportToPhone = {
+                exportTargetFile = null
+                exportTargetAllFiles = false
+                if (encryptedPolicy) {
+                    // 先收口令，再选保存位置
+                    if (f != null) passphraseForFile = f else passphraseForFolder = true
+                } else {
+                    pendingExportPass = null
+                    if (f != null) {
+                        fileToExport = f
+                        exportLauncher.launch(f.name)
+                    } else {
+                        folderExportLauncher.launch(null)
+                    }
+                }
+            },
+            onDismiss = { exportTargetFile = null; exportTargetAllFiles = false }
+        )
+    }
+
     // 加密导出口令弹框（M12.5）：单文件或文件夹加密导出前收口令，确认后带口令启动选取器。
     if (passphraseForFile != null || passphraseForFolder) {
         val isFolder = passphraseForFolder
@@ -689,6 +729,62 @@ fun FileDetailScreen(
             onDismiss = { fileViewModel.clearPendingContainer() }
         )
     }
+}
+
+/**
+ * 导出目标弹框。客户反馈：点「导出」直接跳系统文件选取器太突兀 → 先让用户明确点一次目标。
+ * 目前只有「导出到手机」一个目标（点它才启动系统选取器挑保存位置）；[encrypted] 只影响文案，
+ * 加密策略仍由调用方在本弹框之后接口令弹框。
+ */
+@Composable
+private fun ExportTargetDialog(
+    itemName: String,
+    isFolder: Boolean,
+    encrypted: Boolean,
+    onExportToPhone: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val what = if (isFolder) "文件夹" else "文件"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.FileDownload, null, tint = Primary) },
+        title = { Text("导出$what") },
+        text = {
+            Column {
+                Text(
+                    if (encrypted) "「$itemName」将加密成便携文件后保存到手机，之后需导出口令才能打开。"
+                    else "「$itemName」将复制到手机存储，导出后不再受安全卡保护，请妥善保管。",
+                    fontSize = 12.sp, color = TextSecondary
+                )
+                Spacer(Modifier.height(14.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Surface)
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth().clickable(onClick = onExportToPhone).padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            Modifier.size(36.dp).clip(RoundedCornerShape(10.dp))
+                                .background(Primary.copy(alpha = 0.12f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.Smartphone, null, tint = Primary, modifier = Modifier.size(20.dp))
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("导出到手机", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = TextPrimary)
+                            Text("接下来选择手机中的保存位置", fontSize = 11.sp, color = TextSecondary)
+                        }
+                        Icon(Icons.Default.ChevronRight, null, tint = TextSecondary, modifier = Modifier.size(20.dp))
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } }
+    )
 }
 
 /**
