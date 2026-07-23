@@ -144,7 +144,7 @@ fun SettingsScreen(
             Column {
                 SettingsActionItem(
                     icon = Icons.Default.Key,
-                    title = "密钥更新",
+                    title = "文件加密密钥更新",
                     subtitle = "替换文件加密的二级密钥",
                     iconTint = Accent,
                     onClick = { showKeyDialog = true }
@@ -635,7 +635,7 @@ fun SettingsScreen(
                     tint = if (keySuccess) Success else Accent
                 )
             },
-            title = { Text(if (keySuccess) "密钥已更新" else "密钥更新") },
+            title = { Text(if (keySuccess) "文件加密密钥已更新" else "文件加密密钥更新") },
             text = {
                 if (keySuccess) {
                     Text(

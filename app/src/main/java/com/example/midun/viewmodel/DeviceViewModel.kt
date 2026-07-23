@@ -172,8 +172,8 @@ class DeviceViewModel @Inject constructor(
                 return@launch
             }
             cardManager.updateKey()
-                .onSuccess { operationLog.record(OperationType.KEY_UPDATE, "更新访问密钥"); onSuccess() }
-                .onFailure { onError(it.message ?: "密钥更新失败") }
+                .onSuccess { operationLog.record(OperationType.KEY_UPDATE, "更新文件加密密钥"); onSuccess() }
+                .onFailure { onError(it.message ?: "文件加密密钥更新失败") }
         }
     }
 
