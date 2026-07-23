@@ -30,6 +30,13 @@ import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.AuthViewModel
 import com.example.midun.viewmodel.DeviceViewModel
 
+/**
+ * 登录页「忘记密码？」入口开关（暂时隐藏）。真卡在未登录态调 wipeAll 必然失败
+ * （`RealUsbManager.wipeAll` 未 AUTHENTICATED 直接诚实报错、指向 PC 串口工具），
+ * 入口只会把用户引到一条走不通的路。置 true 即恢复，弹框与擦卡逻辑原样保留。
+ */
+private const val SHOW_FORGOT_PASSWORD = false
+
 @Composable
 fun LoginScreen(
     onLoginSuccess: () -> Unit,
@@ -164,12 +171,14 @@ fun LoginScreen(
                     }
                 }
 
-                TextButton(onClick = { showForgotDialog = true }) {
-                    Text(
-                        "忘记密码？",
-                        color = TextSecondary,
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                if (SHOW_FORGOT_PASSWORD) {
+                    TextButton(onClick = { showForgotDialog = true }) {
+                        Text(
+                            "忘记密码？",
+                            color = TextSecondary,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                 }
             }
         }
