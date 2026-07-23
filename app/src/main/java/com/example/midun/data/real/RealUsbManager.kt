@@ -258,6 +258,14 @@ class RealUsbManager @Inject constructor(
         val dn = diskName ?: return@withContext Result.failure(IllegalStateException("USB 未连接"))
         val ret = synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, sha256(password)) }
         if (ret != 0) {
+            // 开盘失败有两种原因，报错不能一律说成密码错误：真的密码不对，或句柄已失效（卡被拔走/换了设备）。
+            // 用 SDK 重新枚举区分——枚举不到设备 = 卡不在了，退回 DISCONNECTED 让 UI 显拔卡遮罩，
+            // 而不是让用户对着「密码错误」反复重试一张根本不在的卡。枚举只走系统 UsbManager，不消耗卡的尝试次数。
+            val stillPresent = runCatching { usbHelper?.GetList()?.count ?: 0 }.getOrDefault(0) > 0
+            if (!stillPresent) {
+                closeDevice()
+                return@withContext Result.failure(IllegalStateException("安全卡已断开，请重新插入后再试"))
+            }
             return@withContext Result.failure(IllegalStateException("密码错误或打开失败，错误码=$ret"))
         }
         val boundId = readBoundId()
