@@ -324,9 +324,11 @@ class ChatViewModel @Inject constructor(
      * 系统行插入后由 manager 经 incomingMessages 信号触发当前会话重载，故此处无需手动 reload。
      * onError 用于无连接/发送失败时反馈（仅活动会话内可用）。
      */
-    fun setBurnMode(enabled: Boolean, ttlSeconds: Int, onError: (String) -> Unit = {}) {
+    fun setBurnMode(
+        enabled: Boolean, ttlSeconds: Int, selfBurnSeconds: Int = 0, onError: (String) -> Unit = {}
+    ) {
         viewModelScope.launch {
-            p2pManager.setBurnMode(enabled, ttlSeconds)
+            p2pManager.setBurnMode(enabled, ttlSeconds, selfBurnSeconds)
                 .onFailure { onError("操作失败：${it.message ?: "需先与对方建立连接"}") }
         }
     }

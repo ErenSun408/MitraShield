@@ -573,28 +573,40 @@ fun ChatDetailScreen(
     }
 
     if (showBurnDialog) {
-        // 时长选项（秒）：与 P2PSessionManager.formatTtl 对应。
-        val options = listOf("10秒" to 10, "15秒" to 15, "30秒" to 30, "1分钟" to 60)
+        // 两段时长（秒）：读后倒计时 = 对端读到后双端同焚；本端自焚 = 自己那份的绝对死线，与对端无关。
+        val readOptions = listOf("10秒" to 10, "15秒" to 15, "30秒" to 30, "1分钟" to 60)
+        val selfOptions = listOf("30秒" to 30, "1分钟" to 60, "10分钟" to 600)
+        var readSec by remember { mutableStateOf(30) }
+        var selfSec by remember { mutableStateOf(60) }
         AlertDialog(
             onDismissRequest = { showBurnDialog = false },
             icon = { Icon(Icons.Default.LocalFireDepartment, null, tint = Warning) },
             title = { Text("开启阅后即焚") },
             text = {
                 Column {
-                    Text("选择焚毁倒计时。开启后你发出的消息，对方读到后将在所选时长后于双方设备一并焚毁。")
-                    Spacer(Modifier.height(12.dp))
-                    options.forEach { (label, sec) ->
-                        OutlinedButton(
-                            onClick = {
-                                chatViewModel.setBurnMode(true, sec)
-                                showBurnDialog = false
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
-                        ) { Text(label) }
-                    }
+                    BurnDurationSection(
+                        title = "读后倒计时",
+                        subtitle = "对方读到后，消息在所选时长后于双方设备一并焚毁。",
+                        options = readOptions,
+                        selected = readSec,
+                        onSelect = { readSec = it }
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    BurnDurationSection(
+                        title = "本端自焚",
+                        subtitle = "你发出的消息到点即从本机消失，不等对方已读——连接断开也不会残留。",
+                        options = selfOptions,
+                        selected = selfSec,
+                        onSelect = { selfSec = it }
+                    )
                 }
             },
-            confirmButton = {},
+            confirmButton = {
+                TextButton(onClick = {
+                    chatViewModel.setBurnMode(true, readSec, selfSec)
+                    showBurnDialog = false
+                }) { Text("开启", color = Primary) }
+            },
             dismissButton = {
                 TextButton(onClick = { showBurnDialog = false }) { Text("取消", color = TextSecondary) }
             }
@@ -756,6 +768,46 @@ fun ChatDetailScreen(
                 burnDocCard = null
             }
         )
+    }
+}
+
+/**
+ * 阅后即焚弹框里的一段时长选择（标题 + 说明 + 一排单选时长）。两段（读后倒计时 / 本端自焚）共用。
+ * 自绘选择块而非 FilterChip：等宽平分一行，「10分钟」这类长标签在窄块里也不会被裁。
+ */
+@Composable
+private fun BurnDurationSection(
+    title: String,
+    subtitle: String,
+    options: List<Pair<String, Int>>,
+    selected: Int,
+    onSelect: (Int) -> Unit
+) {
+    Column {
+        Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(2.dp))
+        Text(subtitle, fontSize = 11.sp, color = TextSecondary)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            options.forEach { (label, sec) ->
+                val isSelected = sec == selected
+                Surface(
+                    modifier = Modifier.weight(1f).clickable { onSelect(sec) },
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isSelected) Warning.copy(alpha = 0.18f) else Color.Transparent,
+                    border = BorderStroke(1.dp, if (isSelected) Warning else TextSecondary.copy(alpha = 0.4f))
+                ) {
+                    Box(Modifier.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
+                        Text(
+                            label,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            color = if (isSelected) Warning else TextSecondary
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1109,8 +1161,9 @@ private fun ConnectPromptLine(text: String, onGoConnect: () -> Unit) {
 }
 
 /**
- * 焚毁消息的状态标签（B 阶段）：已点开（burnDeadline 非空）显示每秒刷新的剩余倒计时；
- * 未点开时——发送方显示「对方读后焚毁」、接收方（理论上已被遮罩，不会走到此分支）显示静态提示。
+ * 焚毁消息的状态标签（B 阶段）：有死线（burnDeadline 非空）即显示每秒刷新的剩余倒计时——接收方是
+ * 点开后的读后倒计时，发送方是发出即起的本端自焚倒计时。
+ * 无死线的兜底文案只剩两处：接收方未点开（理论上已被遮罩挡住），以及本次改动之前发出的历史消息。
  */
 @Composable
 private fun BurnStatusLabel(isMine: Boolean, burnDeadline: Long?, contentColor: Color) {
@@ -1127,7 +1180,7 @@ private fun BurnStatusLabel(isMine: Boolean, burnDeadline: Long?, contentColor: 
                     remaining = ((burnDeadline - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
                 }
             }
-            Text("${remaining}秒后焚毁", fontSize = 10.sp, color = contentColor.copy(alpha = 0.85f))
+            Text(formatBurnRemaining(remaining), fontSize = 10.sp, color = contentColor.copy(alpha = 0.85f))
         } else {
             Text(
                 if (isMine) "阅后即焚 · 对方读后焚毁" else "阅后即焚",
@@ -1136,6 +1189,13 @@ private fun BurnStatusLabel(isMine: Boolean, burnDeadline: Long?, contentColor: 
             )
         }
     }
+}
+
+/** 焚毁剩余时长文案：本端自焚可长达 10 分钟，不能一律按秒显示（「600秒后焚毁」读起来无感）。 */
+private fun formatBurnRemaining(seconds: Long): String = when {
+    seconds < 60 -> "${seconds}秒后焚毁"
+    seconds % 60 == 0L -> "${seconds / 60}分钟后焚毁"
+    else -> "${seconds / 60}分${seconds % 60}秒后焚毁"
 }
 
 @OptIn(ExperimentalFoundationApi::class)

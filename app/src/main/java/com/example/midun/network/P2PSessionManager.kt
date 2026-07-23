@@ -122,7 +122,12 @@ class P2PSessionManager @Inject constructor(
     private val _burnMode = MutableStateFlow(BurnMode(enabled = false, ttlSeconds = 0))
     val burnMode: StateFlow<BurnMode> = _burnMode.asStateFlow()
 
-    data class BurnMode(val enabled: Boolean, val ttlSeconds: Int)
+    /**
+     * @param ttlSeconds 读后倒计时：对端读到后，多久两端一并焚毁（经 BURN_MODE 帧同步给对端）。
+     * @param selfBurnSeconds 本端自焚：本端发出后多久无条件删掉自己那份，不等对端「已读」信号。
+     *   纯本地设置，不入协议——对端有自己的本端自焚时长，各管各的副本。
+     */
+    data class BurnMode(val enabled: Boolean, val ttlSeconds: Int, val selfBurnSeconds: Int = 0)
 
     /**
      * 进行中的焚毁倒计时（B 阶段）：messageId → 焚毁截止时刻(epoch ms)。接收方点开焚毁消息后写入，
@@ -358,10 +363,13 @@ class P2PSessionManager @Inject constructor(
         try {
             writeFrame(session, messageId, type.name, content, burning, ttl) // 帧带稳定 id（可能抛 IOException）
             chatRepo.sendMessage(contactId, content, type, messageId, MessageStatus.SENT, burning, ttl)
+            if (burning) armSelfBurn(messageId, contactId, _burnMode.value.selfBurnSeconds)
             Result.success(Unit)
         } catch (e: Exception) {
             // 写 socket 失败（连接已断）：本地入库标 FAILED，让气泡显「未送达」。
+            // 未送达的焚毁消息同样定死线——没送出去更不该在本机长留。
             chatRepo.sendMessage(contactId, content, type, messageId, MessageStatus.FAILED, burning, ttl)
+            if (burning) armSelfBurn(messageId, contactId, _burnMode.value.selfBurnSeconds)
             Result.failure(e)
         }
     }
@@ -425,6 +433,8 @@ class P2PSessionManager @Inject constructor(
             type = fileMessageType(mime), audioDurationSec = durationSec,
             burnAfterRead = burning, burnTtl = burnTtl
         )
+        // 本端自焚死线在插入气泡时就定（传输失败/取消也照常焚，副本与半成品都不留）。
+        if (burning) armSelfBurn(msgId, contactId, _burnMode.value.selfBurnSeconds)
         setProgress(msgId, 0f)
         _incomingMessages.emit(contactId)
         sendCancelled = false
@@ -517,6 +527,7 @@ class P2PSessionManager @Inject constructor(
             type = fileMessageType(mime), audioDurationSec = durationSec,
             burnAfterRead = burning, burnTtl = if (burning) _burnMode.value.ttlSeconds else 0
         )
+        if (burning) armSelfBurn(msgId, contactId, _burnMode.value.selfBurnSeconds)
         _incomingMessages.emit(contactId)
         if (sentCopyPath == null) return@withContext Result.success(Unit)
 
@@ -562,10 +573,13 @@ class P2PSessionManager @Inject constructor(
     private fun toHex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
 
     /**
-     * 开/关阅后即焚模式（B 阶段，仅在活动会话内有效）：发 BURN_MODE 帧通知对端 → 对端插系统行；
-     * 本端同步更新 [burnMode] 状态、本地插一条系统行。payload="on:<秒>" / "off"。
+     * 开/关阅后即焚模式（B 阶段，仅在活动会话内有效）：发 BURN_MODE 帧通知对端 → 对端据此对本端发去的
+     * 消息按读后倒计时处理。payload="on:<读后倒计时秒>" / "off"——[selfBurnSeconds] 是本端自己那份副本的
+     * 死线，对端不需要也不应该知道，故不入帧、协议不变。
      */
-    suspend fun setBurnMode(enabled: Boolean, ttlSeconds: Int): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun setBurnMode(
+        enabled: Boolean, ttlSeconds: Int, selfBurnSeconds: Int = 0
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         val session = _activeSession.value
             ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
         if (session.contactId == UNKNOWN_CONTACT) {
@@ -573,7 +587,11 @@ class P2PSessionManager @Inject constructor(
         }
         try {
             writeFrame(session, generateMessageId(), BURN_MODE_TYPE, if (enabled) "on:$ttlSeconds" else "off")
-            _burnMode.value = BurnMode(enabled, if (enabled) ttlSeconds else 0)
+            _burnMode.value = BurnMode(
+                enabled,
+                if (enabled) ttlSeconds else 0,
+                if (enabled) selfBurnSeconds else 0
+            )
             // 开/关阅后即焚不再插入系统提示行（客户反馈：双方开关无需留提醒）。
             // 模式状态仍由 _burnMode 驱动会话内火苗图标高亮，功能不受影响。
             Result.success(Unit)
@@ -592,6 +610,23 @@ class P2PSessionManager @Inject constructor(
         val deadline = System.currentTimeMillis() + ttlSeconds * 1000L
         chatRepo.setBurnDeadline(messageId, contactId, deadline)
         scheduleBurn(messageId, contactId, deadline, notifyPeer = true)
+    }
+
+    /**
+     * 发送方本端自焚：发出即定死线（now + [seconds]），到点删本机这份，**不等对端「已读」信号**。
+     *
+     * 这是「发送方副本永久残留」的兜底——BURN 帧只是对端告知「你可以删了」的通知，不是删除权限；
+     * 连接一断（任一方下线）那帧就永远到不了，本端副本便再无焚毁时机。改为发送方自己持有死线后，
+     * 对端是否上线、是否读过都不再影响本端焚毁。
+     *
+     * notifyPeer=false：绝不能捎带删掉对端那份——对方可能还没读，其阅读机会由接收端自己的遮罩 + 读后
+     * 倒计时决定。对端有它自己的本端自焚死线管它那份。
+     */
+    private fun armSelfBurn(messageId: String, contactId: String, seconds: Int) {
+        if (seconds <= 0) return
+        val deadline = System.currentTimeMillis() + seconds * 1000L
+        chatRepo.setBurnDeadline(messageId, contactId, deadline)
+        scheduleBurn(messageId, contactId, deadline, notifyPeer = false)
     }
 
     /**
