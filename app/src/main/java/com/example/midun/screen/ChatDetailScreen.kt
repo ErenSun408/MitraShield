@@ -107,6 +107,7 @@ fun ChatDetailScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
     val transferProgress by chatViewModel.transferProgress.collectAsState()
     var fileToSave by remember { mutableStateOf<ChatMessage?>(null) } // 接收方点「保存」时选文件夹的目标消息
     var previewFile by remember { mutableStateOf<FileItem?>(null) }   // 预览中的文件（暂存区或已保存文件夹）
@@ -134,6 +135,8 @@ fun ChatDetailScreen(
     var resendTarget by remember { mutableStateOf<ChatMessage?>(null) } // 点「未送达」重发的目标消息
     var showSourceMenu by remember { mutableStateOf(false) }          // 发送来源菜单（手机/文件夹）
     var showPickDialog by remember { mutableStateOf(false) }          // 文件夹来源选取对话框
+    var showPlusPanel by remember { mutableStateOf(false) }           // 微信式 + 工具栏（文件 / 拍摄）
+    var showCamera by remember { mutableStateOf(false) }              // 全屏拍摄页（微信式即拍即发）
     // 手机存储选取器（GetContent）：选中即查名/大小/mime → 流式加密发送。
     val pickFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -145,6 +148,18 @@ fun ChatDetailScreen(
                 onError = { scope.launch { snackbarHostState.showSnackbar(it) } }
             )
         }
+    }
+
+    // 拍摄即发（微信式）：临时文件（App 私有 cacheDir）流式加密发送后即删，不留手机明文。
+    fun sendCaptured(file: java.io.File, mime: String) {
+        val name = if (mime.startsWith("video/")) "拍摄_${file.name.substringAfter('_')}"
+            else "拍照_${file.name.substringAfter('_')}"
+        chatViewModel.sendFile(
+            name, file.length(), mime,
+            openStream = { file.inputStream() },
+            onError = { scope.launch { snackbarHostState.showSnackbar(it) } },
+            onComplete = { runCatching { file.delete() } } // 发完删临时明文（发送方预览副本已加密落卡）
+        )
     }
 
     // —— 语音消息（[chat-voice]，按住说话）——
@@ -425,16 +440,20 @@ fun ChatDetailScreen(
                                     Icon(Icons.Default.Send, "发送")
                                 }
                             } else {
-                                // 未连接时与文字一致：仍可发，本地标「未送达」+ 留发送方预览副本，对方收不到（纯 P2P 无服务器、不补发）。
-                                IconButton(onClick = { showSourceMenu = true }) {
-                                    Icon(Icons.Default.AttachFile, "发送文件", tint = Primary)
+                                // 微信式 ⊕：点开工具栏（文件 / 拍摄）。开面板先收键盘，避免面板与键盘打架。
+                                IconButton(onClick = {
+                                    focusManager.clearFocus()
+                                    showSourceMenu = false
+                                    showPlusPanel = !showPlusPanel
+                                }) {
+                                    Icon(Icons.Default.AddCircleOutline, "更多", tint = Primary)
                                 }
                             }
                         }
+                        // 「文件」子来源菜单（手机 / 文件夹），由工具栏「文件」格触发。
                         DropdownMenu(
                             expanded = showSourceMenu,
                             onDismissRequest = { showSourceMenu = false },
-                            // 不抢窗口焦点：键盘弹起时点文件不收起键盘 → 布局不跳动、菜单项点得准。
                             properties = PopupProperties(focusable = false)
                         ) {
                             DropdownMenuItem(
@@ -454,6 +473,12 @@ fun ChatDetailScreen(
                         }
                     }
                 }
+                // 微信式 + 工具栏：输入栏下方滑出的格子面板（第一格文件、第二格拍摄）。
+                PlusToolPanel(
+                    visible = showPlusPanel,
+                    onFile = { showPlusPanel = false; showSourceMenu = true },
+                    onCamera = { showPlusPanel = false; showCamera = true }
+                )
             }
         }
     ) { padding ->
@@ -771,6 +796,60 @@ fun ChatDetailScreen(
                 burnDocCard = null
             }
         )
+    }
+
+    // 全屏拍摄页（微信式即拍即发）：盖在会话之上。拍完即发+退出；点右上 X 退出。
+    if (showCamera) {
+        CameraCaptureScreen(
+            onCaptured = { file, mime -> showCamera = false; sendCaptured(file, mime) },
+            onExit = { showCamera = false }
+        )
+    }
+}
+
+/**
+ * 微信式 + 工具栏：输入栏下方滑出的格子面板。当前两格——「文件」（复用手机/文件夹来源菜单）、「拍摄」（相机页）。
+ * 各格 = 圆角图标 + 文字，横向排列；后续加"相册"等只需再加一格。
+ */
+@Composable
+private fun PlusToolPanel(
+    visible: Boolean,
+    onFile: () -> Unit,
+    onCamera: () -> Unit
+) {
+    androidx.compose.animation.AnimatedVisibility(visible = visible) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Surface)
+                .padding(vertical = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Spacer(Modifier.width(8.dp))
+            PlusTool(Icons.Default.InsertDriveFile, "文件", onFile)
+            PlusTool(Icons.Default.PhotoCamera, "拍摄", onCamera)
+        }
+    }
+}
+
+/** + 工具栏单格：圆角浅底图标 + 下方文字标签。 */
+@Composable
+private fun PlusTool(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, onClick: () -> Unit) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.clickable { onClick() }.padding(horizontal = 8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(CardBg),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, label, tint = Primary, modifier = Modifier.size(28.dp))
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(label, fontSize = 12.sp, color = TextSecondary)
     }
 }
 

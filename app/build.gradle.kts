@@ -106,6 +106,7 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
+    implementation(libs.androidx.camera.video) // 聊天内拍摄：录像 VideoCapture/Recorder
     implementation(libs.mlkit.barcode.scanning)
 
     testImplementation(libs.junit)
