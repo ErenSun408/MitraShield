@@ -102,6 +102,7 @@ class ChatStore @Inject constructor(
         m.localPath?.let { put("localPath", it) }
         if (m.connectPrompt) put("connectPrompt", true)
         if (m.audioDurationSec > 0) put("audioDurationSec", m.audioDurationSec)
+        m.burnDeadline?.let { put("burnDeadline", it) } // 焚毁死线：进程被杀后靠它补焚
     }
 
     private fun messageFromJson(o: JSONObject) = ChatMessage(
@@ -121,7 +122,8 @@ class ChatStore @Inject constructor(
         savedFolderId = if (o.has("savedFolderId")) o.getString("savedFolderId") else null,
         localPath = if (o.has("localPath")) o.getString("localPath") else null,
         connectPrompt = o.optBoolean("connectPrompt"),
-        audioDurationSec = o.optInt("audioDurationSec")
+        audioDurationSec = o.optInt("audioDurationSec"),
+        burnDeadline = if (o.has("burnDeadline")) o.getLong("burnDeadline") else null
     )
 
     private companion object {

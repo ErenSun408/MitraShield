@@ -15,6 +15,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -35,6 +38,13 @@ class ChatRepository @Inject constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /**
+     * 卡内快照加载完成信号（阅后即焚补焚用）：每次认证后 [applySnapshot] 完毕即发一次。
+     * `P2PSessionManager` 据此扫 [burnPending] 补焚——必须在快照就位后、UI 渲染会话前跑。
+     */
+    private val _snapshotLoaded = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
+    val snapshotLoaded: SharedFlow<Unit> = _snapshotLoaded.asSharedFlow()
+
     init {
         // 真卡认证成功（盘已打开）→ 从卡加载聊天；锁定/拔卡（离开 AUTHENTICATED）→ 清内存明文。
         // wasAuthed 守卫：初始 false 的首个发射不触发清理，仅真正离开认证态才清（M11.6.3 安全加固）。
@@ -47,6 +57,7 @@ class ChatRepository @Inject constructor(
                     if (authed) {
                         store.load()?.let { applySnapshot(it) }
                         sweepExpiredCache() // 7 天 TTL：清掉过期的文件预览缓存（认证后扫一遍，见 file-transfer 阶段3）
+                        _snapshotLoaded.emit(Unit) // → P2PSessionManager 补焚过期的阅后即焚消息
                         wasAuthed = true
                     } else if (wasAuthed) {
                         clearInMemory() // 已写穿到卡，重认证后重载
@@ -229,11 +240,28 @@ class ChatRepository @Inject constructor(
             fileSize = null,
             burnAfterRead = false,
             burnTtl = 0,
+            burnDeadline = null, // 已焚 → 死线作废，重认证时不再进补焚扫描
             burned = true
         )
         updateContactPreview(contactId)
         persist()
     }
+
+    /**
+     * 登记一条焚毁消息的死线（epoch ms）并落盘：接收方点开时 = now + burnTtl，发送方发出时 = now + 本端自焚时长。
+     * 落盘后即使进程被杀，重认证时也能据 [burnPending] 补焚。已焚的消息忽略（死线已作废）。
+     */
+    fun setBurnDeadline(messageId: String, contactId: String, deadline: Long) {
+        val list = messages[contactId] ?: return
+        val idx = list.indexOfFirst { it.id == messageId }
+        if (idx < 0 || list[idx].burned) return
+        list[idx] = list[idx].copy(burnDeadline = deadline)
+        persist()
+    }
+
+    /** 待焚清单：所有已定死线且尚未焚毁的消息（重认证后由 P2PSessionManager 逐条判过期/续挂计时）。 */
+    fun burnPending(): List<ChatMessage> =
+        messages.values.flatten().filter { it.burnDeadline != null && !it.burned }
 
     suspend fun clearMessages(contactId: String): Result<Unit> {
         delay(300)

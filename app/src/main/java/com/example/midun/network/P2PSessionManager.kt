@@ -131,6 +131,46 @@ class P2PSessionManager @Inject constructor(
     private val _burnTimers = MutableStateFlow<Map<String, Long>>(emptyMap())
     val burnTimers: StateFlow<Map<String, Long>> = _burnTimers.asStateFlow()
 
+    init {
+        // 每次真卡认证、聊天快照就位 → 补焚：进程被杀会丢内存计时器，靠卡上持久化的死线续上。
+        scope.launch {
+            chatRepo.snapshotLoaded.collect { restoreBurnDeadlines() }
+        }
+    }
+
+    /**
+     * 认证后补焚（阅后即焚死线持久化）：扫 [ChatRepository.burnPending]，已过期的当场焚、未过期的续挂计时。
+     * 时钟回拨保守判定：`now < 消息发出时刻` 说明系统时间被往回调过 → 直接判过期焚掉（宁可早焚不可晚焚）。
+     * 跑在快照加载之后、会话页渲染之前，故不存在「能读到但还没焚」的窗口。
+     */
+    private suspend fun restoreBurnDeadlines() {
+        val now = System.currentTimeMillis()
+        chatRepo.burnPending().forEach { msg ->
+            val deadline = msg.burnDeadline ?: return@forEach
+            // 对端要不要同焚：接收方读过的消息到点两端一并焚（发 BURN 帧）；本端自焚的消息只删自己那份。
+            val notifyPeer = !msg.isMine
+            if (now >= deadline || now < msg.timestamp) {
+                runCatching { burnMessage(msg.id, msg.contactId, notifyPeer) }
+            } else {
+                scheduleBurn(msg.id, msg.contactId, deadline, notifyPeer)
+            }
+        }
+    }
+
+    /**
+     * 挂一条焚毁计时：登记进 [burnTimers] 供 UI 显剩余秒数，到点触发焚毁。跑在单例 scope
+     * （活过会话页导航——读过即注定焚毁）。同一 id 已在计时则忽略，避免重复挂表。
+     */
+    private fun scheduleBurn(messageId: String, contactId: String, deadline: Long, notifyPeer: Boolean) {
+        if (_burnTimers.value.containsKey(messageId)) return
+        _burnTimers.value = _burnTimers.value + (messageId to deadline)
+        scope.launch {
+            delay((deadline - System.currentTimeMillis()).coerceAtLeast(0))
+            runCatching { burnMessage(messageId, contactId, notifyPeer) }
+            _burnTimers.value = _burnTimers.value - messageId
+        }
+    }
+
     /** 真 SN 不可用（未认证 / 读取失败）时的回退 SN：每进程随机一个，保证两机可区分。 */
     private val fallbackSn: String = "DEV-${generateRandomHex(4)}"
 
@@ -543,26 +583,29 @@ class P2PSessionManager @Inject constructor(
     }
 
     /**
-     * 接收方点开焚毁消息（B 阶段）：登记倒计时（ttl 秒），到点触发双端焚毁。重复点开忽略（已在倒计时）。
-     * 定时器跑在单例 scope，故离开会话页也照常焚毁。contactId 透传给 [burnMessage] 以便无活动会话时仍能本地焚。
+     * 接收方点开焚毁消息（B 阶段）：**死线落盘**（now + ttl）后挂倒计时，到点触发双端焚毁。
+     * 重复点开忽略（已在倒计时）。落盘是关键——倒计时途中进程被杀，重认证时由 [restoreBurnDeadlines]
+     * 补焚，否则遮罩会复原、这条明文还能再看一次。
      */
     fun revealBurnMessage(messageId: String, contactId: String, ttlSeconds: Int) {
         if (_burnTimers.value.containsKey(messageId)) return
-        _burnTimers.value = _burnTimers.value + (messageId to System.currentTimeMillis() + ttlSeconds * 1000L)
-        scope.launch {
-            delay(ttlSeconds * 1000L)
-            runCatching { burnMessage(messageId, contactId) }
-            _burnTimers.value = _burnTimers.value - messageId
-        }
+        val deadline = System.currentTimeMillis() + ttlSeconds * 1000L
+        chatRepo.setBurnDeadline(messageId, contactId, deadline)
+        scheduleBurn(messageId, contactId, deadline, notifyPeer = true)
     }
 
     /**
-     * 焚毁一条阅后即焚消息（B 阶段）：若该联系人为当前活动会话，发 BURN 帧令对端按 id 焚毁；
+     * 焚毁一条阅后即焚消息（B 阶段）：[notifyPeer] 且该联系人为当前活动会话时，发 BURN 帧令对端按 id 焚毁；
      * 本端无论是否在线都标记 burned（焚毁墓碑）。对端收到 BURN 帧由 handleIncoming 焚毁。
+     *
+     * [notifyPeer]=false 用于**本端自焚**（发送方到期删自己那份）：只删本机，绝不能让对端跟着删——
+     * 对方可能还没读，读的机会由接收方自己的遮罩+ttl 决定。
      */
-    suspend fun burnMessage(messageId: String, contactId: String): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun burnMessage(
+        messageId: String, contactId: String, notifyPeer: Boolean = true
+    ): Result<Unit> = withContext(Dispatchers.IO) {
         val session = _activeSession.value
-        if (session != null && session.contactId == contactId) {
+        if (notifyPeer && session != null && session.contactId == contactId) {
             runCatching { writeFrame(session, generateMessageId(), BURN_TYPE, messageId) }
         }
         chatRepo.markBurned(messageId, contactId)
