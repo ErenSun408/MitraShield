@@ -56,6 +56,11 @@ class RealUsbManager @Inject constructor(
     // 就会造出本类——若饿汉初始化,这次 loadLibrary 落在主线程 onCreate 上 → 拉长启动白屏。改 by lazy 推迟到
     // 首次真正用卡(connectUsb 在 IO 线程)才加载,把它移出启动主线程路径。
     private val fsShell: LibJniFSShell by lazy { FSShellInstance.getLibFSShellInstance() }
+
+    init {
+        CardPerf.attach(context) // 卡层耗时诊断：写「下载」目录日志文件（定位鸿蒙慢后整体移除）
+    }
+
     private var usbHelper: USBStorageHelper? = null
     /** USB Open 成功后拼好的「外部设备」diskName，供 SFOpenDiskEx 复用。 */
     private var diskName: String? = null
@@ -120,7 +125,8 @@ class RealUsbManager @Inject constructor(
             // 作可靠的授权真信号，[awaitPermissionAndReopen] 优先据此重开，不再只依赖 SDK 标志。
             val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
 
-            val list = helper.GetList()
+            CardPerf.mark("connectUsb 开始")
+            val list = CardPerf.time("GetList") { helper.GetList() }
             if (list.count == 0) {
                 _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
                 return@withContext Result.failure(IllegalStateException("未找到 USB 设备"))
@@ -129,7 +135,9 @@ class RealUsbManager @Inject constructor(
             // SDK 怪癖（javap 核实 RequestPermission）：未授权时首次 Open 会异步弹授权框、但**立即返回 false**
             // （返回的是请求前的旧 hasPermission）。故首次失败后等授权结果：授权了再 Open 一次即成功（此时
             // hasPermission 已被系统缓存为 true）；拒绝/超时/真·打开失败 → 保持 DISCONNECTED（白屏等待、不退出）。
-            if (!helper.Open(name) && !awaitPermissionAndReopen(helper, name, device, usbManager)) {
+            val firstOpen = CardPerf.time("Open(首次)") { helper.Open(name) }
+            if (!firstOpen &&
+                !CardPerf.time("awaitPermissionAndReopen") { awaitPermissionAndReopen(helper, name, device, usbManager) }) {
                 _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
                 return@withContext Result.failure(
                     IllegalStateException("打开 USB 失败（未授权或被拒绝）")
@@ -144,11 +152,14 @@ class RealUsbManager @Inject constructor(
             // SFDiskGetSN 需盘已打开才能读。先试免密直读（部分卡可经 USB 句柄读硬件序列号）；读不到则在
             // 默认密码探测打开盘时顺带读（盘临时打开）。默认密码能开 = 未初始化。已初始化卡此处读不到 SN
             // （需密码开盘）→ 登录后由 authenticate 补读。
-            var sn = runCatching { synchronized(fsShell) { fsShell.SFDiskGetSN(dn) } }.getOrNull().orEmpty()
-            val canOpenDefault = synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) } == 0
+            var sn = runCatching {
+                CardPerf.time("SFDiskGetSN(免密)") { synchronized(fsShell) { fsShell.SFDiskGetSN(dn) } }
+            }.getOrNull().orEmpty()
+            val canOpenDefault =
+                CardPerf.time("SFOpenDiskEx(默认密码探测)") { synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) } } == 0
             if (canOpenDefault) {
                 if (sn.isEmpty()) sn = readSn()
-                runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
+                CardPerf.time("SFCloseDisk(探测后)") { runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } } }
             }
             // 连接期间发生过拔卡（并发的 closeDevice 已把状态清成 DISCONNECTED）→ 别把刚探测的结果
             // 盖回 CONNECTED：那会留下一个「显示已连接、句柄却已失效」的状态，同样只能重启 App。
@@ -162,6 +173,7 @@ class RealUsbManager @Inject constructor(
                 deviceId = sn,
                 status = UsbDeviceStatus.CONNECTED
             )
+            CardPerf.mark("connectUsb 完成 → CONNECTED(isInitialized=${!canOpenDefault})")
             Result.success(Unit)
         } catch (e: Exception) {
             _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
@@ -255,8 +267,9 @@ class RealUsbManager @Inject constructor(
      * （换手机/重装会被锁——安全设计，解绑需在原绑定机上做或用 PC 串口工具）。无 `.bind` = 未绑定，放行。
      */
     override suspend fun authenticate(password: String): Result<Unit> = withContext(Dispatchers.IO) {
+        CardPerf.mark("authenticate 开始")
         val dn = diskName ?: return@withContext Result.failure(IllegalStateException("USB 未连接"))
-        val ret = synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, sha256(password)) }
+        val ret = CardPerf.time("SFOpenDiskEx(登录)") { synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, sha256(password)) } }
         if (ret != 0) {
             // 开盘失败有两种原因，报错不能一律说成密码错误：真的密码不对，或句柄已失效（卡被拔走/换了设备）。
             // 用 SDK 重新枚举区分——枚举不到设备 = 卡不在了，退回 DISCONNECTED 让 UI 显拔卡遮罩，
@@ -268,7 +281,7 @@ class RealUsbManager @Inject constructor(
             }
             return@withContext Result.failure(IllegalStateException("密码错误或打开失败，错误码=$ret"))
         }
-        val boundId = readBoundId()
+        val boundId = CardPerf.time("readBoundId(.bind)") { readBoundId() }
         if (boundId != null && boundId != androidId()) {
             runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
             return@withContext Result.failure(IllegalStateException("此卡已绑定其他设备，无法在本机登录"))
@@ -276,7 +289,8 @@ class RealUsbManager @Inject constructor(
         // App 层密钥库（M12.1）：开盘后载入 keystore、解出 DEK 驻内存。
         // M12.4：keystore 缺失/损坏 → 拒登并关盘，**不静默跑明文**。正常卡（恢复出厂 + 重新 init）必有 keystore；
         // 走到这里 = 异常卡（旧卡未重置 / keystore 损坏），提示恢复出厂重新初始化。
-        if (!cardKeystore.load(realFileSystem.loadKeystoreRaw())) {
+        val keystoreBlob = CardPerf.time("loadKeystoreRaw") { realFileSystem.loadKeystoreRaw() }
+        if (!cardKeystore.load(keystoreBlob)) {
             runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
             cardKeystore.lock()
             return@withContext Result.failure(IllegalStateException("密钥库缺失或损坏，请恢复出厂后重新初始化"))
@@ -284,14 +298,14 @@ class RealUsbManager @Inject constructor(
         sessionPwdHash = sha256(password)
         // 退出自动清理「下次登录补清」：盘已打开、AUTHENTICATED 尚未置位（ChatRepository 未加载）→ 无竞态。
         // 开启则在进主界面前清空对应数据；开关文件是根级侧车，clear() 不会删它 → 每次登录都清。
-        val exitClear = readExitClearPrefs()
+        val exitClear = CardPerf.time("readExitClearPrefs") { readExitClearPrefs() }
         if (exitClear.clearContacts) runCatching { realFileSystem.deleteSidecar(CHAT_SIDECAR) }
         if (exitClear.clearFiles) realFileSystem.clear()
         // 任一「退出时清空」开启，一并清首页最近操作日志（删在置 AUTHENTICATED 之前，
         // OperationLogRepository 随后 store.load() 读到空、_logs 维持登出时清空的 emptyList，无竞态）。
         if (exitClear.clearContacts || exitClear.clearFiles) runCatching { realFileSystem.deleteSidecar(OPLOG_SIDECAR) }
-        val sn = readSn() // 盘已打开，补读真实 SN（已初始化卡在 connectUsb 阶段读不到）
-        val (total, free) = readCapacity()
+        val sn = CardPerf.time("readSn(登录)") { readSn() } // 盘已打开，补读真实 SN（已初始化卡在 connectUsb 阶段读不到）
+        val (total, free) = CardPerf.time("readCapacity") { readCapacity() }
         _deviceStatus.value = _deviceStatus.value.copy(
             status = UsbDeviceStatus.AUTHENTICATED,
             deviceId = sn.ifEmpty { _deviceStatus.value.deviceId },
@@ -299,6 +313,7 @@ class RealUsbManager @Inject constructor(
             freeBytes = free,
             boundPhoneId = boundId
         )
+        CardPerf.mark("authenticate 完成 → AUTHENTICATED 已发布（下方连锁加载开始）")
         Result.success(Unit)
     }
 

@@ -61,11 +61,13 @@ class OperationLogRepository @Inject constructor(
                 .distinctUntilChanged()
                 .collect { authed ->
                     if (authed) {
-                        ioLock.withLock {
-                            val fromCard = store.load()
-                            // 合并而非覆盖：加载期间记下的条目（典型=「登录成功」）必须保留。
-                            if (fromCard != null) _logs.update { pending -> merge(pending, fromCard) }
-                            loaded = true
+                        com.example.midun.data.real.CardPerf.time("OperationLogRepository.load(日志侧车)") {
+                            ioLock.withLock {
+                                val fromCard = store.load()
+                                // 合并而非覆盖：加载期间记下的条目（典型=「登录成功」）必须保留。
+                                if (fromCard != null) _logs.update { pending -> merge(pending, fromCard) }
+                                loaded = true
+                            }
                         }
                         persist() // 加载期间的条目此前被压着没落盘，合并后统一写回
                         wasAuthed = true

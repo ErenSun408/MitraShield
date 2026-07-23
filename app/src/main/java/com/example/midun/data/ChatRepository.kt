@@ -67,9 +67,11 @@ class ChatRepository @Inject constructor(
                 .distinctUntilChanged()
                 .collect { authed ->
                     if (authed) {
+                        com.example.midun.data.real.CardPerf.time("ChatRepository.load(聊天侧车)") {
                         ioLock.withLock {
                             store.load()?.let { applySnapshot(it) }
                             loaded = true
+                        }
                         }
                         persist() // 加载期间写入的消息此前被压着没落盘，合并后统一写回
                         sweepExpiredCache() // 7 天 TTL：清掉过期的文件预览缓存（认证后扫一遍，见 file-transfer 阶段3）
