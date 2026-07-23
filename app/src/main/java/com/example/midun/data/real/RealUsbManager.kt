@@ -15,6 +15,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +70,19 @@ class RealUsbManager @Inject constructor(
      */
     private val connecting = AtomicBoolean(false)
 
+    /**
+     * 当前已打开设备的系统路径（`UsbDevice.deviceName`，如 `/dev/bus/usb/001/005`）。
+     * 用于识别「换了一个设备」——[connectUsb] 的去重守卫只能据此判断 attach 是杂散重播还是真的重新插卡。
+     */
+    private var openedDeviceName: String? = null
+
+    /**
+     * 拔卡代次：每次 [closeDevice] +1。[connectUsb] 入口取快照、发布 CONNECTED 前比对——
+     * 快速拔插时 attach/detach 是两条并发协程（`SecurityCardManager` 各 launch 一次、无序），
+     * 若 connect 跑完才轮到 detach 收尾，会把刚建好的连接清掉并卡在 DISCONNECTED（须重启 App）。
+     */
+    private val detachEpoch = AtomicInteger(0)
+
     private val _deviceStatus = MutableStateFlow(DeviceInfo())
     override val deviceStatus: StateFlow<DeviceInfo> = _deviceStatus.asStateFlow()
 
@@ -83,14 +97,23 @@ class RealUsbManager @Inject constructor(
     suspend fun connectUsb(device: UsbDevice? = null): Result<Unit> = withContext(Dispatchers.IO) {
         // 单飞去重：已有一次连接流程在跑 → 忽略这次杂散/重复 attach（鸿蒙常连发多条广播）。
         if (!connecting.compareAndSet(false, true)) return@withContext Result.success(Unit)
+        val epoch = detachEpoch.get() // 本次连接的拔卡代次快照，发布 CONNECTED 前比对
         try {
             // 已连接/已认证时的重复 attach 直接忽略：绝不重跑探测把 AUTHENTICATED 覆盖成 CONNECTED 且盘不关
             //（那正是「登录后被踢回登录页、之后反复报密码错误、须重启 App」的根因）。
+            //
+            // 但只在**同一个设备**上忽略。守卫信的是内存状态，而内存状态会过期：App 被系统冻结/Activity 已
+            // 销毁（receiver 随之注销）时拔卡，DETACHED 收不到 → usbHelper 与 diskName 双双失效却还留着。
+            // 此时重新插卡若也照样早退，登录就会拿失效的 diskName 调 SFOpenDiskEx 而被报成「密码错误」，
+            // 只有杀掉 App（连同单例）才能恢复。设备路径不同 = 真的重新插过卡 → 必须拆旧句柄重开。
             val cur = _deviceStatus.value.status
-            if (usbHelper != null &&
+            val sameDevice = device == null || openedDeviceName == null ||
+                device.deviceName == openedDeviceName
+            if (usbHelper != null && sameDevice &&
                 (cur == UsbDeviceStatus.CONNECTED || cur == UsbDeviceStatus.AUTHENTICATED)) {
                 return@withContext Result.success(Unit)
             }
+            releaseUsbLayer() // 换设备/重连：先拆掉可能已失效的旧句柄，避免 claimInterface 与旧 fd 打架
             val helper = USBStorageHelper(context, context.packageName).also { usbHelper = it }
             helper.PermissionHandler = Handler(Looper.getMainLooper(), Handler.Callback { true })
             // 双保险信号源（客户机型 SDK 私有权限标志时序对不上）：用 Android 系统 UsbManager.hasPermission
@@ -116,6 +139,7 @@ class RealUsbManager @Inject constructor(
             _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.CONNECTING)
 
             val dn = buildExternalDiskName(helper, name).also { diskName = it }
+            openedDeviceName = device?.deviceName
 
             // SFDiskGetSN 需盘已打开才能读。先试免密直读（部分卡可经 USB 句柄读硬件序列号）；读不到则在
             // 默认密码探测打开盘时顺带读（盘临时打开）。默认密码能开 = 未初始化。已初始化卡此处读不到 SN
@@ -125,6 +149,13 @@ class RealUsbManager @Inject constructor(
             if (canOpenDefault) {
                 if (sn.isEmpty()) sn = readSn()
                 runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
+            }
+            // 连接期间发生过拔卡（并发的 closeDevice 已把状态清成 DISCONNECTED）→ 别把刚探测的结果
+            // 盖回 CONNECTED：那会留下一个「显示已连接、句柄却已失效」的状态，同样只能重启 App。
+            if (detachEpoch.get() != epoch) {
+                releaseUsbLayer()
+                _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
+                return@withContext Result.failure(IllegalStateException("连接期间安全卡被拔出"))
             }
             _deviceStatus.value = DeviceInfo(
                 isInitialized = !canOpenDefault,
@@ -295,14 +326,24 @@ class RealUsbManager @Inject constructor(
 
     /** 拔卡 / 完全释放：关盘 + 关 USB 句柄，状态 DISCONNECTED。 */
     suspend fun closeDevice(): Result<Unit> = withContext(Dispatchers.IO) {
+        detachEpoch.incrementAndGet() // 让并发中的 connectUsb 知道「这次连接已被拔卡作废」
+        releaseUsbLayer()
+        cardKeystore.lock() // 拔卡清内存 DEK（M12.1）
+        _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
+        Result.success(Unit)
+    }
+
+    /**
+     * 释放 USB/盘层句柄（关盘 + 关 helper + 清路径/会话密码），**不动状态、不计拔卡代次**。
+     * 供 [closeDevice] 与 [connectUsb] 的重连路径共用——后者只是换句柄，不该被自己的代次判为拔卡。
+     */
+    private fun releaseUsbLayer() {
         runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
         runCatching { usbHelper?.Close() }
         usbHelper = null
         diskName = null
+        openedDeviceName = null
         sessionPwdHash = null
-        cardKeystore.lock() // 拔卡清内存 DEK（M12.1）
-        _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
-        Result.success(Unit)
     }
 
     // —— 以下依赖后续子阶段，先占位 ——
