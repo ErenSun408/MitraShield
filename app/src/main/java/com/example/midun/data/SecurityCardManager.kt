@@ -65,6 +65,11 @@ class SecurityCardManager @Inject constructor(
         scope.launch { real.closeDevice() }
     }
 
+    /** 用当前驱动模式重连（登录页驱动模式面板切换后触发，测试鸿蒙登录慢用）。 */
+    fun reconnectWithCurrentDriverMode() {
+        scope.launch { real.reconnect() }
+    }
+
     /** 真卡序列号（诊断 / 后续 P2P deviceSn）。 */
     fun realSerialNumber(): String? = real.getSerialNumber()
 

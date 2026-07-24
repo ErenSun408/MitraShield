@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import com.example.midun.data.ExitClearPrefs
+import com.example.midun.data.SettingsStore
 import com.example.midun.data.UsbCardOps
 import com.example.midun.data.crypto.CardKeystore
 import com.example.midun.data.model.DeviceInfo
@@ -49,7 +50,9 @@ class RealUsbManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val realFileSystem: RealFileSystem,
     // App 层文件密钥库（M12.1）：init 生成落卡、auth 解锁载入 DEK、登出/拔卡/恢复出厂锁定清零。
-    private val cardKeystore: CardKeystore
+    private val cardKeystore: CardKeystore,
+    // 驱动模式持久化（鸿蒙慢诊断/测试）：connectUsb 开盘前读、决定走 libusb(0)/android 原生(2) 通道。
+    private val settingsStore: SettingsStore
 ) : UsbCardOps {
 
     // 懒加载：getLibFSShellInstance() 会 System.loadLibrary ~15MB native 库。@Singleton 在启动构建依赖图时
@@ -74,6 +77,9 @@ class RealUsbManager @Inject constructor(
      * 覆盖已认证会话、并发踩踏 native 单例。置位期间到达的重复 attach 直接忽略。
      */
     private val connecting = AtomicBoolean(false)
+
+    /** 本次连接实际使用的驱动模式（connectUsb 开盘前从 [settingsStore] 读定；Open/Close 据此选通道）。 */
+    @Volatile private var activeDriverMode = SettingsStore.DRIVER_MODE_LIBUSB
 
     /**
      * 当前已打开设备的系统路径（`UsbDevice.deviceName`，如 `/dev/bus/usb/001/005`）。
@@ -119,13 +125,16 @@ class RealUsbManager @Inject constructor(
                 return@withContext Result.success(Unit)
             }
             releaseUsbLayer() // 换设备/重连：先拆掉可能已失效的旧句柄，避免 claimInterface 与旧 fd 打架
+            // 驱动模式（鸿蒙慢诊断/测试）：开盘前定一次，决定 Open/Close 走 libusb(0) 还是 android 原生(2) 通道。
+            activeDriverMode = settingsStore.getDriverMode()
             val helper = USBStorageHelper(context, context.packageName).also { usbHelper = it }
             helper.PermissionHandler = Handler(Looper.getMainLooper(), Handler.Callback { true })
             // 双保险信号源（客户机型 SDK 私有权限标志时序对不上）：用 Android 系统 UsbManager.hasPermission
             // 作可靠的授权真信号，[awaitPermissionAndReopen] 优先据此重开，不再只依赖 SDK 标志。
             val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
 
-            CardPerf.mark("connectUsb 开始")
+            CardPerf.mark("connectUsb 开始(driverMode=$activeDriverMode)")
+            runCatching { synchronized(fsShell) { fsShell.SFDiskSetDriverMode(activeDriverMode) } } // 必须在 Open 前
             val list = CardPerf.time("GetList") { helper.GetList() }
             if (list.count == 0) {
                 _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
@@ -135,7 +144,7 @@ class RealUsbManager @Inject constructor(
             // SDK 怪癖（javap 核实 RequestPermission）：未授权时首次 Open 会异步弹授权框、但**立即返回 false**
             // （返回的是请求前的旧 hasPermission）。故首次失败后等授权结果：授权了再 Open 一次即成功（此时
             // hasPermission 已被系统缓存为 true）；拒绝/超时/真·打开失败 → 保持 DISCONNECTED（白屏等待、不退出）。
-            val firstOpen = CardPerf.time("Open(首次)") { helper.Open(name) }
+            val firstOpen = CardPerf.time("Open(首次)") { helper.Open(name, activeDriverMode == 2) }
             if (!firstOpen &&
                 !CardPerf.time("awaitPermissionAndReopen") { awaitPermissionAndReopen(helper, name, device, usbManager) }) {
                 _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
@@ -201,13 +210,13 @@ class RealUsbManager @Inject constructor(
         // 明确被拒：SDK 收到结果且未授权，且系统也确认无权限。
         fun denied(): Boolean = helper.FReceivePermission && !helper.FGrantedPermission && !sysGranted()
 
-        if (granted()) return helper.Open(name)
+        if (granted()) return helper.Open(name, activeDriverMode == 2)
         // 无 device 可观察（理论仅旧 mock 路径）时退回原 SDK-标志判据，避免真失败空等满超时。
         if (device == null && !helper.FRequestingPermission && !helper.FReceivePermission) return false
 
         var waited = 0
         while (waited < PERMISSION_TIMEOUT_MS) {
-            if (granted()) return helper.Open(name)
+            if (granted()) return helper.Open(name, activeDriverMode == 2)
             if (denied()) return false
             delay(PERMISSION_POLL_MS.toLong()); waited += PERMISSION_POLL_MS
         }
@@ -357,12 +366,23 @@ class RealUsbManager @Inject constructor(
     }
 
     /**
+     * 用当前驱动模式重连（登录页驱动模式面板切换后触发）：关旧连接 → 从系统 UsbManager 重新取设备 →
+     * [connectUsb]（其内从 [settingsStore] 读最新 driverMode 并 SFDiskSetDriverMode）。测试鸿蒙登录慢用。
+     */
+    suspend fun reconnect(): Result<Unit> = withContext(Dispatchers.IO) {
+        closeDevice()
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+        val device = usbManager?.deviceList?.values?.firstOrNull()
+        connectUsb(device)
+    }
+
+    /**
      * 释放 USB/盘层句柄（关盘 + 关 helper + 清路径/会话密码），**不动状态、不计拔卡代次**。
      * 供 [closeDevice] 与 [connectUsb] 的重连路径共用——后者只是换句柄，不该被自己的代次判为拔卡。
      */
     private fun releaseUsbLayer() {
         runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
-        runCatching { usbHelper?.Close() }
+        runCatching { usbHelper?.Close(false, activeDriverMode == 2) }
         usbHelper = null
         diskName = null
         openedDeviceName = null

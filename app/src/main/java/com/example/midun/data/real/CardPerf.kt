@@ -11,6 +11,9 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * 卡层耗时诊断（鸿蒙 mate40 登录/进主界面慢的定位工具）。
@@ -34,6 +37,10 @@ object CardPerf {
 
     private val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
     private val lines = StringBuilder()
+
+    /** 实时耗时文本，供登录页驱动模式面板显示（测试人员切模式后直接看数字，不必翻「下载」目录 log）。 */
+    private val _log = MutableStateFlow("")
+    val log: StateFlow<String> = _log.asStateFlow()
 
     @Volatile private var appContext: Context? = null
     @Volatile private var fileUri: Uri? = null // Android 10+ MediaStore 目标（Q 以下走直接文件）
@@ -74,6 +81,7 @@ object CardPerf {
     @Synchronized
     private fun record(line: String) {
         lines.append(now()).append("  ").append(line).append('\n')
+        _log.value = lines.toString()
         flush()
     }
 

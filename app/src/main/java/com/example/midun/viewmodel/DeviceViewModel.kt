@@ -96,6 +96,22 @@ class DeviceViewModel @Inject constructor(
         clearSensitiveMemory()
     }
 
+    // —— 驱动模式测试面板（登录页 logo 连点弹出，测试鸿蒙 2.0 登录慢）——
+    /** 当前驱动模式（0=libusb / 2=android 原生），持久化于 SettingsStore、重启保留。 */
+    val driverMode: StateFlow<Int> =
+        settingsStore.driverMode.stateIn(viewModelScope, SharingStarted.Eagerly, SettingsStore.DRIVER_MODE_LIBUSB)
+
+    /** 卡层实时耗时文本（面板显示，切模式后看数字对比快慢）。 */
+    val perfLog: StateFlow<String> = com.example.midun.data.real.CardPerf.log
+
+    /** 切驱动模式并用新模式重连（面板选模式即调）。 */
+    fun switchDriverMode(mode: Int) {
+        viewModelScope.launch {
+            settingsStore.setDriverMode(mode)
+            cardManager.reconnectWithCurrentDriverMode()
+        }
+    }
+
     fun logout() {
         cardManager.logout()
     }
