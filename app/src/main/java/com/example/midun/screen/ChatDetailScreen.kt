@@ -249,33 +249,39 @@ fun ChatDetailScreen(
                             )
                         )
                     } else {
-                        // 点标题进联系人资料页（改备注 / 删除联系人）。
-                        Column(modifier = Modifier.clickable { onOpenProfile() }) {
-                            Text(contact?.remark ?: "聊天", fontSize = 16.sp)
-                            // 连接状态跟在「已加密」右侧：原先是消息列表里的一张卡片，会被新消息顶出可视区，
-                            // 移进顶栏后常驻可见。未连接时后缀一个「建立连接」链接直达扫码建联。
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                // 「已加密」两态都是中性白、只有状态词着色：变的是连接，加密一直在。
-                                Text("已加密 · ", fontSize = 10.sp, color = Color.White.copy(0.7f))
+                        // 顶栏三段式：左=联系人名+已加密（点进资料页，位置不变）；正中=放大的连接状态（客户要突出）；
+                        // 右=actions 图标。用 Box 让连接状态在顶栏内水平居中，与两侧并排、不堆成多行，故无需增高。
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            // 左侧：联系人名 + 「已加密」小字（都不动）。名过长时单行截断，避免换行撑高 / 挤占中间。
+                            Column(
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .clickable { onOpenProfile() }
+                            ) {
+                                Text(contact?.remark ?: "聊天", fontSize = 16.sp, maxLines = 1)
+                                Text("已加密", fontSize = 10.sp, color = Color.White.copy(0.7f))
+                            }
+                            // 正中：放大的连接状态；未连接时其下挂「前往建立连接」副标题（字号比已加密大）。
+                            Column(
+                                modifier = Modifier.align(Alignment.Center),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
                                 Text(
                                     if (connectedHere) "已连接" else "未连接",
-                                    fontSize = 10.sp,
+                                    fontSize = 18.sp,
+                                    fontWeight = FontWeight.Medium,
                                     color = if (connectedHere) Accent else Danger
                                 )
+                                // 点建连链接触发 onGoConnect（内层 clickable 消费事件，不冒泡到进资料页）。
                                 if (!connectedHere) {
                                     Text(
-                                        " · ",
-                                        fontSize = 10.sp,
-                                        color = Color.White.copy(0.7f)
-                                    )
-                                    Text(
-                                        "建立连接",
-                                        fontSize = 10.sp,
+                                        "前往建立连接",
+                                        fontSize = 13.sp,
                                         color = Color.White,
                                         textDecoration = TextDecoration.Underline,
                                         modifier = Modifier
                                             .clickable { onGoConnect() }
-                                            .padding(horizontal = 2.dp, vertical = 2.dp)
+                                            .padding(horizontal = 4.dp, vertical = 1.dp)
                                     )
                                 }
                             }
