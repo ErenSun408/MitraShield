@@ -32,6 +32,7 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 import com.example.midun.data.model.Contact
 import com.example.midun.ui.theme.*
+import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.viewmodel.ChatViewModel
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -46,6 +47,10 @@ fun ChatListScreen(
 ) {
     val contacts by chatViewModel.contacts.collectAsState()
     val filteredContacts by chatViewModel.filteredContacts.collectAsState()
+    // 在线小点取真实连接态（contact.isOnline 是从未写过的死字段 → 绿点从不出现）：P2P 一次仅一个活动
+    // 会话，故列表里最多「当前连着的那个联系人」亮绿点。connectionState/activeContactId 转发自单例。
+    val connectionState by chatViewModel.connectionState.collectAsState()
+    val activeContactId by chatViewModel.activeContactId.collectAsState()
     // 本地同步状态承载输入框显示值，避免 value 经 ViewModel StateFlow 异步往返而打断
     // 中文/IME 的组合（composition）会话；变化转发给 ViewModel 仅用于驱动 filteredContacts 过滤。
     var searchText by rememberSaveable { mutableStateOf("") }
@@ -107,6 +112,7 @@ fun ChatListScreen(
                 items(filteredContacts, key = { it.id }) { contact ->
                     SwipeableContactItem(
                         contact = contact,
+                        online = connectionState == ConnectionState.CONNECTED && activeContactId == contact.id,
                         onOpenChat = { onContactClick(contact.id) },
                         onPin = { chatViewModel.togglePin(contact.id) },
                         onDelete = { contactToDelete = contact }
@@ -186,6 +192,7 @@ private fun EmptyContactsState(onQrCodeClick: () -> Unit) {
 @Composable
 private fun SwipeableContactItem(
     contact: Contact,
+    online: Boolean,
     onOpenChat: () -> Unit,
     onPin: () -> Unit,
     onDelete: () -> Unit
@@ -232,6 +239,7 @@ private fun SwipeableContactItem(
         ) {
             ContactItem(
                 contact = contact,
+                online = online,
                 onClick = {
                     // 打开状态下点击先收回，否则进入会话。
                     if (offsetX.value != 0f) scope.launch { offsetX.animateTo(0f) } else onOpenChat()
@@ -265,7 +273,7 @@ private fun SwipeActionBlock(
 }
 
 @Composable
-private fun ContactItem(contact: Contact, onClick: () -> Unit) {
+private fun ContactItem(contact: Contact, online: Boolean, onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
@@ -290,7 +298,7 @@ private fun ContactItem(contact: Contact, onClick: () -> Unit) {
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(contact.remark, fontSize = 16.sp, fontWeight = FontWeight.Medium)
-                    if (contact.isOnline) {
+                    if (online) {
                         Spacer(Modifier.width(6.dp))
                         Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(Success))
                     }

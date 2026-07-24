@@ -17,6 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
 
@@ -35,6 +36,13 @@ fun ContactProfileScreen(
 ) {
     val contacts by chatViewModel.contacts.collectAsState()
     val contact = contacts.find { it.id == contactId }
+
+    // 在线状态取**真实连接态**：原来读 contact.isOnline 是从未被写过的死字段 → 永远显示离线。
+    // 与聊天顶栏一致，仅当该联系人正是当前活动会话且已连接才算在线。connectionState/activeContactId
+    // 转发自 P2PSessionManager 单例，故本屏的独立 ChatViewModel 实例也能拿到正确状态。
+    val connectionState by chatViewModel.connectionState.collectAsState()
+    val activeContactId by chatViewModel.activeContactId.collectAsState()
+    val online = connectionState == ConnectionState.CONNECTED && activeContactId == contactId
 
     // 本屏是独立 NavBackStackEntry → 独立 ChatViewModel 实例（同 M5.3 偏离），进屏重读单例联系人。
     LaunchedEffect(contactId) { chatViewModel.loadContacts() }
@@ -88,14 +96,14 @@ fun ContactProfileScreen(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     Icons.Default.Circle, null,
-                    tint = if (contact?.isOnline == true) Success else TextSecondary,
+                    tint = if (online) Success else TextSecondary,
                     modifier = Modifier.size(10.dp)
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    if (contact?.isOnline == true) "在线" else "离线",
+                    if (online) "在线" else "离线",
                     fontSize = 12.sp,
-                    color = TextSecondary
+                    color = if (online) Success else TextSecondary
                 )
             }
 
