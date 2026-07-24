@@ -1,6 +1,9 @@
 package com.example.midun.network
 
+import android.content.Context
+import android.provider.Settings
 import android.util.Base64
+import dagger.hilt.android.qualifiers.ApplicationContext
 import com.example.midun.data.FileCachePaths
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.ChatRepository
@@ -65,6 +68,7 @@ import org.json.JSONObject
  */
 @Singleton
 class P2PSessionManager @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val chatRepo: ChatRepository,
     private val operationLog: OperationLogRepository,
     private val cardManager: SecurityCardManager,
@@ -178,8 +182,16 @@ class P2PSessionManager @Inject constructor(
         }
     }
 
-    /** 真 SN 不可用（未认证 / 读取失败）时的回退 SN：每进程随机一个，保证两机可区分。 */
-    private val fallbackSn: String = "DEV-${generateRandomHex(4)}"
+    /**
+     * 真 SN 不可用（未认证 / 读取失败）时的回退身份。**基于本机 ANDROID_ID**（跨进程/重启稳定、两机相异）——
+     * 早期用「每进程随机」只图两机可区分，却使真 SN 读不到时同一设备每次身份都变 → 对端反复把它当新联系人
+     * 建（去重靠 deviceSn 精确匹配）。改用稳定的 ANDROID_ID 派生即可止血；ANDROID_ID 取不到才退随机兜底。
+     */
+    private val fallbackSn: String =
+        Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "DEV-$it" }
+            ?: "DEV-${generateRandomHex(4)}"
 
     /**
      * 本机设备 SN（M11.6.2）：取安全卡真实 SN（`SFDiskGetSN`，全球唯一公开标识）→ 二维码据此做「弱来源
