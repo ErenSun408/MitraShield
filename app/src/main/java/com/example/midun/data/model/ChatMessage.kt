@@ -18,11 +18,12 @@ data class ChatMessage(
     val recalled: Boolean = false,
     // 焚毁 TTL（秒）：阅后即焚消息「读到」后的倒计时时长。0 = 非焚毁消息。
     val burnTtl: Int = 0,
-    // 已焚毁标记（阅后即焚墓碑），与 recalled 同为「原地把真实消息变残骸」，渲染为焚毁墓碑。
+    // 已焚毁标记（历史遗留）：焚毁已改「整条删除、彻底不留痕」，不再产生墓碑；保留字段仅为兼容旧数据
+    // 与 displayMessages 的过滤兜底（登录时 purgeBurnRemnants 会清掉遗留的 burned 记录）。
     val burned: Boolean = false,
-    // 焚毁死线（epoch ms，null=未定死线）：**持久化**的绝对时刻，到点本端必焚。两种来源——
-    // 接收方点开焚毁消息（now + burnTtl）、发送方发出焚毁消息（now + 本端自焚时长）。
-    // 落盘的意义：进程被杀会丢内存计时器，重新认证后据此补焚（已过期立刻焚、未过期续挂计时）。
+    // 焚毁死线（epoch ms，null=未定死线）：**持久化**的绝对时刻，到点本端必焚。来源=接收方点开焚毁消息
+    // （now + burnTtl）。落盘的意义：进程被杀会丢内存计时器，重认证后据此补焚（已过期立刻焚、未过期续挂计时）。
+    // 发送方自己那份不设死线——登录时由 ChatRepository.purgeBurnRemnants 统一清除。
     val burnDeadline: Long? = null,
     // 文件消息（M11.5.3 file-transfer）：接收方保存后落到的隐私文件夹路径。
     // null + type=FILE + isMine=false = 已收到、暂存在卡内 0:/.recv_<id>、待用户点击选文件夹保存。

@@ -601,37 +601,25 @@ fun ChatDetailScreen(
     }
 
     if (showBurnDialog) {
-        // 两段时长（秒）：读后倒计时 = 对端读到后双端同焚；本端自焚 = 自己那份的绝对死线，与对端无关。
+        // 读后倒计时（秒）：对端读到后双端同焚。发送方自己那份不设倒计时——登录时统一清除，对用户无感知。
         val readOptions = listOf("10秒" to 10, "15秒" to 15, "30秒" to 30, "1分钟" to 60)
-        val selfOptions = listOf("30秒" to 30, "1分钟" to 60, "10分钟" to 600)
         var readSec by remember { mutableStateOf(30) }
-        var selfSec by remember { mutableStateOf(60) }
         AlertDialog(
             onDismissRequest = { showBurnDialog = false },
             icon = { Icon(Icons.Default.LocalFireDepartment, null, tint = Warning) },
             title = { Text("开启阅后即焚") },
             text = {
-                Column {
-                    BurnDurationSection(
-                        title = "读后倒计时",
-                        subtitle = "对方读到后，消息在所选时长后于双方设备一并焚毁。",
-                        options = readOptions,
-                        selected = readSec,
-                        onSelect = { readSec = it }
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    BurnDurationSection(
-                        title = "本端自焚",
-                        subtitle = "你发出的消息到点即从本机消失，不等对方已读——连接断开也不会残留。",
-                        options = selfOptions,
-                        selected = selfSec,
-                        onSelect = { selfSec = it }
-                    )
-                }
+                BurnDurationSection(
+                    title = "读后倒计时",
+                    subtitle = "对方读到后，消息在所选时长后于双方设备一并焚毁。",
+                    options = readOptions,
+                    selected = readSec,
+                    onSelect = { readSec = it }
+                )
             },
             confirmButton = {
                 TextButton(onClick = {
-                    chatViewModel.setBurnMode(true, readSec, selfSec)
+                    chatViewModel.setBurnMode(true, readSec)
                     showBurnDialog = false
                 }) { Text("开启", color = Primary) }
             },
@@ -854,7 +842,7 @@ private fun PlusTool(icon: androidx.compose.ui.graphics.vector.ImageVector, labe
 }
 
 /**
- * 阅后即焚弹框里的一段时长选择（标题 + 说明 + 一排单选时长）。两段（读后倒计时 / 本端自焚）共用。
+ * 阅后即焚弹框里的时长选择（标题 + 说明 + 一排单选时长）。
  * 自绘选择块而非 FilterChip：等宽平分一行，「10分钟」这类长标签在窄块里也不会被裁。
  */
 @Composable
@@ -1243,9 +1231,9 @@ private fun ConnectPromptLine(text: String, onGoConnect: () -> Unit) {
 }
 
 /**
- * 焚毁消息的状态标签（B 阶段）：有死线（burnDeadline 非空）即显示每秒刷新的剩余倒计时——接收方是
- * 点开后的读后倒计时，发送方是发出即起的本端自焚倒计时。
- * 无死线的兜底文案只剩两处：接收方未点开（理论上已被遮罩挡住），以及本次改动之前发出的历史消息。
+ * 焚毁消息的状态标签（B 阶段）：接收方点开后有死线（burnDeadline 非空）→ 显示每秒刷新的读后倒计时。
+ * 发送方自己那份不设倒计时（登录时统一清除）→ 无死线，显示「对方读后焚毁」；接收方未点开（已被遮罩挡住）
+ * 同样走无死线文案。
  */
 @Composable
 private fun BurnStatusLabel(isMine: Boolean, burnDeadline: Long?, contentColor: Color) {
@@ -1273,7 +1261,7 @@ private fun BurnStatusLabel(isMine: Boolean, burnDeadline: Long?, contentColor: 
     }
 }
 
-/** 焚毁剩余时长文案：本端自焚可长达 10 分钟，不能一律按秒显示（「600秒后焚毁」读起来无感）。 */
+/** 焚毁剩余时长文案：读后倒计时最长 1 分钟，按秒/分显示。 */
 private fun formatBurnRemaining(seconds: Long): String = when {
     seconds < 60 -> "${seconds}秒后焚毁"
     seconds % 60 == 0L -> "${seconds / 60}分钟后焚毁"

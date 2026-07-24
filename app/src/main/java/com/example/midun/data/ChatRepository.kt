@@ -245,29 +245,20 @@ class ChatRepository @Inject constructor(
     }
 
     /**
-     * 焚毁阅后即焚消息（B 阶段）：保留占位但**抹掉原文**并标记 burned，渲染为焚毁墓碑。
-     * 与 markRecalled 同为「原地把真实消息变残骸」——保 id 与时间位置，供 BURN 帧按 id 双端引用。
+     * 焚毁阅后即焚消息（B 阶段，彻底不留痕）：按 id **整条删除**——阅后即焚零残留，不再留 burned 墓碑。
+     * 收发两端焚毁均调此：接收方读后倒计时到点、发送方收到对端 BURN 帧、认证后补焚。
+     * 定位靠传入的 id（BURN 帧带 id），不依赖本地保留记录，故删除不影响双端按 id 对齐。删后刷新预览并落盘。
      */
-    fun markBurned(messageId: String, contactId: String) {
+    fun removeMessage(messageId: String, contactId: String) {
         val list = messages[contactId] ?: return
-        val idx = list.indexOfFirst { it.id == messageId }
-        if (idx < 0) return
-        list[idx] = list[idx].copy(
-            content = "",
-            type = MessageType.TEXT,
-            fileName = null,
-            fileSize = null,
-            burnAfterRead = false,
-            burnTtl = 0,
-            burnDeadline = null, // 已焚 → 死线作废，重认证时不再进补焚扫描
-            burned = true
-        )
-        updateContactPreview(contactId)
-        persist()
+        if (list.removeAll { it.id == messageId }) {
+            updateContactPreview(contactId)
+            persist()
+        }
     }
 
     /**
-     * 登记一条焚毁消息的死线（epoch ms）并落盘：接收方点开时 = now + burnTtl，发送方发出时 = now + 本端自焚时长。
+     * 登记一条焚毁消息的死线（epoch ms）并落盘：接收方点开焚毁消息时 = now + burnTtl。
      * 落盘后即使进程被杀，重认证时也能据 [burnPending] 补焚。已焚的消息忽略（死线已作废）。
      */
     fun setBurnDeadline(messageId: String, contactId: String, deadline: Long) {
@@ -281,6 +272,27 @@ class ChatRepository @Inject constructor(
     /** 待焚清单：所有已定死线且尚未焚毁的消息（重认证后由 P2PSessionManager 逐条判过期/续挂计时）。 */
     fun burnPending(): List<ChatMessage> =
         messages.values.flatten().filter { it.burnDeadline != null && !it.burned }
+
+    /**
+     * 登录清除（客户默认逻辑，用户无感知）：每次真卡认证后清掉阅后即焚残留，做到彻底不留痕——
+     * ① **自己发出的、尚未焚的**阅后即焚（[ChatMessage.burnAfterRead] 且 isMine）：取代已废弃的「本端自焚
+     *    TTL」，发送方副本不靠倒计时残留，登录时统一清（连媒体副本 `.sent_<id>` 一并删）；
+     * ② 任何 [ChatMessage.burned] 遗留墓碑（收发双方）：焚毁已改整条删除、不再产生墓碑，这里顺手清掉
+     *    改动前留下的旧墓碑。
+     * **不动对端发来、尚未读的阅后即焚**（isMine=false 且未焚）——那由接收方自己点开/读后倒计时管。删后刷新预览并落盘。
+     */
+    fun purgeBurnRemnants() {
+        var changed = false
+        messages.forEach { (contactId, list) ->
+            val victims = list.filter { (it.isMine && it.burnAfterRead) || it.burned }
+            if (victims.isEmpty()) return@forEach
+            victims.forEach { stagingStore.delete(FileCachePaths.sent(it.id)) } // 删发送方媒体副本，不留可恢复文件
+            list.removeAll(victims)
+            updateContactPreview(contactId)
+            changed = true
+        }
+        if (changed) persist()
+    }
 
     suspend fun clearMessages(contactId: String): Result<Unit> {
         delay(300)
@@ -504,8 +516,7 @@ class ChatRepository @Inject constructor(
             lastMessage = when {
                 lastMessage == null -> ""
                 lastMessage.recalled -> "[消息已撤回]"
-                lastMessage.burned -> "🔥 [已焚毁]"
-                lastMessage.burnAfterRead -> "🔥 [阅后即焚]" // 焚毁消息预览不泄漏原文
+                lastMessage.burnAfterRead -> "🔥 [阅后即焚]" // 焚毁消息预览不泄漏原文（焚毁后整条删除，不会走到这）
                 lastMessage.type == MessageType.AUDIO -> "[语音]"
                 lastMessage.type == MessageType.FILE -> "[文件] ${lastMessage.fileName ?: ""}"
                 else -> lastMessage.content

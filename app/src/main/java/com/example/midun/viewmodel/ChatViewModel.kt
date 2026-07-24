@@ -325,10 +325,10 @@ class ChatViewModel @Inject constructor(
      * onError 用于无连接/发送失败时反馈（仅活动会话内可用）。
      */
     fun setBurnMode(
-        enabled: Boolean, ttlSeconds: Int, selfBurnSeconds: Int = 0, onError: (String) -> Unit = {}
+        enabled: Boolean, ttlSeconds: Int, onError: (String) -> Unit = {}
     ) {
         viewModelScope.launch {
-            p2pManager.setBurnMode(enabled, ttlSeconds, selfBurnSeconds)
+            p2pManager.setBurnMode(enabled, ttlSeconds)
                 .onFailure { onError("操作失败：${it.message ?: "需先与对方建立连接"}") }
         }
     }
