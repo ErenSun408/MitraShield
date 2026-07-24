@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
 import android.graphics.BitmapFactory
 import android.net.Uri
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -26,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -33,6 +35,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -50,6 +53,7 @@ import com.example.midun.data.model.FileType
 import com.example.midun.media.CardFileDataSource
 import com.example.midun.viewmodel.PreviewViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlin.math.roundToInt
 import kotlinx.coroutines.withContext
 
 /**
@@ -163,34 +167,43 @@ private fun ZoomableImage(image: ImageBitmap, contentDesc: String, onZoomChange:
         return Offset(o.x.coerceIn(-maxX, maxX), o.y.coerceIn(-maxY, maxY))
     }
 
-    Box(Modifier.fillMaxSize().onSizeChanged { boxSize = it }) {
-        Image(
-            image, contentDesc,
-            contentScale = ContentScale.Fit,
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        val newScale = (scale * zoom).coerceIn(1f, 5f)
-                        offset = if (newScale > 1f) clampOffset(offset + pan, newScale) else Offset.Zero
-                        scale = newScale
-                        onZoomChange(newScale > 1f)
-                    }
+    // 用 Canvas 手绘（drawImage 画进当前绘制层，**不创建 graphicsLayer/RenderNode 离屏层**）：安卓 9（API 28）
+    // 及以下，FLAG_SECURE 受保护窗口里的硬件离屏层无法正确合成 → 图片全黑（安卓 10 起修复；鸿蒙 2.0 内核为
+    // 安卓 10，故正常）。直绘后缩放/平移全程无离屏层，规避黑屏。ContentScale.Fit 的基础缩放手动算，再叠用户 scale/offset。
+    Canvas(
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged { boxSize = it }
+            .pointerInput(Unit) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    val newScale = (scale * zoom).coerceIn(1f, 5f)
+                    offset = if (newScale > 1f) clampOffset(offset + pan, newScale) else Offset.Zero
+                    scale = newScale
+                    onZoomChange(newScale > 1f)
                 }
-                .pointerInput(Unit) {
-                    detectTapGestures(onDoubleTap = {
-                        if (scale > 1f) {
-                            scale = 1f; offset = Offset.Zero
-                        } else {
-                            scale = 2.5f
-                        }
-                        onZoomChange(scale > 1f)
-                    })
-                }
-                .graphicsLayer {
-                    scaleX = scale; scaleY = scale
-                    translationX = offset.x; translationY = offset.y
-                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(onDoubleTap = {
+                    if (scale > 1f) { scale = 1f; offset = Offset.Zero } else { scale = 2.5f }
+                    onZoomChange(scale > 1f)
+                })
+            }
+    ) {
+        val iw = image.width.toFloat()
+        val ih = image.height.toFloat()
+        if (iw <= 0f || ih <= 0f) return@Canvas
+        val base = minOf(size.width / iw, size.height / ih) // ContentScale.Fit：最长边贴合
+        val drawW = iw * base * scale
+        val drawH = ih * base * scale
+        val left = (size.width - drawW) / 2f + offset.x
+        val top = (size.height - drawH) / 2f + offset.y
+        drawImage(
+            image = image,
+            srcOffset = IntOffset.Zero,
+            srcSize = IntSize(image.width, image.height),
+            dstOffset = IntOffset(left.roundToInt(), top.roundToInt()),
+            dstSize = IntSize(drawW.roundToInt(), drawH.roundToInt()),
+            filterQuality = FilterQuality.High
         )
     }
 }
