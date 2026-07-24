@@ -24,7 +24,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import com.example.midun.viewmodel.FileViewModel
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -924,6 +929,9 @@ private fun PickFromFolderDialog(
     onDismiss: () -> Unit
 ) {
     var selectedFolder by remember { mutableStateOf<FileItem?>(null) }
+    // 缩略图复用文件列表逻辑（FileViewModel.loadThumbnail：图片解密下采样、视频提首帧、LruCache 缓存）。
+    // dialog 按需组合 → 仅打开选取时创建该 VM（同 ChatDetail entry 单例，init 多读一次文件夹列表，无害）。
+    val fileVm: FileViewModel = hiltViewModel()
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Default.Folder, null, tint = Primary) },
@@ -959,9 +967,17 @@ private fun PickFromFolderDialog(
                     else ->
                         files.forEach { file ->
                             val (ic, tint) = fileIconOf(file.name)
+                            // 图片/视频显示卡内解密缩略图（与文件列表一致）；未就绪/失败退回类型图标。
+                            val previewable = file.type == FileType.IMAGE || file.type == FileType.VIDEO
+                            var thumb by remember(file.id) { mutableStateOf<ImageBitmap?>(null) }
+                            if (previewable) {
+                                LaunchedEffect(file.id) { thumb = fileVm.loadThumbnail(file) }
+                            }
                             PickRow(
                                 icon = ic,
                                 iconTint = tint,
+                                thumbnail = thumb,
+                                isVideo = file.type == FileType.VIDEO,
                                 title = file.name,
                                 subtitle = formatFileSize(file.size),
                                 trailing = Icons.Default.Send,
@@ -988,7 +1004,9 @@ private fun PickRow(
     title: String,
     subtitle: String?,
     trailing: ImageVector,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    thumbnail: ImageBitmap? = null,
+    isVideo: Boolean = false
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
@@ -1003,7 +1021,24 @@ private fun PickRow(
                 modifier = Modifier.size(34.dp).clip(RoundedCornerShape(8.dp)).background(iconTint.copy(alpha = 0.12f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(icon, null, tint = iconTint, modifier = Modifier.size(18.dp))
+                if (thumbnail != null) {
+                    Image(thumbnail, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    if (isVideo) { // 视频右下角叠播放三角（与文件列表一致）
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(1.dp)
+                                .size(14.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(0.45f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.PlayArrow, null, tint = Color.White, modifier = Modifier.size(10.dp))
+                        }
+                    }
+                } else {
+                    Icon(icon, null, tint = iconTint, modifier = Modifier.size(18.dp))
+                }
             }
             Spacer(Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
