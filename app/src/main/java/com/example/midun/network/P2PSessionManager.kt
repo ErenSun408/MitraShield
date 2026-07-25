@@ -14,6 +14,7 @@ import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.data.model.OperationType
+import com.example.midun.data.model.UsbDeviceStatus
 import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStream
@@ -142,6 +143,26 @@ class P2PSessionManager @Inject constructor(
         // 每次真卡认证、聊天快照就位 → 补焚：进程被杀会丢内存计时器，靠卡上持久化的死线续上。
         scope.launch {
             chatRepo.snapshotLoaded.collect { restoreBurnDeadlines() }
+        }
+        // 本机卡一离开认证态（拔卡 / 自动锁定 / 登出 / 恢复出厂）→ 立即拆掉 P2P 会话
+        //（`[network]`，2026-07-25 客户反馈）。
+        //
+        // 拔卡只是弹退出遮罩、5 秒后 finishAndRemoveTask，进程并不立刻死：聊天 socket 仍开着、心跳照常
+        // 回 PONG（PING/PONG 只用内存里的会话密钥，不碰卡），于是对端的 60s 入站超时永远不触发，对端一直
+        // 显示「已连接」，直到本机进程被系统回收才偶然断开——这正是客户报的「B 机不退出会话就一直不掉线」。
+        // 这里主动 close，让对端 readLine 当场返回 null → onPeerDisconnected 归位，两端同步掉线。
+        //
+        // 判据取「离开 AUTHENTICATED」而非只看 DISCONNECTED：自动锁定/登出同样 SFCloseDisk 关盘（状态跌到
+        // CONNECTED），会话再留着也只是个收到消息就写卡失败的空壳，对端却仍看到在线，是同一类幽灵连接。
+        // P2P 会话只可能在登录后建立，故不存在「尚未认证但有活会话」的正常态，不会误伤建链过程。
+        scope.launch {
+            cardManager.deviceStatus.collect { info ->
+                if (info.status != UsbDeviceStatus.AUTHENTICATED &&
+                    _connectionState.value != ConnectionState.DISCONNECTED
+                ) {
+                    disconnect()
+                }
+            }
         }
     }
 
