@@ -2,6 +2,11 @@ package com.example.midun.screen
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Matrix
+import android.media.ExifInterface
+import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -15,12 +20,14 @@ import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.FlashOn
@@ -37,8 +44,19 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.core.content.ContextCompat
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import com.example.midun.ui.theme.Primary
+import com.example.midun.util.decodeSampledBitmap
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -79,6 +97,15 @@ fun CameraCaptureScreen(
     val recorder = remember { Recorder.Builder().build() }
     val videoCapture = remember { VideoCapture.withOutput(recorder) }
 
+    // 拍完待确认的捕获（微信式预览）：非空即在取景器之上盖一层预览，取消回取景器接着拍、发送才交给会话。
+    var pending by remember { mutableStateOf<Pair<File, String>?>(null) }
+    // 丢弃待确认捕获：**必须删临时文件**——安全 App 不能在手机上留下未发送的明文照片/视频。
+    fun discardPending() {
+        pending?.let { (file, _) -> runCatching { file.delete() } }
+        pending = null
+    }
+    BackHandler(enabled = pending != null) { discardPending() }
+
     var recording by remember { mutableStateOf<Recording?>(null) }
     var recordSeconds by remember { mutableStateOf(0) }
     val isRecording = recording != null
@@ -93,6 +120,8 @@ fun CameraCaptureScreen(
         onDispose {
             runCatching { recording?.stop() }
             runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }
+            // 离开相机页时还挂着未发送的捕获（如被导航走）→ 删掉临时明文，不留残留。
+            pending?.let { (file, _) -> runCatching { file.delete() } }
         }
     }
 
@@ -167,12 +196,12 @@ fun CameraCaptureScreen(
                 ShutterButton(
                     isRecording = isRecording,
                     onTap = {
-                        takePhoto(context, imageCapture, flashOn) { file -> onCaptured(file, "image/jpeg") }
+                        takePhoto(context, imageCapture, flashOn) { file -> pending = file to "image/jpeg" }
                     },
                     onLongPressStart = {
                         recording = startRecording(context, videoCapture) { file ->
                             recording = null
-                            onCaptured(file, "video/mp4")
+                            pending = file to "video/mp4"
                         }
                     },
                     onLongPressEnd = {
@@ -192,8 +221,139 @@ fun CameraCaptureScreen(
                 )
             }
         }
+
+        // —— 拍完的确认层（微信式）—— 盖在取景器之上（相机保持绑定，取消即刻回到取景，无重启闪烁）。
+        pending?.let { (file, mime) ->
+            CapturePreview(
+                file = file,
+                mime = mime,
+                onCancel = { discardPending() },
+                onSend = {
+                    val sent = file to mime
+                    pending = null            // 先清，免得 onDispose 把已交出去的文件删了
+                    onCaptured(sent.first, sent.second)
+                }
+            )
+        }
     }
 }
+
+/**
+ * 拍摄确认层（微信式）：全屏看拍到的照片/视频，底部「取消」回取景器、「发送」交给会话。
+ *
+ * - 照片按 EXIF 朝向摆正（CameraX 写出的 JPEG 靠 EXIF 记方向，直接解码会躺倒），并下采样防大图 OOM。
+ * - 用普通 [Image] 而非 `Modifier.graphicsLayer`：全局 FLAG_SECURE 下，API 28 及以下的离屏层合成不出来
+ *   会整屏全黑（见 `7f8cacd`）。此层不缩放不平移，不需要任何离屏层。
+ * - 视频用 ExoPlayer 循环播放（无控制条，像微信一样自动播）。
+ * - 根部吃掉点击，避免手势穿到下面的快门/翻转。
+ */
+@Composable
+private fun CapturePreview(
+    file: File,
+    mime: String,
+    onCancel: () -> Unit,
+    onSend: () -> Unit
+) {
+    val context = LocalContext.current
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .pointerInput(Unit) { detectTapGestures { /* 吞掉，别穿到取景器控件 */ } }
+    ) {
+        if (mime.startsWith("video/")) {
+            val player = remember(file.path) {
+                ExoPlayer.Builder(context).build().apply {
+                    setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+                    repeatMode = Player.REPEAT_MODE_ALL
+                    prepare()
+                    playWhenReady = true
+                }
+            }
+            DisposableEffect(player) { onDispose { player.release() } }
+            AndroidView(
+                factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = false } },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            var image by remember(file.path) { mutableStateOf<ImageBitmap?>(null) }
+            LaunchedEffect(file.path) {
+                image = withContext(Dispatchers.IO) { loadCapturedImage(file)?.asImageBitmap() }
+            }
+            image?.let {
+                Image(
+                    bitmap = it,
+                    contentDescription = "拍摄预览",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+
+        // 底部：左取消（回取景器接着拍）／右发送。
+        Row(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 44.dp)
+                .padding(bottom = 48.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            PreviewAction(Icons.Default.Close, "取消", Color.White.copy(alpha = 0.25f), onCancel)
+            PreviewAction(Icons.Default.Check, "发送", Primary, onSend)
+        }
+    }
+}
+
+/** 确认层的一个圆形操作按钮（图标 + 下方文字）。 */
+@Composable
+private fun PreviewAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    circleColor: Color,
+    onClick: () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier
+                .size(64.dp)
+                .clip(CircleShape)
+                .background(circleColor)
+                .clickableNoRipple(onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, label, tint = Color.White, modifier = Modifier.size(30.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(label, color = Color.White, fontSize = 13.sp)
+    }
+}
+
+/**
+ * 读拍到的 JPEG → 下采样解码 → 按 EXIF 朝向旋转。失败回 null（预览显黑底，发送仍可用）。
+ * 只影响本机预览：发出去的是原文件，EXIF 随文件走。
+ */
+private fun loadCapturedImage(file: File): Bitmap? {
+    val bytes = runCatching { file.readBytes() }.getOrNull() ?: return null
+    val bmp = decodeSampledBitmap(bytes, PREVIEW_MAX_PX) ?: return null
+    val degrees = runCatching {
+        when (ExifInterface(file.absolutePath).getAttributeInt(
+            ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL
+        )) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
+        }
+    }.getOrDefault(0f)
+    if (degrees == 0f) return bmp
+    val m = Matrix().apply { postRotate(degrees) }
+    return runCatching { Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true) }.getOrDefault(bmp)
+}
+
+/** 确认层图片解码的最长边上限（够全屏清晰，又不至于大图 OOM）。 */
+private const val PREVIEW_MAX_PX = 2048
 
 /** 快门：白色大圆环，录像中变红缩小。轻触=[onTap]；长按=录像([onLongPressStart]→松手[onLongPressEnd])。 */
 @Composable
