@@ -356,6 +356,33 @@ class RealUsbManager @Inject constructor(
         _deviceStatus.value = _deviceStatus.value.copy(status = UsbDeviceStatus.CONNECTED)
     }
 
+    /**
+     * 收到系统 USB_DEVICE_DETACHED 广播：**先判拔的是不是我们这张卡**，是才关（`[usb]`，2026-07-25）。
+     *
+     * 广播对主机模式下拔出的任何设备都会发（OTG 集线器上的另一台、USB-C 耳机……），此前这里不看设备
+     * 一律 closeDevice，于是拔个耳机就等同拔卡：关盘、清 DEK、弹拔卡遮罩、5 秒退 App。ATTACHED 侧早已
+     * 按 deviceName 比对（见 [connectUsb] 的守卫），这侧是漏的，本次补齐。
+     *
+     * [detachedName] 为广播里 EXTRA_DEVICE 的 deviceName。个别机型/厂商可能不带该 extra → 退一步问系统
+     * UsbManager：我们打开的那台还在设备列表里就说明拔的是别人，忽略。两条都判不了才保守关闭（宁可误关，
+     * 也不留一个「显示已连接、句柄已失效」的状态——那只能重启 App）。
+     */
+    suspend fun onDeviceDetached(detachedName: String?): Result<Unit> {
+        val opened = openedDeviceName
+        if (opened != null) {
+            if (detachedName != null && detachedName != opened) return Result.success(Unit)
+            if (detachedName == null && isDevicePresent(opened)) return Result.success(Unit)
+        }
+        return closeDevice()
+    }
+
+    /** 系统 UsbManager 的设备列表里是否还有这台（按 deviceName）。取不到服务时保守返回 false。 */
+    private fun isDevicePresent(deviceName: String): Boolean {
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return false
+        return runCatching { usbManager.deviceList.values.any { it.deviceName == deviceName } }
+            .getOrDefault(false)
+    }
+
     /** 拔卡 / 完全释放：关盘 + 关 USB 句柄，状态 DISCONNECTED。 */
     suspend fun closeDevice(): Result<Unit> = withContext(Dispatchers.IO) {
         detachEpoch.incrementAndGet() // 让并发中的 connectUsb 知道「这次连接已被拔卡作废」

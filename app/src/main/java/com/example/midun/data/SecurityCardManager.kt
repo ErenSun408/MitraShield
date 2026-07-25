@@ -61,8 +61,9 @@ class SecurityCardManager @Inject constructor(
         scope.launch { real.connectUsb(device) }
     }
 
-    fun onUsbDetached() {
-        scope.launch { real.closeDevice() }
+    /** [detachedName] = 广播里被拔设备的 deviceName（可能为 null）；由 [RealUsbManager.onDeviceDetached] 判是否本卡。 */
+    fun onUsbDetached(detachedName: String?) {
+        scope.launch { real.onDeviceDetached(detachedName) }
     }
 
     /** 用当前驱动模式重连（登录页驱动模式面板切换后触发，测试鸿蒙登录慢用）。 */

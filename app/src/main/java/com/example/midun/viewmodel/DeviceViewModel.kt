@@ -91,8 +91,9 @@ class DeviceViewModel @Inject constructor(
         cardManager.onUsbAttached(device)
     }
 
-    fun onUsbDetached() {
-        cardManager.onUsbDetached()
+    /** [device] = 广播里被拔的设备（可能为 null）：非本卡的拔出由卡层忽略，不再误当拔卡。 */
+    fun onUsbDetached(device: UsbDevice?) {
+        cardManager.onUsbDetached(device?.deviceName)
         clearSensitiveMemory()
     }
 

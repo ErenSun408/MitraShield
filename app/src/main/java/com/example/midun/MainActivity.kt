@@ -50,19 +50,16 @@ class MainActivity : ComponentActivity() {
 
     private val usbReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            // 广播里的「是哪台设备」：插拔两侧都要据此判是不是我们那张卡（拔出侧漏判会把拔耳机当成拔卡）。
+            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+            }
             when (intent.action) {
-                UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
-                    val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
-                    }
-                    deviceViewModel.onUsbAttached(device)
-                }
-                UsbManager.ACTION_USB_DEVICE_DETACHED -> {
-                    deviceViewModel.onUsbDetached()
-                }
+                UsbManager.ACTION_USB_DEVICE_ATTACHED -> deviceViewModel.onUsbAttached(device)
+                UsbManager.ACTION_USB_DEVICE_DETACHED -> deviceViewModel.onUsbDetached(device)
             }
         }
     }
