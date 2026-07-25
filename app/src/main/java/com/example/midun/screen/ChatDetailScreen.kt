@@ -6,6 +6,12 @@ import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -38,6 +44,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -141,6 +148,30 @@ fun ChatDetailScreen(
     var showSourceMenu by remember { mutableStateOf(false) }          // 发送来源菜单（手机/文件夹）
     var showPickDialog by remember { mutableStateOf(false) }          // 文件夹来源选取对话框
     var showPlusPanel by remember { mutableStateOf(false) }           // 微信式 + 工具栏（文件 / 拍摄）
+    // —— 微信式「键盘 ⇄ 功能面板」互斥切换 ——
+    // 面板高度取「上次键盘高度」，两者共用输入栏下方同一块空间；该块高度 = max(键盘, 面板, 导航栏)，
+    // 于是键盘落、面板起（或反向）时高度不跳变，输入栏一直贴在那块空间之上，正是微信的观感。
+    val density = LocalDensity.current
+    val imeBottom = with(density) { WindowInsets.ime.getBottom(density).toDp() }
+    val navBottom = with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
+    var lastImeHeight by remember { mutableStateOf(280.dp) }          // 记住键盘高度，面板照此高度开
+    LaunchedEffect(imeBottom) { if (imeBottom > 120.dp) lastImeHeight = imeBottom }
+    val panelHeight by animateDpAsState(
+        targetValue = if (showPlusPanel) lastImeHeight else 0.dp,
+        label = "plusPanelHeight"
+    )
+    // 面板淡入淡出（键盘上升时淡出、下落时淡入），避免与键盘交叠的一瞬间硬切。
+    val panelAlpha by animateFloatAsState(
+        targetValue = if (showPlusPanel && imeBottom < 120.dp) 1f else 0f,
+        label = "plusPanelAlpha"
+    )
+    val keyboardController = LocalSoftwareKeyboardController.current
+    // 点空白处/切语音时收起一切，回到「刚进会话」的输入栏贴底态。
+    val collapseAll = {
+        showPlusPanel = false
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
     var showCamera by remember { mutableStateOf(false) }              // 全屏拍摄页（微信式即拍即发）
     // 手机存储选取器（GetContent）：选中即查名/大小/mime → 流式加密发送。
     val pickFileLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -342,21 +373,19 @@ fun ChatDetailScreen(
         },
         bottomBar = {
             Surface(shadowElevation = 8.dp) {
+              Column(Modifier.fillMaxWidth()) {
                 Row(
-                    // edge-to-edge 下系统不再自动顶起布局，靠 imePadding 让输入栏随键盘上升、
-                    // navigationBarsPadding 让其平时贴在系统导航栏之上（对齐 v4 §6.3）。
                     modifier = Modifier
                         .fillMaxWidth()
-                        .navigationBarsPadding()
-                        .imePadding()
                         .padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // 微信式布局：最左语音/键盘切换 → 中间输入框/按住说话 → 最右文件(空)/发送(有内容,渐变)。
                     IconButton(onClick = {
+                        showPlusPanel = false                      // 切语音：功能面板一并收起（微信同款）
                         if (voiceMode) pendingKeyboardFocus = true // 语音→键盘：切换后自动弹起键盘
                         voiceMode = !voiceMode
-                        if (voiceMode) voicePlayer.stop()
+                        if (voiceMode) { voicePlayer.stop(); focusManager.clearFocus(); keyboardController?.hide() }
                     }) {
                         Icon(
                             if (voiceMode) Icons.Default.Keyboard else Icons.Default.Mic,
@@ -426,7 +455,12 @@ fun ChatDetailScreen(
                             value = inputText,
                             onValueChange = { inputText = it },
                             placeholder = { Text("输入消息...", fontSize = 14.sp) },
-                            modifier = Modifier.weight(1f).heightIn(max = 120.dp).focusRequester(inputFocusRequester),
+                            // 点输入框 → 键盘升起，功能面板同时收起（互斥，微信同款）。
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(max = 120.dp)
+                                .focusRequester(inputFocusRequester)
+                                .onFocusChanged { if (it.isFocused) showPlusPanel = false },
                             shape = RoundedCornerShape(20.dp),
                             maxLines = 4
                         )
@@ -451,11 +485,18 @@ fun ChatDetailScreen(
                                     Icon(Icons.Default.Send, "发送")
                                 }
                             } else {
-                                // 微信式 ⊕：点开工具栏（文件 / 拍摄）。开面板先收键盘，避免面板与键盘打架。
+                                // 微信式 ⊕：面板与键盘互斥切换——面板未开则收键盘、开面板；已开则再点回键盘。
                                 IconButton(onClick = {
-                                    focusManager.clearFocus()
                                     showSourceMenu = false
-                                    showPlusPanel = !showPlusPanel
+                                    if (showPlusPanel) {
+                                        showPlusPanel = false
+                                        if (voiceMode) { voiceMode = false; pendingKeyboardFocus = true }
+                                        else runCatching { inputFocusRequester.requestFocus() }
+                                    } else {
+                                        focusManager.clearFocus()
+                                        keyboardController?.hide()
+                                        showPlusPanel = true
+                                    }
                                 }) {
                                     Icon(Icons.Default.AddCircleOutline, "更多", tint = Primary)
                                 }
@@ -484,12 +525,26 @@ fun ChatDetailScreen(
                         }
                     }
                 }
-                // 微信式 + 工具栏：输入栏下方滑出的格子面板（第一格文件、第二格拍摄）。
-                PlusToolPanel(
-                    visible = showPlusPanel,
-                    onFile = { showPlusPanel = false; showSourceMenu = true },
-                    onCamera = { showPlusPanel = false; showCamera = true }
-                )
+                // 输入栏下方的共享空间：键盘、+ 工具栏、系统导航栏三者取最大高度占位。
+                // edge-to-edge 下系统不再自动顶起布局，这块占位替代原来的 imePadding/navigationBarsPadding：
+                // 键盘落而面板起时高度连续，输入栏不会先掉到底再被顶起（对齐 v4 §6.3 的贴底要求）。
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(maxOf(imeBottom, panelHeight, navBottom))
+                        .clipToBounds(), // 面板高度动画期间不画到空间之外
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    // 微信式 + 工具栏（第一格文件、第二格拍摄）：随键盘升降淡出/淡入。
+                    if (panelHeight > 0.dp) {
+                        PlusToolPanel(
+                            modifier = Modifier.graphicsLayer { alpha = panelAlpha },
+                            onFile = { showPlusPanel = false; showSourceMenu = true },
+                            onCamera = { showPlusPanel = false; showCamera = true }
+                        )
+                    }
+                }
+              }
             }
         }
     ) { padding ->
@@ -498,6 +553,8 @@ fun ChatDetailScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                // 点消息区空白（气泡等自身可点元素会先吃掉手势）→ 收键盘 + 收功能面板，回到贴底态。
+                .pointerInput(Unit) { detectTapGestures { collapseAll() } }
                 .padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
             contentPadding = PaddingValues(vertical = 12.dp)
@@ -812,22 +869,20 @@ fun ChatDetailScreen(
  */
 @Composable
 private fun PlusToolPanel(
-    visible: Boolean,
+    modifier: Modifier = Modifier,
     onFile: () -> Unit,
     onCamera: () -> Unit
 ) {
-    androidx.compose.animation.AnimatedVisibility(visible = visible) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Surface)
-                .padding(vertical = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Spacer(Modifier.width(8.dp))
-            PlusTool(Icons.Default.InsertDriveFile, "文件", onFile)
-            PlusTool(Icons.Default.PhotoCamera, "拍摄", onCamera)
-        }
+    Row(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Surface)
+            .padding(vertical = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Spacer(Modifier.width(8.dp))
+        PlusTool(Icons.Default.InsertDriveFile, "文件", onFile)
+        PlusTool(Icons.Default.PhotoCamera, "拍摄", onCamera)
     }
 }
 
