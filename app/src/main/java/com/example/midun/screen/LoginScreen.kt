@@ -4,7 +4,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
@@ -57,10 +56,8 @@ fun LoginScreen(
     var showForgotDialog by remember { mutableStateOf(false) }
     var wiping by remember { mutableStateOf(false) }
     var wipeError by remember { mutableStateOf<String?>(null) }
-    // 驱动模式测试面板（logo 连点 3 下弹出，测鸿蒙 2.0 登录慢）：
+    // 驱动模式测试面板（左上角三点按钮打开，测鸿蒙 2.0 登录慢）：
     var showDriverPanel by remember { mutableStateOf(false) }
-    var driverTaps by remember { mutableStateOf(0) }
-    var lastDriverTap by remember { mutableStateOf(0L) }
     val driverMode by deviceViewModel.driverMode.collectAsState()
     val perfLog by deviceViewModel.perfLog.collectAsState()
     val devStatus by deviceViewModel.deviceStatus.collectAsState()
@@ -95,16 +92,6 @@ fun LoginScreen(
                     modifier = Modifier
                         .size(64.dp)
                         .clip(RoundedCornerShape(16.dp))
-                        // 隐藏入口：连点 3 下弹驱动模式面板（无点击反馈，普通用户无感）。
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) {
-                            val now = System.currentTimeMillis()
-                            driverTaps = if (now - lastDriverTap < 700) driverTaps + 1 else 1
-                            lastDriverTap = now
-                            if (driverTaps >= 3) { driverTaps = 0; showDriverPanel = true }
-                        }
                 )
                 Spacer(Modifier.height(12.dp))
                 Text("波波", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
@@ -206,6 +193,17 @@ fun LoginScreen(
                     }
                 }
             }
+        }
+
+        // 驱动模式测试入口：左上角三点按钮（原 logo 连点 3 下的隐藏手势客户点不出来，改成看得见点得到的按钮）。
+        // 诊断脚手架，模式定下来后连同面板整体移除。
+        IconButton(
+            onClick = { showDriverPanel = true },
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(top = 24.dp, start = 8.dp)
+        ) {
+            Icon(Icons.Default.MoreVert, contentDescription = "连接模式", tint = Color.White)
         }
     }
 
