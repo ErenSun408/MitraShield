@@ -116,5 +116,14 @@ fun SplashScreen(
                 fontSize = 12.sp
             )
         }
+
+        // 驱动模式测试入口：左上角三点按钮。鸿蒙 2.0 上连卡要好几分钟，测试人员在这一屏等待时
+        // 就能直接换模式，不必先熬到登录页。诊断脚手架，模式定下来后整体移除。
+        DriverModeEntry(
+            deviceViewModel = deviceViewModel,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(top = 24.dp, start = 8.dp)
+        )
     }
 }
