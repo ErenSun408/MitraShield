@@ -124,13 +124,11 @@ class P2PSessionManager @Inject constructor(
      * 本端阅后即焚模式（B 阶段）：开启后本端发出的消息均为焚毁消息，并经 BURN_MODE 帧通知对端。
      * 是「活动会话」概念——断开/对端离线即清回 off（同会话密钥清除时机）。
      */
-    private val _burnMode = MutableStateFlow(BurnMode(enabled = false, ttlSeconds = 0))
+    private val _burnMode = MutableStateFlow(BurnMode(enabled = false))
     val burnMode: StateFlow<BurnMode> = _burnMode.asStateFlow()
 
-    /**
-     * @param ttlSeconds 读后倒计时：对端读到后，多久两端一并焚毁（经 BURN_MODE 帧同步给对端）。
-     */
-    data class BurnMode(val enabled: Boolean, val ttlSeconds: Int)
+    /** 焚毁时长不再可选（见 [burnTtlFor]），故模式只剩开/关。 */
+    data class BurnMode(val enabled: Boolean)
 
     /**
      * 进行中的焚毁倒计时（B 阶段）：messageId → 焚毁截止时刻(epoch ms)。接收方点开焚毁消息后写入，
@@ -394,7 +392,7 @@ class P2PSessionManager @Inject constructor(
         val messageId = generateMessageId()
         // 阅后即焚模式（B 阶段）：开启态下仅文字消息打焚毁标记（文件等暂不焚）。
         val burning = _burnMode.value.enabled && type == MessageType.TEXT
-        val ttl = if (burning) _burnMode.value.ttlSeconds else 0
+        val ttl = if (burning) burnTtlFor(type) else 0
         try {
             writeFrame(session, messageId, type.name, content, burning, ttl) // 帧带稳定 id（可能抛 IOException）
             chatRepo.sendMessage(contactId, content, type, messageId, MessageStatus.SENT, burning, ttl)
@@ -451,9 +449,9 @@ class P2PSessionManager @Inject constructor(
         val fileNonce = P2PCrypto.newFileNonce()
         val totalChunks = ((size + FILE_CHUNK_BYTES - 1) / FILE_CHUNK_BYTES).toInt().coerceAtLeast(1)
         // 阅后即焚：开启态下所有文件（语音/图片/视频/文档）均焚。接收端 handleFileBegin 通用解析 burn/ttl、
-        // ChatDetailScreen 对图/视频走一次性预览、文档走只读卡片，读后按 ttl 双端焚毁。
+        // ChatDetailScreen 对图/视频走一次性预览、文档走只读卡片；这类一律 ttl=0（听完/关闭预览即刻焚）。
         val burning = _burnMode.value.enabled
-        val burnTtl = if (burning) _burnMode.value.ttlSeconds else 0
+        val burnTtl = if (burning) burnTtlFor(fileMessageType(mime)) else 0
 
         // 发送方预览副本：手机来源在真卡模式下边发边落 `.sent_<msgId>`；落不成则不留（localPath 保持 null）。
         val sentCopyPath = if (sourceCardPath == null) FileCachePaths.sent(msgId) else null
@@ -555,7 +553,7 @@ class P2PSessionManager @Inject constructor(
         chatRepo.addFileMessage(
             contactId, msgId, isMine = true, fileName, size, initialStatus, localPath = sourceCardPath,
             type = fileMessageType(mime), audioDurationSec = durationSec,
-            burnAfterRead = burning, burnTtl = if (burning) _burnMode.value.ttlSeconds else 0
+            burnAfterRead = burning, burnTtl = if (burning) burnTtlFor(fileMessageType(mime)) else 0
         )
         _incomingMessages.emit(contactId)
         if (sentCopyPath == null) return@withContext Result.success(Unit)
@@ -603,23 +601,19 @@ class P2PSessionManager @Inject constructor(
 
     /**
      * 开/关阅后即焚模式（B 阶段，仅在活动会话内有效）：发 BURN_MODE 帧通知对端 → 对端据此对本端发去的
-     * 消息按读后倒计时处理。payload="on:<读后倒计时秒>" / "off"。发送方自己那份不靠倒计时，登录时统一
-     * 清除（见 [ChatRepository.purgeBurnRemnants]），故协议只带读后倒计时。
+     * 消息按 [burnTtlFor] 的固定时长处理。payload="on" / "off"（时长自 2026-07-27 起定死、不再可选，
+     * 故帧里不再带秒数；老版本发来的 "on:30" 收端只消费不解析，兼容无碍）。发送方自己那份不靠倒计时，
+     * 登录时统一清除（见 [ChatRepository.purgeBurnRemnants]）。
      */
-    suspend fun setBurnMode(
-        enabled: Boolean, ttlSeconds: Int
-    ): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun setBurnMode(enabled: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
         val session = _activeSession.value
             ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
         if (session.contactId == UNKNOWN_CONTACT) {
             return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
         }
         try {
-            writeFrame(session, generateMessageId(), BURN_MODE_TYPE, if (enabled) "on:$ttlSeconds" else "off")
-            _burnMode.value = BurnMode(
-                enabled,
-                if (enabled) ttlSeconds else 0
-            )
+            writeFrame(session, generateMessageId(), BURN_MODE_TYPE, if (enabled) "on" else "off")
+            _burnMode.value = BurnMode(enabled)
             // 开/关阅后即焚不再插入系统提示行（客户反馈：双方开关无需留提醒）。
             // 模式状态仍由 _burnMode 驱动会话内火苗图标高亮，功能不受影响。
             Result.success(Unit)
@@ -629,13 +623,14 @@ class P2PSessionManager @Inject constructor(
     }
 
     /**
-     * 接收方点开焚毁消息（B 阶段）：**死线落盘**（now + ttl）后挂倒计时，到点触发双端焚毁。
-     * 重复点开忽略（已在倒计时）。落盘是关键——倒计时途中进程被杀，重认证时由 [restoreBurnDeadlines]
-     * 补焚，否则遮罩会复原、这条明文还能再看一次。
+     * 接收方点开焚毁消息（B 阶段）：**死线落盘**（now + [burnTtlFor]）后挂倒计时，到点触发双端焚毁。
+     * 时长按消息类型定死：文字读后 15 秒，其余（语音听完 / 图·视频·文件关闭预览）ttl=0 即刻焚。
+     * 重复点开忽略（已在倒计时）。落盘是关键——文字那 15 秒里进程被杀，重认证时由 [restoreBurnDeadlines]
+     * 补焚，否则遮罩会复原、这条明文还能再看一次。ttl=0 那类死线即 now，落盘同样保证崩溃后必焚。
      */
-    fun revealBurnMessage(messageId: String, contactId: String, ttlSeconds: Int) {
+    fun revealBurnMessage(messageId: String, contactId: String, type: MessageType) {
         if (_burnTimers.value.containsKey(messageId)) return
-        val deadline = System.currentTimeMillis() + ttlSeconds * 1000L
+        val deadline = System.currentTimeMillis() + burnTtlFor(type) * 1000L
         chatRepo.setBurnDeadline(messageId, contactId, deadline)
         scheduleBurn(messageId, contactId, deadline, notifyPeer = true)
     }
@@ -669,10 +664,6 @@ class P2PSessionManager @Inject constructor(
         runCatching { stagingStore.delete(FileCachePaths.recv(messageId)) }
         runCatching { stagingStore.delete(FileCachePaths.sent(messageId)) }
     }
-
-    /** 焚毁 TTL 秒数 → 人类可读（5→5秒，60→1分钟）。 */
-    private fun formatTtl(seconds: Int): String =
-        if (seconds < 60) "${seconds}秒" else "${seconds / 60}分钟"
 
     /**
      * 撤回自己发的消息（M10.5）：发 RECALL 控制帧（payload=目标消息 id）→ 对端按 id 删；本地也删。
@@ -1008,7 +999,7 @@ class P2PSessionManager @Inject constructor(
             _activeSession.value?.sessionKey?.fill(0)
             _activeSession.value = null
             _connectionState.value = ConnectionState.DISCONNECTED
-            _burnMode.value = BurnMode(enabled = false, ttlSeconds = 0) // 焚毁模式随会话清除
+            _burnMode.value = BurnMode(enabled = false) // 焚毁模式随会话清除
             teardownFileChannel()
         }
     }
@@ -1026,7 +1017,7 @@ class P2PSessionManager @Inject constructor(
         serverSocket.value = null
         listenerKeyPair = null
         _connectionState.value = ConnectionState.DISCONNECTED
-        _burnMode.value = BurnMode(enabled = false, ttlSeconds = 0) // 焚毁模式随会话清除
+        _burnMode.value = BurnMode(enabled = false) // 焚毁模式随会话清除
     }
 
     /**
@@ -1142,8 +1133,17 @@ class P2PSessionManager @Inject constructor(
         private const val IDENTITY_TYPE = "IDENTITY"
         /** 撤回控制帧的 type 值（payload=目标消息 id）。 */
         private const val RECALL_TYPE = "RECALL"
-        /** 阅后即焚「开/关模式」广播帧（payload="on:30" / "off"），对端据此插系统行（B 阶段）。 */
+        /** 阅后即焚「开/关模式」广播帧（payload="on" / "off"），仅同步模式，不带时长（B 阶段）。 */
         const val BURN_MODE_TYPE = "BURN_MODE"
+        /** 文字焚毁消息的读后时长（秒）：客户 2026-07-27 定死 15 秒，不再由用户选择。 */
+        const val BURN_TEXT_TTL_SEC = 15
+
+        /**
+         * 焚毁时长（秒）按消息类型定死（客户 2026-07-27）：文字点开后 15 秒焚；语音听完、图/视频/文件
+         * 关闭预览后即刻焚（ttl=0 → 死线即 now，reveal 时当场焚毁）。
+         */
+        fun burnTtlFor(type: MessageType): Int =
+            if (type == MessageType.TEXT) BURN_TEXT_TTL_SEC else 0
         /** 阅后即焚「焚毁」控制帧（payload=目标消息 id）：读方倒计时到点 → 两端焚毁（B 阶段）。 */
         const val BURN_TYPE = "BURN"
         /** TCP 连接超时（ms）：不可达/对方未监听时快速失败。 */

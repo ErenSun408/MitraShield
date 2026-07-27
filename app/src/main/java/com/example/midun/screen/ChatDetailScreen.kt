@@ -102,11 +102,10 @@ fun ChatDetailScreen(
     // 阅后即焚模式（B 阶段）：驱动火苗图标高亮；开/关只在本会话已连接时可用。
     val burnMode by chatViewModel.burnMode.collectAsState()
     val burnOnHere = burnMode.enabled && connectedHere
-    // 进行中的焚毁倒计时：messageId → 截止时刻，气泡据此显示剩余秒数（B 阶段）。
+    // 进行中的焚毁死线：messageId → 截止时刻。已不再显示倒计时，仅用于判定接收方是否已点开（揭示遮罩）。
     val burnTimers by chatViewModel.burnTimers.collectAsState()
 
     var inputText by remember { mutableStateOf("") }
-    var showBurnDialog by remember { mutableStateOf(false) }
     var showBurnGateDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var showSearchBar by remember { mutableStateOf(false) }
@@ -333,17 +332,19 @@ fun ChatDetailScreen(
                             Icon(Icons.Default.Close, "关闭搜索")
                         }
                     } else {
+                        // 焚毁时长已定死（文字 15 秒 / 语音听完 / 图·视频·文件关预览即刻），故点击直接开关，
+                        // 不再弹时长选择框（客户 2026-07-27）。
                         IconButton(onClick = {
                             when {
                                 !connectedHere -> showBurnGateDialog = true   // 未连接：提示先建联
-                                burnMode.enabled -> chatViewModel.setBurnMode(false, 0) // 已开 → 直接关
-                                else -> showBurnDialog = true                  // 未开 → 选时长开启
+                                else -> chatViewModel.setBurnMode(!burnMode.enabled)
                             }
                         }) {
                             Icon(
                                 Icons.Default.LocalFireDepartment,
                                 if (burnOnHere) "关闭阅后即焚" else "阅后即焚",
-                                tint = if (burnOnHere) Warning else Color.White
+                                // 未开启显灰（原为白色，看着像已开启，客户要求区分开）。
+                                tint = if (burnOnHere) Warning else BurnIconOff
                             )
                         }
                         Box {
@@ -578,7 +579,7 @@ fun ChatDetailScreen(
                         msg = msg,
                         burnDeadline = burnTimers[msg.id],
                         transferFraction = transferProgress[msg.id],
-                        onReveal = { chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl) },
+                        onReveal = { chatViewModel.revealBurnMessage(msg.id, contactId, msg.type) },
                         onDelete = { chatViewModel.deleteMessage(msg.id) },
                         onRecall = { chatViewModel.recallMessage(msg.id) },
                         onRecallBlocked = {
@@ -602,10 +603,10 @@ fun ChatDetailScreen(
                                 val tmp = File(context.cacheDir, "voice_play.m4a")
                                 tmp.writeBytes(bytes)
                                 playingVoiceId = msg.id
-                                // 播放完成回调：普通语音仅复位；焚毁语音在**听完**才启动 ttl 倒计时（到点两端焚）。
+                                // 播放完成回调：普通语音仅复位；焚毁语音**听完即焚**（ttl=0，两端一并删）。
                                 val started = voicePlayer.play(tmp) {
                                     playingVoiceId = null
-                                    if (burnRecv) chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl)
+                                    if (burnRecv) chatViewModel.revealBurnMessage(msg.id, contactId, msg.type)
                                 }
                                 if (!started) {
                                     playingVoiceId = null
@@ -617,17 +618,17 @@ fun ChatDetailScreen(
                             val transferring = transferProgress[msg.id] != null
                             val ft = fileTypeOf(msg.fileName ?: "")
                             val isMedia = ft == FileType.IMAGE || ft == FileType.VIDEO
-                            // 接收方焚毁文件（[chat-voice] 之外的图/视频/文档焚毁）：一次性预览，退出预览才起倒计时。
+                            // 接收方焚毁文件（[chat-voice] 之外的图/视频/文档焚毁）：一次性预览，退出预览即焚。
                             val burnRecv = msg.burnAfterRead && !msg.isMine && msg.type == MessageType.FILE
                             when {
                                 // 焚毁文件二次预览拦截：已看过并退出过一次（已登记倒计时）→ 提示不支持二次预览。
                                 burnRecv && burnTimers[msg.id] != null -> scope.launch {
                                     snackbarHostState.showSnackbar("阅后即焚文件不支持二次预览")
                                 }
-                                // 焚毁图/视频首次预览：无「保存到文件夹」按钮（saveTarget=null），退出预览时登记焚毁倒计时。
+                                // 焚毁图/视频首次预览：无「保存到文件夹」按钮（saveTarget=null），退出预览即焚（ttl=0）。
                                 burnRecv && isMedia -> openMediaPreview(
                                     chatViewModel.stagingPathFor(msg.id), msg.fileName ?: "", ft, null
-                                ) { chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl) }
+                                ) { chatViewModel.revealBurnMessage(msg.id, contactId, msg.type) }
                                 // 焚毁文档/其他（不支持预览）：弹只读卡片（名+大小），关闭卡片时登记焚毁倒计时。
                                 burnRecv -> burnDocCard = msg
                                 // 发送方点在途文件 → 取消发送确认。
@@ -666,35 +667,6 @@ fun ChatDetailScreen(
                 }
             }
         }
-    }
-
-    if (showBurnDialog) {
-        // 读后倒计时（秒）：对端读到后双端同焚。发送方自己那份不设倒计时——登录时统一清除，对用户无感知。
-        val readOptions = listOf("10秒" to 10, "15秒" to 15, "30秒" to 30, "1分钟" to 60)
-        var readSec by remember { mutableStateOf(30) }
-        AlertDialog(
-            onDismissRequest = { showBurnDialog = false },
-            icon = { Icon(Icons.Default.LocalFireDepartment, null, tint = Warning) },
-            title = { Text("开启阅后即焚") },
-            text = {
-                BurnDurationSection(
-                    title = "读后倒计时",
-                    subtitle = "对方读到后，消息在所选时长后于双方设备一并焚毁。",
-                    options = readOptions,
-                    selected = readSec,
-                    onSelect = { readSec = it }
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    chatViewModel.setBurnMode(true, readSec)
-                    showBurnDialog = false
-                }) { Text("开启", color = Primary) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showBurnDialog = false }) { Text("取消", color = TextSecondary) }
-            }
-        )
     }
 
     if (showBurnGateDialog) {
@@ -781,12 +753,17 @@ fun ChatDetailScreen(
 
     // 接收文件「保存到隐私文件夹」对话框（M11.5.3）。
     fileToSave?.let { msg ->
+        // 焚毁文档走到这里 = 已在 BurnDocDialog 点开看过 → 无论存成没存、存完都得焚。焚毁会删暂存区副本，
+        // 故必须等 saveReceivedFile 回调（拷贝已完成）再焚，不能存和焚并发。
+        val burnAfterSave = msg.burnAfterRead && !msg.isMine
+        val burnNow = { if (burnAfterSave) chatViewModel.revealBurnMessage(msg.id, contactId, msg.type) }
         SaveToFolderDialog(
             fileName = msg.fileName ?: msg.content,
             folders = chatViewModel.saveFolders.collectAsState().value,
             onPickFolder = { folderId ->
                 chatViewModel.saveReceivedFile(msg, folderId) { ok, message ->
                     scope.launch { snackbarHostState.showSnackbar(message) }
+                    burnNow()
                 }
                 fileToSave = null
             },
@@ -796,13 +773,15 @@ fun ChatDetailScreen(
                     onCreated = { folderId ->
                         chatViewModel.saveReceivedFile(msg, folderId) { ok, message ->
                             scope.launch { snackbarHostState.showSnackbar(message) }
+                            burnNow()
                         }
                         fileToSave = null
                     },
                     onError = { scope.launch { snackbarHostState.showSnackbar(it) } }
                 )
             },
-            onDismiss = { fileToSave = null }
+            // 放弃保存：这条已经被看过（点开过焚毁卡片），照样焚。
+            onDismiss = { burnNow(); fileToSave = null }
         )
     }
 
@@ -842,13 +821,18 @@ fun ChatDetailScreen(
         )
     }
 
-    // 焚毁文档只读卡片（文档不支持预览）：显示名+大小，关闭时登记焚毁倒计时（退出即开始）。
+    // 焚毁文档卡片（文档不支持预览）：显示名+大小；关闭即焚，选「保存到文件夹」则转交保存弹窗、存完再焚。
     burnDocCard?.let { msg ->
         BurnDocDialog(
             fileName = msg.fileName ?: msg.content,
             fileSize = msg.fileSize,
+            onSave = {
+                burnDocCard = null
+                fileToSave = msg
+                chatViewModel.loadSaveFolders()
+            },
             onDismiss = {
-                chatViewModel.revealBurnMessage(msg.id, contactId, msg.burnTtl)
+                chatViewModel.revealBurnMessage(msg.id, contactId, msg.type)
                 burnDocCard = null
             }
         )
@@ -908,51 +892,14 @@ private fun PlusTool(icon: androidx.compose.ui.graphics.vector.ImageVector, labe
 }
 
 /**
- * 阅后即焚弹框里的时长选择（标题 + 说明 + 一排单选时长）。
- * 自绘选择块而非 FilterChip：等宽平分一行，「10分钟」这类长标签在窄块里也不会被裁。
+ * 焚毁文档卡片：文档不支持预览（见 FilePreviewDialog），焚毁文档点开显示名称+大小。因为看不到内容，
+ * 这类**保留「保存到文件夹」**（客户 2026-07-27；可预览的图/视频反之，预览里不给保存）。
+ * 关闭本卡片（`onDismiss`）即视为「看过一次」→ 由调用方当场焚毁；走 [onSave] 则等存完再焚。
  */
 @Composable
-private fun BurnDurationSection(
-    title: String,
-    subtitle: String,
-    options: List<Pair<String, Int>>,
-    selected: Int,
-    onSelect: (Int) -> Unit
+private fun BurnDocDialog(
+    fileName: String, fileSize: Long?, onSave: () -> Unit, onDismiss: () -> Unit
 ) {
-    Column {
-        Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-        Spacer(Modifier.height(2.dp))
-        Text(subtitle, fontSize = 11.sp, color = TextSecondary)
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            options.forEach { (label, sec) ->
-                val isSelected = sec == selected
-                Surface(
-                    modifier = Modifier.weight(1f).clickable { onSelect(sec) },
-                    shape = RoundedCornerShape(8.dp),
-                    color = if (isSelected) Warning.copy(alpha = 0.18f) else Color.Transparent,
-                    border = BorderStroke(1.dp, if (isSelected) Warning else TextSecondary.copy(alpha = 0.4f))
-                ) {
-                    Box(Modifier.padding(vertical = 8.dp), contentAlignment = Alignment.Center) {
-                        Text(
-                            label,
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            color = if (isSelected) Warning else TextSecondary
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * 焚毁文档只读卡片：文档不支持预览（见 FilePreviewDialog），焚毁文档点开显示名称+大小的确认卡片，
- * 不提供预览/下载/保存（阅后即焚语义）。关闭本卡片（`onDismiss`）即视为「看过一次」→ 由调用方登记焚毁倒计时。
- */
-@Composable
-private fun BurnDocDialog(fileName: String, fileSize: Long?, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Default.LocalFireDepartment, null, tint = Warning) },
@@ -962,10 +909,14 @@ private fun BurnDocDialog(fileName: String, fileSize: Long?, onDismiss: () -> Un
                 fileSize?.let { Text(formatFileSize(it), color = TextSecondary, fontSize = 13.sp) }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "阅后即焚文档不支持预览与保存。关闭本窗口后将开始焚毁倒计时，且不可再次查看。",
+                    "阅后即焚文档不支持预览。关闭本窗口后立即焚毁，且不可再次查看；" +
+                        "需要留存请先保存到文件夹。",
                     color = TextSecondary, fontSize = 13.sp
                 )
             }
+        },
+        dismissButton = {
+            TextButton(onClick = onSave) { Text("保存到文件夹", color = Primary) }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("我知道了", color = Primary) }
@@ -1327,41 +1278,20 @@ private fun ConnectPromptLine(text: String, onGoConnect: () -> Unit) {
 }
 
 /**
- * 焚毁消息的状态标签（B 阶段）：接收方点开后有死线（burnDeadline 非空）→ 显示每秒刷新的读后倒计时。
- * 发送方自己那份不设倒计时（登录时统一清除）→ 无死线，显示「对方读后焚毁」；接收方未点开（已被遮罩挡住）
- * 同样走无死线文案。
+ * 焚毁消息的状态标签（B 阶段）：只标「这是阅后即焚消息」，不再显示「xx秒后焚毁」倒计时
+ * （客户 2026-07-27：时长定死后倒计时是噪音）。发送方那份补一句「对方读后焚毁」。
  */
 @Composable
-private fun BurnStatusLabel(isMine: Boolean, burnDeadline: Long?, contentColor: Color) {
+private fun BurnStatusLabel(isMine: Boolean, contentColor: Color) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(Icons.Default.LocalFireDepartment, null, tint = Warning, modifier = Modifier.size(12.dp))
         Spacer(Modifier.width(2.dp))
-        if (burnDeadline != null) {
-            var remaining by remember(burnDeadline) {
-                mutableStateOf(((burnDeadline - System.currentTimeMillis()) / 1000).coerceAtLeast(0))
-            }
-            LaunchedEffect(burnDeadline) {
-                while (remaining > 0) {
-                    delay(500)
-                    remaining = ((burnDeadline - System.currentTimeMillis()) / 1000).coerceAtLeast(0)
-                }
-            }
-            Text(formatBurnRemaining(remaining), fontSize = 10.sp, color = contentColor.copy(alpha = 0.85f))
-        } else {
-            Text(
-                if (isMine) "阅后即焚 · 对方读后焚毁" else "阅后即焚",
-                fontSize = 10.sp,
-                color = contentColor.copy(alpha = 0.85f)
-            )
-        }
+        Text(
+            if (isMine) "阅后即焚 · 对方读后焚毁" else "阅后即焚",
+            fontSize = 10.sp,
+            color = contentColor.copy(alpha = 0.85f)
+        )
     }
-}
-
-/** 焚毁剩余时长文案：读后倒计时最长 1 分钟，按秒/分显示。 */
-private fun formatBurnRemaining(seconds: Long): String = when {
-    seconds < 60 -> "${seconds}秒后焚毁"
-    seconds % 60 == 0L -> "${seconds / 60}分钟后焚毁"
-    else -> "${seconds / 60}分${seconds % 60}秒后焚毁"
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -1386,8 +1316,9 @@ private fun ChatBubble(
     val isVideo = msg.type == MessageType.VIDEO
     val isAudio = msg.type == MessageType.AUDIO
 
-    // 焚毁消息（B 阶段）：接收方未点开 → 遮罩；点开后 burnDeadline 非空 → 倒计时显示。
-    // 焚毁**语音**特殊：计时改在「听完」才起（burnDeadline 仍为空），故揭示判据要叠加 [audioBurnOpened]
+    // 焚毁消息（B 阶段）：接收方未点开 → 遮罩；点开后 burnDeadline 非空 → 露出原文（文字有 15 秒可读窗口，
+    // 其余类型 ttl=0，露出后当场焚、气泡随即消失）。
+    // 焚毁**语音**特殊：死线在「听完」才落（在此之前 burnDeadline 为空），故揭示判据要叠加 [audioBurnOpened]
     // （已点开播放但还没听完）——否则点开后仍被遮罩、看不到播放 UI。
     val isBurn = msg.burnAfterRead
     val revealed = burnDeadline != null || (isAudio && audioBurnOpened)
@@ -1498,7 +1429,7 @@ private fun ChatBubble(
                         // 焚毁状态标签：发送方/已揭示接收方显示（遮罩态不显示，B 阶段）。
                         if (isBurn) {
                             Spacer(Modifier.height(4.dp))
-                            BurnStatusLabel(isMine = msg.isMine, burnDeadline = burnDeadline, contentColor = contentColor)
+                            BurnStatusLabel(isMine = msg.isMine, contentColor = contentColor)
                         }
                         }
                     }

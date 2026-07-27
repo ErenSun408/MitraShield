@@ -320,15 +320,13 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * 开/关阅后即焚模式（B 阶段）：转发 P2PSessionManager.setBurnMode（发帧通知对端 + 插系统行）。
-     * 系统行插入后由 manager 经 incomingMessages 信号触发当前会话重载，故此处无需手动 reload。
+     * 开/关阅后即焚模式（B 阶段）：转发 P2PSessionManager.setBurnMode（发帧通知对端）。焚毁时长已定死
+     * （文字 15 秒 / 其余即刻），故只有开关、无参数。
      * onError 用于无连接/发送失败时反馈（仅活动会话内可用）。
      */
-    fun setBurnMode(
-        enabled: Boolean, ttlSeconds: Int, onError: (String) -> Unit = {}
-    ) {
+    fun setBurnMode(enabled: Boolean, onError: (String) -> Unit = {}) {
         viewModelScope.launch {
-            p2pManager.setBurnMode(enabled, ttlSeconds)
+            p2pManager.setBurnMode(enabled)
                 .onFailure { onError("操作失败：${it.message ?: "需先与对方建立连接"}") }
         }
     }
@@ -456,11 +454,11 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * 接收方点开焚毁消息（B 阶段）：转发 P2PSessionManager.revealBurnMessage，登记倒计时；
-     * 到点由 manager 自动双端焚毁并经 incomingMessages 刷新会话（变焚毁墓碑）。
+     * 接收方点开焚毁消息（B 阶段）：转发 P2PSessionManager.revealBurnMessage，按消息类型登记死线
+     * （文字 15 秒、其余即刻）；到点由 manager 自动双端焚毁并经 incomingMessages 刷新会话（整条消失）。
      */
-    fun revealBurnMessage(messageId: String, contactId: String, ttlSeconds: Int) {
-        p2pManager.revealBurnMessage(messageId, contactId, ttlSeconds)
+    fun revealBurnMessage(messageId: String, contactId: String, type: MessageType) {
+        p2pManager.revealBurnMessage(messageId, contactId, type)
     }
 
     /** 网络诊断快照（真机排障用）：转发 P2PSessionManager 采集的本机 IPv6 信息。 */

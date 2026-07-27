@@ -15,5 +15,7 @@ val TextSecondary = Color(0xFF6B7280)
 val Danger = Color(0xFFEF4444)
 val Warning = Color(0xFFF59E0B)
 val Success = Color(0xFF10B981)
+/** 会话顶栏「阅后即焚」未开启时的火苗色：深蓝顶栏上仍读得出是灰的（开启为 [Warning] 橙）。 */
+val BurnIconOff = Color(0xFF9CA3AF)
 val ChatBubbleMine = Color(0xFF1A3A5C)
 val ChatBubbleOther = Color(0xFFE8ECF1)
