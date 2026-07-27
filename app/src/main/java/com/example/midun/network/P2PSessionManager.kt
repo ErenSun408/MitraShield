@@ -980,7 +980,7 @@ class P2PSessionManager @Inject constructor(
         chatRepo.addContact(
             Contact(id = id, deviceId = deviceSn, remark = name, lastMessageTime = System.currentTimeMillis())
         )
-        operationLog.record(OperationType.CONNECT, "与「$name」建立加密连接")
+        operationLog.record(OperationType.CONNECT, "与「$name」建立连接")
         return id to true
     }
 

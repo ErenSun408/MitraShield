@@ -17,4 +17,7 @@ class OperationLogViewModel @Inject constructor(
     operationLog: OperationLogRepository
 ) : ViewModel() {
     val logs: StateFlow<List<OperationLog>> = operationLog.logs
+
+    /** 「最近操作」开关（设置页控制，默认关）：为 false 时首页整块隐藏、后台也不记录。 */
+    val enabled: StateFlow<Boolean> = operationLog.enabled
 }

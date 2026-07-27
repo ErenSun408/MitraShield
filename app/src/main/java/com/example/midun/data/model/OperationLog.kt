@@ -14,7 +14,7 @@ enum class OperationType(val label: String) {
     FILE_DELETE("文件删除"),
     FOLDER_CREATE("新建文件夹"),
     FILE_RENAME("重命名"),
-    KEY_UPDATE("文件加密密钥更新"),
+    KEY_UPDATE("文件密钥更新"), // 文案不提「加密」（客户 2026-07-28）
     CONNECT("相逢叙话"),
 }
 

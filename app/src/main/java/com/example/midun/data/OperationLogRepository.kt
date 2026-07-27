@@ -11,10 +11,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -27,10 +30,14 @@ import kotlinx.coroutines.sync.withLock
  *
  * **持久化（M11.5.4）**：经 [OperationLogStore] 落安全卡隐藏区。内存态空启动；真卡认证成功即从卡加载历史、
  * 每次变更写穿到卡；未认证时 store no-op（仅内存，进程重启即清空，贴合「不留痕」）。
+ *
+ * **总开关（2026-07-28 客户要求）**：默认**关闭**——关闭时 [record] 直接丢弃，认证时也不读卡、反而清掉卡上残留，
+ * 于是「关闭 → 开启」后只会有开启之后发生的操作。开关本身由 [SettingsStore] 存手机本地。
  */
 @Singleton
 class OperationLogRepository @Inject constructor(
     private val store: OperationLogStore,
+    private val settingsStore: SettingsStore,
     realUsbManager: RealUsbManager
 ) {
 
@@ -51,7 +58,21 @@ class OperationLogRepository @Inject constructor(
     @Volatile
     private var loaded = false
 
+    /**
+     * 「最近操作」开关的当前值（Eagerly：单例一建好就订阅，登录发生在其后，不会漏记）。
+     * 首页也观察它决定是否显示区块。
+     */
+    val enabled: StateFlow<Boolean> = settingsStore.operationLogEnabled
+        .stateIn(scope, SharingStarted.Eagerly, SettingsStore.OPERATION_LOG_DEFAULT)
+
     init {
+        // 开关关闭 → 立刻清空内存与卡上残留（含「开启期间记的」与更早的历史），保证再开启时从零开始。
+        // 直接收 store 的流而非 [enabled]：后者的初始值是 stateIn 的种子（尚未读到 DataStore 的真值），
+        // 不能拿它当「用户关掉了」来触发清理。
+        scope.launch {
+            settingsStore.operationLogEnabled.distinctUntilChanged().collect { on -> if (!on) clear() }
+        }
+
         // 真卡认证成功（盘已打开）→ 从卡加载历史日志；锁定/拔卡（离开 AUTHENTICATED）→ 清内存明文。
         // wasAuthed 守卫：初始 false 的首个发射不触发清理，仅真正离开认证态才清（M11.6.3 安全加固）。
         scope.launch {
@@ -60,7 +81,16 @@ class OperationLogRepository @Inject constructor(
                 .map { it.status == UsbDeviceStatus.AUTHENTICATED }
                 .distinctUntilChanged()
                 .collect { authed ->
-                    if (authed) {
+                    // 取真值而非 [enabled] 的当前快照：登录若抢在 DataStore 首次读之前，快照还是种子值。
+                    if (authed && !settingsStore.operationLogEnabled.first()) {
+                        // 开关关闭：不读卡（读了也不显示），反而把卡上可能残留的旧日志覆盖成空。
+                        ioLock.withLock {
+                            _logs.value = emptyList()
+                            loaded = true
+                        }
+                        persist()
+                        wasAuthed = true
+                    } else if (authed) {
                         com.example.midun.data.real.CardPerf.time("OperationLogRepository.load(日志侧车)") {
                             ioLock.withLock {
                                 val fromCard = store.load()
@@ -84,8 +114,9 @@ class OperationLogRepository @Inject constructor(
     private fun merge(pending: List<OperationLog>, fromCard: List<OperationLog>): List<OperationLog> =
         (pending + fromCard).sortedByDescending { it.timestamp }.take(MAX_ENTRIES)
 
-    /** 追加一条记录（最新在前，超出上限丢弃最旧），并写穿持久化。 */
+    /** 追加一条记录（最新在前，超出上限丢弃最旧），并写穿持久化。开关关闭时**不记录**（直接丢弃）。 */
     fun record(type: OperationType, description: String) {
+        if (!enabled.value) return
         val entry = OperationLog(type, description, System.currentTimeMillis())
         _logs.update { (listOf(entry) + it).take(MAX_ENTRIES) }
         persist()

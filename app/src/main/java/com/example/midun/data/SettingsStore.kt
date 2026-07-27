@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -50,6 +51,18 @@ class SettingsStore @Inject constructor(
     }
 
     /**
+     * 「最近操作」总开关（客户 2026-07-28 要求：默认关闭）。关闭时首页不显示该区块，后台也**不记录**；
+     * 开启后才从那一刻起记录（见 `OperationLogRepository`——关闭时 `record` 直接丢弃，且清掉卡上残留）。
+     * 与自动锁定同理落手机本地：这是 UI 偏好而非隐私数据，且需在开盘前就能读到。
+     */
+    val operationLogEnabled: Flow<Boolean> =
+        store.data.map { it[KEY_OPERATION_LOG_ENABLED] ?: OPERATION_LOG_DEFAULT }
+
+    suspend fun setOperationLogEnabled(enabled: Boolean) {
+        store.edit { it[KEY_OPERATION_LOG_ENABLED] = enabled }
+    }
+
+    /**
      * USB 驱动模式（鸿蒙 2.0 登录慢的诊断/测试开关，登录页隐藏面板可切、重启保留）：
      * [DRIVER_MODE_LIBUSB]（0，默认）= libusb 通道；[DRIVER_MODE_NATIVE]（2）= android 原生（DEVFS）通道。
      */
@@ -64,6 +77,9 @@ class SettingsStore @Inject constructor(
     }
 
     companion object {
+        const val OPERATION_LOG_DEFAULT = false
+        private val KEY_OPERATION_LOG_ENABLED = booleanPreferencesKey("operation_log_enabled")
+
         const val DEFAULT_TIMEOUT_MIN = 5
         private val KEY_INACTIVITY_TIMEOUT_MIN = intPreferencesKey("inactivity_timeout_min")
 

@@ -93,6 +93,9 @@ fun SettingsScreen(
     var showScreenOffDialog by remember { mutableStateOf(false) }
     var pickedScreenOff by remember { mutableIntStateOf(screenOffSec) }
 
+    // 最近操作开关（默认关）：首页据此显示/隐藏「最近操作」区块，仓库据此决定记不记。
+    val operationLogEnabled by deviceViewModel.operationLogEnabled.collectAsState()
+
     var showAboutDialog by remember { mutableStateOf(false) }
 
     val isBound = deviceStatus.boundPhoneId != null
@@ -214,6 +217,22 @@ fun SettingsScreen(
                         (cacheBytes?.let { "（占用 ${if (it <= 0L) "0 KB" else formatStorage(it)}）" } ?: ""),
                     iconTint = Accent,
                     onClick = { showCacheDialog = true }
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                // 最近操作（默认关，客户 2026-07-28）：关着时首页不显示该区块、后台也不记录；
+                // 关闭动作会一并清掉已记录的条目，故再次开启是从零开始。
+                SettingsActionItem(
+                    icon = Icons.Default.History,
+                    title = "最近操作",
+                    subtitle = "开启后在首页显示，并从开启时开始记录",
+                    iconTint = Accent,
+                    trailing = {
+                        Switch(
+                            checked = operationLogEnabled,
+                            onCheckedChange = { deviceViewModel.setOperationLogEnabled(it) }
+                        )
+                    },
+                    onClick = { deviceViewModel.setOperationLogEnabled(!operationLogEnabled) }
                 )
             }
         }

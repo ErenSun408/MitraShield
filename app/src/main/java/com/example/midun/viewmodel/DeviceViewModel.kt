@@ -189,7 +189,7 @@ class DeviceViewModel @Inject constructor(
                 return@launch
             }
             cardManager.updateKey()
-                .onSuccess { operationLog.record(OperationType.KEY_UPDATE, "更新文件加密密钥"); onSuccess() }
+                .onSuccess { operationLog.record(OperationType.KEY_UPDATE, "更新文件密钥"); onSuccess() }
                 .onFailure { onError(it.message ?: "文件加密密钥更新失败") }
         }
     }
@@ -200,6 +200,14 @@ class DeviceViewModel @Inject constructor(
      * 此处保留为额外的进程内敏感态清理挂钩（当前无新增项）。
      */
     private fun clearSensitiveMemory() {
+    }
+
+    // 「最近操作」开关（2026-07-28 客户要求，默认关）：关闭时首页不显示该区块、后台也不记录。
+    // 存手机本地（SettingsStore），关闭瞬间由 OperationLogRepository 顺带清掉已有记录。
+    val operationLogEnabled: StateFlow<Boolean> = operationLog.enabled
+
+    fun setOperationLogEnabled(enabled: Boolean) {
+        viewModelScope.launch { settingsStore.setOperationLogEnabled(enabled) }
     }
 
     private var inactivityJob: Job? = null

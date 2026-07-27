@@ -62,6 +62,7 @@ fun HomeScreen(
     val fileState by fileViewModel.uiState.collectAsState()
     val contacts by chatViewModel.contacts.collectAsState()
     val logs by operationLogViewModel.logs.collectAsState()
+    val logsEnabled by operationLogViewModel.enabled.collectAsState()
 
     val folderCount = fileState.folders.size
     val fileCount = fileState.totalFileCount
@@ -141,49 +142,53 @@ fun HomeScreen(
             Spacer(Modifier.weight(1f))
         }
 
-        Spacer(Modifier.height(20.dp))
+        // 最近操作：默认关闭（客户 2026-07-28）——设置页开关打开后才显示，标题一并隐藏；
+        // 关闭期间后台也不记录（见 OperationLogRepository.record）。
+        if (logsEnabled) {
+            Spacer(Modifier.height(20.dp))
 
-        // 最近操作：真实操作日志（OperationLogViewModel 观察 OperationLogRepository 的 StateFlow，
-        // 各记录点经同一 @Singleton 写入，无需手动 reload）。清理类操作不记录自身（见 M9.3）。
-        Text("最近操作", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(12.dp))
+            // 真实操作日志（OperationLogViewModel 观察 OperationLogRepository 的 StateFlow，
+            // 各记录点经同一 @Singleton 写入，无需手动 reload）。清理类操作不记录自身（见 M9.3）。
+            Text("最近操作", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(12.dp))
 
-        val recentLogs = logs.take(MAX_HOME_LOGS)
-        if (recentLogs.isEmpty()) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text(
-                    "暂无操作记录",
-                    modifier = Modifier.fillMaxWidth().padding(20.dp),
-                    fontSize = 13.sp,
-                    color = TextSecondary,
-                    textAlign = TextAlign.Center
-                )
-            }
-        } else {
-            recentLogs.forEach { log ->
+            val recentLogs = logs.take(MAX_HOME_LOGS)
+            if (recentLogs.isEmpty()) {
                 Card(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Text(
+                        "暂无操作记录",
+                        modifier = Modifier.fillMaxWidth().padding(20.dp),
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                recentLogs.forEach { log ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Box(
-                            modifier = Modifier.size(36.dp).clip(CircleShape).background(Surface),
-                            contentAlignment = Alignment.Center
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(iconForOperation(log.type), null, tint = Primary, modifier = Modifier.size(18.dp))
+                            Box(
+                                modifier = Modifier.size(36.dp).clip(CircleShape).background(Surface),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(iconForOperation(log.type), null, tint = Primary, modifier = Modifier.size(18.dp))
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(log.type.label, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                Text(log.description, fontSize = 12.sp, color = TextSecondary)
+                            }
+                            Text(formatLogTime(log.timestamp), fontSize = 11.sp, color = TextSecondary)
                         }
-                        Spacer(Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(log.type.label, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                            Text(log.description, fontSize = 12.sp, color = TextSecondary)
-                        }
-                        Text(formatLogTime(log.timestamp), fontSize = 11.sp, color = TextSecondary)
                     }
                 }
             }

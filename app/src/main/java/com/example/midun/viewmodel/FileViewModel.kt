@@ -301,7 +301,7 @@ class FileViewModel @Inject constructor(
                     onProgress = { w -> _importProgress.value = FileByteProgress(meta.originalName, w, tmp.length()) }
                 ).getOrThrow()
                 loadFiles(folderId)
-                operationLog.record(OperationType.FILE_IMPORT, "解密导入「${meta.originalName}」")
+                operationLog.record(OperationType.FILE_IMPORT, "导入「${meta.originalName}」")
                 _operationResult.emit(OperationResult.Success("已解密导入「${meta.originalName}」"))
             } catch (e: Exception) {
                 when (e) {
@@ -461,7 +461,8 @@ class FileViewModel @Inject constructor(
                         fileSystem.exportFile(fileId, fileName, out, { transferCancelled }, onProg).getOrThrow()
                 } ?: throw IOException("无法写入目标位置")
             }.onSuccess {
-                operationLog.record(OperationType.FILE_EXPORT, if (passphrase != null) "加密导出「$fileName」" else "导出「$fileName」")
+                // 日志文案不提「加密」（客户 2026-07-28）：加不加密导出记同一句。
+                operationLog.record(OperationType.FILE_EXPORT, "导出「$fileName」")
                 _fileExportResult.value = ExportResult(
                     true, if (passphrase != null) "已加密导出「$fileName.${FileContainer.EXTENSION}」到所选位置" else "已导出「$fileName」到所选位置"
                 )
@@ -540,7 +541,11 @@ class FileViewModel @Inject constructor(
             val summary =
                 if (cancelled) "已取消，已$verb $ok/${files.size} 个文件到「$folderName」"
                 else "已$verb $ok/${files.size} 个文件到「$folderName」"
-            operationLog.record(OperationType.FILE_EXPORT, "$verb 文件夹「$folderName」（$summary）")
+            // 日志文案不提「加密」：弹框 summary 仍用 verb，日志固定说「导出」。
+            operationLog.record(
+                OperationType.FILE_EXPORT,
+                "导出文件夹「$folderName」（$ok/${files.size} 个文件）"
+            )
             _exportProgress.value = ExportProgress(
                 files.size, files.size, finished = true, message = summary
             )
