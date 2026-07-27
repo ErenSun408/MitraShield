@@ -101,8 +101,9 @@ class RealUsbManager @Inject constructor(
      * USB 层打开（对应「插卡」）：枚举 → 申请权限并 `Open` 拿句柄 → 拼 diskName → 探测是否已初始化。
      * 成功后状态 → CONNECTED（尚未认证）。**不打开盘、不验密码**。
      *
-     * 「是否已初始化」探测：试 `SFOpenDiskEx(默认密码 123456)`——能开=仍是默认密码=**未初始化**（走
-     * 初始化向导）；开不了=密码已改=**已初始化**（走登录）。探测后立即关盘。
+     * 「是否已初始化」探测：试 `SFOpenDiskEx(默认密码 123456)`——返回 0 = 仍是默认密码 = **未初始化**
+     * （走初始化向导），探测后立即关盘；返回**设备级错误码**（见 [FsErrors]）= 盘根本没打开，此时**不猜
+     * 卡的状态**，直接判连接失败并如实报因；其余非 0 = 默认密码开不进 = **已初始化**（走登录）。
      * ⚠️ 若卡有硬件失败次数锁定，已初始化卡的这次探测会消耗一次尝试——真机需确认。
      */
     suspend fun connectUsb(device: UsbDevice? = null): Result<Unit> = withContext(Dispatchers.IO) {
@@ -164,8 +165,22 @@ class RealUsbManager @Inject constructor(
             var sn = runCatching {
                 CardPerf.time("SFDiskGetSN(免密)") { synchronized(fsShell) { fsShell.SFDiskGetSN(dn) } }
             }.getOrNull().orEmpty()
-            val canOpenDefault =
-                CardPerf.time("SFOpenDiskEx(默认密码探测)") { synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) } } == 0
+            // 「是否已初始化」探测。**非 0 ≠ 已初始化**：默认密码开不进只是可能之一，设备 IO 错/句柄失效/
+            // 驱动通道不支持同样返回非 0（2026-07-27 鸿蒙日志实证：driverMode=2 下这里恒非 0、0-3ms 快速失败）。
+            // 旧代码一律当「已初始化」→ 新卡跳过初始化直进登录页 → 卡上还是默认密码，用户输什么都错、永远登不进。
+            // 故设备级错误直接判连接失败并如实报因，绝不猜卡的状态；只有明确的密码类失败才算「已初始化」。
+            val probe = CardPerf.time("SFOpenDiskEx(默认密码探测)") {
+                synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) }
+            }
+            CardPerf.mark("默认密码探测 ret=$probe")
+            if (FsErrors.isDeviceLevel(probe)) {
+                releaseUsbLayer()
+                _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
+                return@withContext Result.failure(
+                    IllegalStateException("安全卡打开失败：${FsErrors.describe(probe)}（错误码 $probe）")
+                )
+            }
+            val canOpenDefault = probe == 0
             if (canOpenDefault) {
                 if (sn.isEmpty()) sn = readSn()
                 CardPerf.time("SFCloseDisk(探测后)") { runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } } }
@@ -210,16 +225,30 @@ class RealUsbManager @Inject constructor(
         // 明确被拒：SDK 收到结果且未授权，且系统也确认无权限。
         fun denied(): Boolean = helper.FReceivePermission && !helper.FGrantedPermission && !sysGranted()
 
-        if (granted()) return helper.Open(name, activeDriverMode == 2)
+        val start = System.currentTimeMillis()
+        // 拿到授权后的这次重开单独计时：原来它和「等授权」算在同一个计时里，日志上分不清 3 分钟是耗在
+        // 等用户点授权框，还是耗在 Open 本身（鸿蒙 driverMode=2 下 Open 已实测 6s/10s 的慢例）。
+        fun reopen(polls: Int): Boolean {
+            CardPerf.mark("授权就绪(轮询${polls}次/${System.currentTimeMillis() - start}ms) → 重开")
+            return CardPerf.time("Open(授权后重开)") { helper.Open(name, activeDriverMode == 2) }
+        }
+
+        if (granted()) return reopen(0)
         // 无 device 可观察（理论仅旧 mock 路径）时退回原 SDK-标志判据，避免真失败空等满超时。
         if (device == null && !helper.FRequestingPermission && !helper.FReceivePermission) return false
 
-        var waited = 0
-        while (waited < PERMISSION_TIMEOUT_MS) {
-            if (granted()) return helper.Open(name, activeDriverMode == 2)
-            if (denied()) return false
-            delay(PERMISSION_POLL_MS.toLong()); waited += PERMISSION_POLL_MS
+        // 超时按**真实墙钟**判，不再累加 delay 的名义值：每轮 hasPermission 是一次 binder 调用，在部分机型
+        // 要上百毫秒，600 轮下来名义 120s 实际能跑到 210s（2026-07-27 鸿蒙日志实证），超时形同虚设。
+        var polls = 0
+        while (System.currentTimeMillis() - start < PERMISSION_TIMEOUT_MS) {
+            if (granted()) return reopen(polls)
+            if (denied()) {
+                CardPerf.mark("授权被拒(轮询${polls}次)")
+                return false
+            }
+            delay(PERMISSION_POLL_MS.toLong()); polls++
         }
+        CardPerf.mark("等授权超时(轮询${polls}次/${System.currentTimeMillis() - start}ms)")
         return false
     }
 
@@ -237,8 +266,16 @@ class RealUsbManager @Inject constructor(
     override suspend fun initDevice(password: String, bindDevice: Boolean): Result<Unit> =
         withContext(Dispatchers.IO) {
             val dn = diskName ?: return@withContext Result.failure(IllegalStateException("USB 未连接"))
-            if (synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) } != 0) {
-                return@withContext Result.failure(IllegalStateException("默认密码打开失败（卡可能已初始化）"))
+            val opened = synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) }
+            if (opened != 0) {
+                CardPerf.mark("初始化开盘失败 ret=$opened")
+                // 同 connectUsb 的探测：设备级错误要如实报因，不能一律说成「卡可能已初始化」。
+                return@withContext Result.failure(
+                    IllegalStateException(
+                        if (FsErrors.isDeviceLevel(opened)) "安全卡打开失败：${FsErrors.describe(opened)}（错误码 $opened）"
+                        else "默认密码打开失败（卡可能已初始化），错误码=$opened"
+                    )
+                )
             }
             val ret = synchronized(fsShell) { fsShell.SFDiskSetPassword(sha256(password)) }
             if (ret != 0) {
@@ -280,13 +317,21 @@ class RealUsbManager @Inject constructor(
         val dn = diskName ?: return@withContext Result.failure(IllegalStateException("USB 未连接"))
         val ret = CardPerf.time("SFOpenDiskEx(登录)") { synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, sha256(password)) } }
         if (ret != 0) {
-            // 开盘失败有两种原因，报错不能一律说成密码错误：真的密码不对，或句柄已失效（卡被拔走/换了设备）。
-            // 用 SDK 重新枚举区分——枚举不到设备 = 卡不在了，退回 DISCONNECTED 让 UI 显拔卡遮罩，
+            CardPerf.mark("登录开盘失败 ret=$ret")
+            // 开盘失败有三种原因，报错不能一律说成密码错误：卡被拔走、设备/驱动层打不开盘、真的密码不对。
+            // 先用 SDK 重新枚举区分「卡还在不在」——枚举不到 = 卡不在了，退回 DISCONNECTED 让 UI 显拔卡遮罩，
             // 而不是让用户对着「密码错误」反复重试一张根本不在的卡。枚举只走系统 UsbManager，不消耗卡的尝试次数。
             val stillPresent = runCatching { usbHelper?.GetList()?.count ?: 0 }.getOrDefault(0) > 0
             if (!stillPresent) {
                 closeDevice()
                 return@withContext Result.failure(IllegalStateException("安全卡已断开，请重新插入后再试"))
+            }
+            // 卡还在但返回的是设备级错误码 = 盘压根没打开，与密码无关（错误码表见 [FsErrors]）。如实报因，
+            // 否则用户会以为自己记错密码而反复重试——每次重试都在消耗卡的密码尝试次数。
+            if (FsErrors.isDeviceLevel(ret)) {
+                return@withContext Result.failure(
+                    IllegalStateException("安全卡打开失败：${FsErrors.describe(ret)}（错误码 $ret）")
+                )
             }
             return@withContext Result.failure(IllegalStateException("密码错误或打开失败，错误码=$ret"))
         }
