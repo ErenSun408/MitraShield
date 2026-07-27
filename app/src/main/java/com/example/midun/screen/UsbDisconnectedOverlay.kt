@@ -16,7 +16,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.midun.ui.theme.*
@@ -24,7 +23,8 @@ import kotlinx.coroutines.delay
 
 /**
  * USB断开后的全屏锁定层
- * 显示警告 + 倒计时，结束后回调跳回登录
+ * 只显示闪烁警告图标 + 「设备已断开」+ 退出倒计时（客户 2026-07-27：清理清单等说明文字一律不显示），
+ * 倒计时结束后回调跳回登录。
  */
 @Composable
 fun UsbDisconnectedOverlay(onCountdownFinished: () -> Unit) {
@@ -94,27 +94,6 @@ fun UsbDisconnectedOverlay(onCountdownFinished: () -> Unit) {
                 fontWeight = FontWeight.Bold
             )
 
-            Spacer(Modifier.height(12.dp))
-
-            Text(
-                "正在清除内存中的所有数据...",
-                color = Color.White.copy(0.8f),
-                fontSize = 14.sp,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(Modifier.height(8.dp))
-
-            Column(
-                horizontalAlignment = Alignment.Start,
-                modifier = Modifier.padding(horizontal = 24.dp)
-            ) {
-                ClearItem("断开端到端加密连接")
-                ClearItem("清除会话密钥")
-                ClearItem("清除APP缓存数据")
-                ClearItem("退出登录状态")
-            }
-
             Spacer(Modifier.height(32.dp))
 
             Card(
@@ -138,26 +117,6 @@ fun UsbDisconnectedOverlay(onCountdownFinished: () -> Unit) {
                     )
                 }
             }
-
-            Spacer(Modifier.height(24.dp))
-
-            Text(
-                "请重新插入设备后重启APP",
-                color = Color.White.copy(0.5f),
-                fontSize = 12.sp
-            )
         }
-    }
-}
-
-@Composable
-private fun ClearItem(text: String) {
-    Row(
-        modifier = Modifier.padding(vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(Icons.Default.Check, null, tint = Success, modifier = Modifier.size(14.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(text, color = Color.White.copy(0.7f), fontSize = 12.sp)
     }
 }

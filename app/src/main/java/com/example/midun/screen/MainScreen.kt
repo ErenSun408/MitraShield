@@ -97,8 +97,7 @@ fun MainScreen(
                     0 -> HomeScreen(
                         onNavigateToFiles = { selectedTab = 1 },
                         onNavigateToChat = { selectedTab = 2 },
-                        onNavigateToSettings = { selectedTab = 3 },
-                        onQrCodeClick = onQrCodeClick
+                        onNavigateToSettings = { selectedTab = 3 }
                     )
                     1 -> FilesScreen(
                         onFolderClick = onFolderClick,

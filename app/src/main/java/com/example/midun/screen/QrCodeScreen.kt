@@ -45,7 +45,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.midun.network.P2PSessionManager
 import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
@@ -103,8 +102,6 @@ fun QrCodeScreen(
     var countdown by remember { mutableIntStateOf(120) }
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var qrError by remember { mutableStateOf<String?>(null) }
-    // 出码侧网络诊断（真机排障）：生成时采集本机 IPv6，直观暴露「本机有没有公网 IPv6」。
-    var diag by remember { mutableStateOf<P2PSessionManager.NetworkDiagnostics?>(null) }
 
     // 扫码状态（patch §M6 改动4）
     var scanned by remember { mutableStateOf(false) }
@@ -156,7 +153,6 @@ fun QrCodeScreen(
         if (isGenerating) {
             // M10.3：生成真实 ConnectionInfo（含本机 IPv6 + 临时 ECDH 公钥）并后台开始监听对端连入。
             val content = chatViewModel.prepareConnection()
-            diag = chatViewModel.networkDiagnostics() // 采集本机 IPv6 诊断（与二维码同一地址）
             val bitmap = runCatching {
                 withContext(Dispatchers.Default) {
                     val pngBytes = QRCode.ofSquares()
@@ -304,37 +300,6 @@ fun QrCodeScreen(
                         )
                     }
 
-                    // 本机出站地址诊断（真机排障）：二维码里写的就是这个地址。无可用直连地址时
-                    // 对端必然「网络不可达」，红字直接点出根因；WiFi 局域网/公网 IPv6 时绿字给出地址。
-                    diag?.let { d ->
-                        Spacer(Modifier.height(12.dp))
-                        val noRoute = d.selectedAddress == "::1"
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = (if (noRoute) Danger else Success).copy(alpha = 0.10f)
-                            )
-                        ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(
-                                    "本机出站地址：${d.selectedAddress}",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium,
-                                    color = if (noRoute) Danger else Success
-                                )
-                                if (d.allAddresses.isNotEmpty()) {
-                                    Spacer(Modifier.height(6.dp))
-                                    Text(
-                                        "全部地址：${d.allAddresses.joinToString("  ")}",
-                                        fontSize = 9.sp,
-                                        color = TextSecondary
-                                    )
-                                }
-                            }
-                        }
-                    }
-
                     Spacer(Modifier.height(16.dp))
 
                     // 真实连接状态（M10.3）：等待对端扫码连入 → 已建立加密连接
@@ -342,7 +307,7 @@ fun QrCodeScreen(
                         ConnectionState.CONNECTED -> Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.CheckCircle, null, tint = Success, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("已建立加密连接", color = Success, fontWeight = FontWeight.Medium)
+                            Text("已成功建立连接", color = Success, fontWeight = FontWeight.Medium)
                         }
                         ConnectionState.LISTENING -> Row(verticalAlignment = Alignment.CenterVertically) {
                             CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp), color = Primary)
@@ -429,7 +394,7 @@ fun QrCodeScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp), color = Primary)
                     Spacer(Modifier.width(12.dp))
-                    Text("正在建立端到端加密连接…", color = TextSecondary, fontSize = 13.sp)
+                    Text("正在建立端到端连接…", color = TextSecondary, fontSize = 13.sp)
                 }
             },
             confirmButton = {}
@@ -458,7 +423,7 @@ fun QrCodeScreen(
             title = { Text("为联系人添加备注") },
             text = {
                 Column {
-                    Text("已建立端到端加密连接，给对方设置一个备注名（可跳过）。", color = TextSecondary, fontSize = 12.sp)
+                    Text("已建立端到端连接，给对方设置一个备注名（可跳过）。", color = TextSecondary, fontSize = 12.sp)
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
                         value = remark,
@@ -575,9 +540,9 @@ private fun ScanTab(
             Icon(Icons.Default.Info, null, tint = Primary, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(
-                // 诚实文案（M10.9）：当前仅解析邀请码后建立端到端加密连接；设备身份签名校验
-                // 需安全卡身份密钥作信任根，随真 SDK（M11）接入后启用，故此处不再承诺「签名校验」。
-                "识别后将建立端到端加密连接（设备身份签名校验将随设备接入启用）",
+                // 诚实文案（M10.9）：不承诺「签名校验」——设备身份签名校验需安全卡身份密钥作信任根，
+                // 尚未启用；客户 2026-07-27 要求连这句括号说明也去掉，只留最朴素的一句。
+                "识别后将建立端到端连接",
                 fontSize = 12.sp,
                 color = TextSecondary
             )

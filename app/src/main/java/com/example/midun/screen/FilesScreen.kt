@@ -110,7 +110,7 @@ fun FilesScreen(
                     Text("私藏清隅", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(4.dp))
-                Text("所有文件加密存储于设备EMMC中", fontSize = 12.sp, color = TextSecondary)
+                Text("所有文件存储于设备中", fontSize = 12.sp, color = TextSecondary)
                 Spacer(Modifier.height(16.dp))
             }
 
@@ -261,7 +261,7 @@ private fun EmptyFoldersState(onCreateFolder: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         Text("暂无文件夹", color = TextSecondary, fontSize = 15.sp)
         Spacer(Modifier.height(4.dp))
-        Text("创建文件夹后，文件会加密存储在设备中", color = TextSecondary, fontSize = 12.sp)
+        Text("创建文件夹后，文件存储于设备中", color = TextSecondary, fontSize = 12.sp)
         Spacer(Modifier.height(12.dp))
         TextButton(onClick = onCreateFolder) {
             Text("创建第一个文件夹", color = Primary)
@@ -1287,7 +1287,7 @@ fun CreateFolderScreen(
             onDismissRequest = { showSuccess = false; onBack() },
             icon = { Icon(Icons.Default.CheckCircle, null, tint = Success) },
             title = { Text("创建成功") },
-            text = { Text("文件夹「$folderName」已在设备EMMC中创建") },
+            text = { Text("文件夹「$folderName」已在设备中创建") },
             confirmButton = {
                 TextButton(onClick = { showSuccess = false; onBack() }) { Text("确定") }
             }

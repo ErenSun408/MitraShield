@@ -35,6 +35,12 @@ import com.example.midun.util.formatStorageCoarse
 import com.example.midun.viewmodel.DeviceViewModel
 
 /**
+ * 「文件加密密钥更新」入口开关（客户 2026-07-27 要求对用户隐藏）。功能本身、弹框与 [DeviceViewModel.updateKey]
+ * 原样保留，置 true 即恢复入口——同 LoginScreen 的 `SHOW_FORGOT_PASSWORD` 写法。
+ */
+private const val SHOW_KEY_UPDATE = false
+
+/**
  * 设置 Tab。
  *
  * 导航约定（与全局回调风格一致，不持 navController）：
@@ -142,14 +148,16 @@ fun SettingsScreen(
         SettingsSectionHeader("安全操作")
         Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
             Column {
-                SettingsActionItem(
-                    icon = Icons.Default.Key,
-                    title = "文件加密密钥更新",
-                    subtitle = "替换文件加密的二级密钥",
-                    iconTint = Accent,
-                    onClick = { showKeyDialog = true }
-                )
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                if (SHOW_KEY_UPDATE) {
+                    SettingsActionItem(
+                        icon = Icons.Default.Key,
+                        title = "文件加密密钥更新",
+                        subtitle = "替换文件加密的二级密钥",
+                        iconTint = Accent,
+                        onClick = { showKeyDialog = true }
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                }
                 SettingsActionItem(
                     icon = if (isBound) Icons.Default.PhonelinkErase else Icons.Default.PhonelinkSetup,
                     title = if (isBound) "解绑本机" else "绑定本机",
@@ -240,8 +248,8 @@ fun SettingsScreen(
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 SettingsActionItem(
                     icon = Icons.Default.FolderDelete,
-                    title = "退出时清空隐私文件",
-                    subtitle = "开启后每次退出自动清空隐私文件夹内所有文件，并清空最近操作",
+                    title = "退出时文件不保留",
+                    subtitle = "开启后每次退出自动清空文件及行为",
                     iconTint = Warning,
                     trailing = {
                         Switch(
@@ -271,15 +279,13 @@ fun SettingsScreen(
                 SettingsActionItem(
                     icon = Icons.Default.DeleteForever,
                     title = "涤净闲存",
-                    subtitle = "清除所有聊天记录和文件，保留登录态",
                     iconTint = Danger,
                     onClick = { showCleanDialog = true }
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 SettingsActionItem(
                     icon = Icons.Default.RestartAlt,
-                    title = "恢复出厂",
-                    subtitle = "擦除根密钥，还原初始状态",
+                    title = "恢复初始状态",
                     iconTint = Danger,
                     onClick = { showResetDialog = true }
                 )
@@ -333,7 +339,7 @@ fun SettingsScreen(
             text = {
                 Column {
                     Text(
-                        "将清除设备中的所有聊天记录、文件与联系人，保留登录态。\n\n此操作不可恢复，请输入当前密码确认：",
+                        "将清除设备中的所有信息。\n\n此操作不可恢复，请输入当前密码确认：",
                         color = TextSecondary
                     )
                     Spacer(Modifier.height(12.dp))
@@ -404,14 +410,14 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { if (!exitClearLoading) dismiss() },
             icon = { Icon(Icons.Default.Warning, null, tint = Warning) },
-            title = { Text(if (isContacts) "退出时清空联系人" else "退出时清空隐私文件") },
+            title = { Text(if (isContacts) "退出时清空联系人" else "退出时文件不保留") },
             text = {
                 Column {
                     Text(
                         if (isContacts)
                             "开启后，每次退出时将自动清空所有联系人与聊天记录，并清空最近操作，且不可恢复。请谨慎开启。\n\n请输入当前密码确认："
                         else
-                            "开启后，每次退出时将自动清空隐私文件夹内所有历史文件，并清空最近操作，且不可恢复。请谨慎开启。\n\n请输入当前密码确认：",
+                            "开启后，每次退出时将自动清空文件及行为，且不可恢复。请谨慎开启。\n\n请输入当前密码确认：",
                         color = TextSecondary
                     )
                     Spacer(Modifier.height(12.dp))
@@ -465,7 +471,7 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { if (!resetLoading) dismiss() },
             icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
-            title = { Text("恢复出厂设置", color = Danger) },
+            title = { Text("恢复初始状态", color = Danger) },
             text = {
                 Column {
                     Text(
@@ -971,7 +977,8 @@ private fun WheelTimePicker(
 private fun SettingsActionItem(
     icon: ImageVector,
     title: String,
-    subtitle: String,
+    /** 留空则不画副标题行（危险操作两项就只要标题）。 */
+    subtitle: String = "",
     iconTint: Color = Primary,
     trailing: @Composable () -> Unit = {
         Icon(Icons.Default.ChevronRight, null, tint = TextSecondary)
@@ -989,7 +996,7 @@ private fun SettingsActionItem(
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.Medium)
-            Text(subtitle, fontSize = 12.sp, color = TextSecondary)
+            if (subtitle.isNotBlank()) Text(subtitle, fontSize = 12.sp, color = TextSecondary)
         }
         trailing()
     }

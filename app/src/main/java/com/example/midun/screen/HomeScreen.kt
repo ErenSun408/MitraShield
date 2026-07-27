@@ -26,7 +26,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.data.model.OperationType
-import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ChatViewModel
 import com.example.midun.util.formatStorage
@@ -43,7 +42,6 @@ fun HomeScreen(
     onNavigateToFiles: () -> Unit = {},
     onNavigateToChat: () -> Unit = {},
     onNavigateToSettings: () -> Unit = {},
-    onQrCodeClick: () -> Unit = {},
     deviceViewModel: DeviceViewModel = hiltViewModel(),
     fileViewModel: FileViewModel = hiltViewModel(),
     chatViewModel: ChatViewModel = hiltViewModel(),
@@ -65,8 +63,6 @@ fun HomeScreen(
     val contacts by chatViewModel.contacts.collectAsState()
     val logs by operationLogViewModel.logs.collectAsState()
 
-    val deviceConnected = device.status == UsbDeviceStatus.AUTHENTICATED ||
-        device.status == UsbDeviceStatus.CONNECTED
     val folderCount = fileState.folders.size
     val fileCount = fileState.totalFileCount
     val unreadCount = contacts.sumOf { it.unreadCount }
@@ -87,24 +83,11 @@ fun HomeScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Security, null, tint = Accent, modifier = Modifier.size(40.dp))
                     Spacer(Modifier.width(12.dp))
-                    // 中间列吃掉剩余宽度，避免标题把右侧状态徽章挤到换行溢出（机型适配）。
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text("守波秘钥", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(Modifier.width(8.dp))
-                    val statusColor = if (deviceConnected) Success else Danger
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(20.dp))
-                            .background(statusColor.copy(0.2f))
-                            .padding(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            if (deviceConnected) "已连接" else "未连接",
-                            color = statusColor, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                            maxLines = 1, softWrap = false
-                        )
-                    }
+                    // 右侧「已连接/未连接」徽章已按客户要求去掉（进得来首页本就意味着卡在），标题独占剩余宽度。
+                    Text(
+                        "波波", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
                 Spacer(Modifier.height(16.dp))
                 Divider(color = Color.White.copy(0.15f))
@@ -146,13 +129,8 @@ fun HomeScreen(
         Spacer(Modifier.height(12.dp))
 
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            QuickActionCard(
-                icon = Icons.Default.QrCode2,
-                title = "同波相契",
-                color = PrimaryLight,
-                onClick = onQrCodeClick,
-                modifier = Modifier.weight(1f)
-            )
+            // 「同波相契」快捷入口已按客户要求去掉（相逢叙话页里仍可发起）；留一个等宽空位，
+            // 让「涤净闲存」保持与上排两张卡同宽，不被拉成通栏。
             QuickActionCard(
                 icon = Icons.Default.UsbOff,
                 title = "涤净闲存",
@@ -160,6 +138,7 @@ fun HomeScreen(
                 onClick = { showCleanDialog = true },
                 modifier = Modifier.weight(1f)
             )
+            Spacer(Modifier.weight(1f))
         }
 
         Spacer(Modifier.height(20.dp))
@@ -225,7 +204,7 @@ fun HomeScreen(
             text = {
                 Column {
                     Text(
-                        "将清除设备中的所有聊天记录、文件、联系人与操作日志，保留登录态。\n\n此操作不可恢复，请输入当前密码确认：",
+                        "将清除设备中的所有信息。\n\n此操作不可恢复，请输入当前密码确认：",
                         color = TextSecondary
                     )
                     Spacer(Modifier.height(12.dp))
