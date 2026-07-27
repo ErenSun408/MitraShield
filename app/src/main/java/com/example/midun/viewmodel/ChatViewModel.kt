@@ -438,7 +438,7 @@ class ChatViewModel @Inject constructor(
     ) {
         val info = runCatching { ConnectionInfo.fromJson(qrContent) }.getOrNull()
         if (info == null) {
-            onError("二维码格式无效，请确认扫描的是波波连接码")
+            onError("邀请码格式无效，请确认扫描的是波波邀请码")
             return
         }
         viewModelScope.launch {

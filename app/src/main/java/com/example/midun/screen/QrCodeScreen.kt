@@ -58,7 +58,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import qrcode.QRCode
 
-/** 从相册图片 [uri] 解码二维码，识别到调 [onResult]，否则调 [onNone]。MLKit 静态图扫码。 */
+/** 从相册图片 [uri] 解码邀请码，识别到调 [onResult]，否则调 [onNone]。MLKit 静态图扫码。 */
 private fun decodeQrFromImage(context: Context, uri: Uri, onResult: (String) -> Unit, onNone: () -> Unit) {
     runCatching {
         val image = InputImage.fromFilePath(context, uri)
@@ -73,7 +73,7 @@ private fun decodeQrFromImage(context: Context, uri: Uri, onResult: (String) -> 
     }.onFailure { onNone() }
 }
 
-/** 把二维码 [bitmap] 写入 cache 经 FileProvider 内容 URI，调系统分享（image/png）。 */
+/** 把邀请码 [bitmap] 写入 cache 经 FileProvider 内容 URI，调系统分享（image/png）。 */
 private fun shareQrImage(context: Context, bitmap: Bitmap) {
     runCatching {
         val dir = File(context.cacheDir, "qr").apply { mkdirs() }
@@ -85,7 +85,7 @@ private fun shareQrImage(context: Context, bitmap: Bitmap) {
             putExtra(Intent.EXTRA_STREAM, uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(Intent.createChooser(intent, "分享二维码"))
+        context.startActivity(Intent.createChooser(intent, "分享邀请码"))
     }
 }
 
@@ -181,7 +181,7 @@ fun QrCodeScreen(
                 countdown = 120
                 qrGenerated = true
             } else {
-                qrError = "二维码生成失败，请重试"
+                qrError = "邀请码生成失败，请重试"
             }
             isGenerating = false
         }
@@ -201,11 +201,15 @@ fun QrCodeScreen(
             )
         }
     ) { padding ->
+        // 出码前只剩一颗按钮（连接信息卡已删）→ 该状态不滚动、用 weight 留白把按钮压到页面中间（客户要求）；
+        // 其余状态（已出码的长内容、识别页）仍需滚动，故滚动修饰按状态挂。
+        val centerButton = selectedTab == 0 && !qrGenerated
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState()) // 内容超屏可滚动，确保底部分享按钮可触及
+                // 内容超屏可滚动，确保底部分享按钮可触及
+                .then(if (centerButton) Modifier else Modifier.verticalScroll(rememberScrollState()))
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -219,14 +223,14 @@ fun QrCodeScreen(
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.QrCode, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("生成二维码")
+                        Text("生成邀请码")
                     }
                 }
                 Tab(selected = selectedTab == 1, onClick = { selectedTab = 1 }) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.QrCodeScanner, null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("识别二维码")
+                        Text("识别邀请码")
                     }
                 }
             }
@@ -234,26 +238,10 @@ fun QrCodeScreen(
             Spacer(Modifier.height(16.dp))
 
             if (selectedTab == 0) {
-                // 生成二维码
+                // 生成邀请码
                 if (!qrGenerated) {
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = Surface)
-                    ) {
-                        Column(Modifier.padding(20.dp)) {
-                            Text("连接信息", fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.height(12.dp))
-                            // M10.3：点生成时实时取真实值（本机 IPv6、随机会话 ID、临时 ECDH 公钥），
-                            // pre-gen 卡仅说明将包含哪些字段。
-                            InfoRow("设备SN", "本机设备")
-                            InfoRow("IPv6地址", "生成时获取本机地址")
-                            InfoRow("会话ID", "随机生成")
-                            InfoRow("有效期", "120秒")
-                        }
-                    }
-
-                    Spacer(Modifier.height(24.dp))
+                    // 上下等分留白 → 按钮落在页面高度正中（客户要求；原来上方那张「连接信息」卡片已删）。
+                    Spacer(Modifier.weight(1f))
 
                     Button(
                         onClick = {
@@ -270,14 +258,20 @@ fun QrCodeScreen(
                         } else {
                             Icon(Icons.Default.QrCode, null)
                             Spacer(Modifier.width(8.dp))
-                            Text("生成连接二维码")
+                            Text("生成邀请码")
                         }
                     }
+
+                    // 有效期注释：原来是「连接信息」卡里的一行，卡删掉后单独挂在按钮下方。
+                    Spacer(Modifier.height(10.dp))
+                    Text("有效期 120 秒", fontSize = 12.sp, color = TextSecondary)
 
                     qrError?.let {
                         Spacer(Modifier.height(12.dp))
                         Text(it, color = Danger, fontSize = 13.sp, textAlign = TextAlign.Center)
                     }
+
+                    Spacer(Modifier.weight(1f))
                 } else {
                     // 显示二维码
                     Box(
@@ -291,7 +285,7 @@ fun QrCodeScreen(
                         qrBitmap?.let { bmp ->
                             Image(
                                 bitmap = bmp.asImageBitmap(),
-                                contentDescription = "连接二维码",
+                                contentDescription = "邀请码",
                                 modifier = Modifier.size(200.dp)
                             )
                         }
@@ -515,7 +509,7 @@ private fun ScanTab(
     val albumLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             decodeQrFromImage(context, it, onQrDetected) {
-                Toast.makeText(context, "未在图片中识别到二维码", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "未在图片中识别到邀请码", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -547,7 +541,7 @@ private fun ScanTab(
                     modifier = Modifier.size(64.dp)
                 )
                 Spacer(Modifier.height(12.dp))
-                Text("需要相机权限以扫描二维码", color = Color.White.copy(0.8f), fontSize = 13.sp)
+                Text("需要相机权限以扫描邀请码", color = Color.White.copy(0.8f), fontSize = 13.sp)
                 Spacer(Modifier.height(12.dp))
                 Button(
                     onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
@@ -567,7 +561,7 @@ private fun ScanTab(
     ) {
         Icon(Icons.Default.Image, null)
         Spacer(Modifier.width(8.dp))
-        Text("从手机相册选择二维码图片")
+        Text("从手机相册选择邀请码图片")
     }
 
     Spacer(Modifier.height(16.dp))
@@ -581,9 +575,9 @@ private fun ScanTab(
             Icon(Icons.Default.Info, null, tint = Primary, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
             Text(
-                // 诚实文案（M10.9）：当前仅解析连接信息后建立端到端加密连接；设备身份签名校验
+                // 诚实文案（M10.9）：当前仅解析邀请码后建立端到端加密连接；设备身份签名校验
                 // 需安全卡身份密钥作信任根，随真 SDK（M11）接入后启用，故此处不再承诺「签名校验」。
-                "识别后将解析连接信息并建立端到端加密连接（设备身份签名校验将随设备接入启用）",
+                "识别后将建立端到端加密连接（设备身份签名校验将随设备接入启用）",
                 fontSize = 12.sp,
                 color = TextSecondary
             )
@@ -674,13 +668,3 @@ private fun CameraPreview(
     )
 }
 
-@Composable
-private fun InfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(label, fontSize = 13.sp, color = TextSecondary)
-        Text(value, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-    }
-}
