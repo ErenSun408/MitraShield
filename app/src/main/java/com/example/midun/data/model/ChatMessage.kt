@@ -16,8 +16,8 @@ data class ChatMessage(
     val fileSize: Long? = null,
     val fileName: String? = null,
     val recalled: Boolean = false,
-    // 焚毁 TTL（秒）：阅后即焚消息「读到」后多久焚。时长不再可选，按类型定死（见 P2PSessionManager.burnTtlFor）：
-    // 文字=15，语音/图/视频/文件=0（听完、关闭预览即刻焚）。非焚毁消息也是 0，故判据一律看 burnAfterRead。
+    // 焚毁 TTL（秒）：阅后即焚消息「读到」后多久焚。时长不可选，各类型一律 0（见 P2PSessionManager.burnTtlFor）
+    // ——文字关闭弹窗、语音听完、图/视频/文件关闭预览，都当场焚。非焚毁消息也是 0，故判据一律看 burnAfterRead。
     val burnTtl: Int = 0,
     // 已焚毁标记（历史遗留）：焚毁已改「整条删除、彻底不留痕」，不再产生墓碑；保留字段仅为兼容旧数据
     // 与 displayMessages 的过滤兜底（登录时 purgeBurnRemnants 会清掉遗留的 burned 记录）。

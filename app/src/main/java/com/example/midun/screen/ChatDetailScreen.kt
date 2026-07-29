@@ -126,6 +126,7 @@ fun ChatDetailScreen(
     // 焚毁媒体预览关闭回调（阅后即焚）：图/视频退出预览时触发，登记倒计时。非焚毁预览为 null。
     var previewOnClose by remember { mutableStateOf<(() -> Unit)?>(null) }
     var burnDocCard by remember { mutableStateOf<ChatMessage?>(null) } // 焚毁文档只读卡片（文档不支持预览）的目标消息
+    var burnTextCard by remember { mutableStateOf<ChatMessage?>(null) } // 焚毁文字弹窗的目标消息（关闭弹窗即焚）
     // 打开媒体预览前先验卡内文件是否还在（缓存可能已被 7 天 TTL 清理）→ 过期/缺失优雅降级，不开空白预览。
     // [onClose] 非空 = 焚毁媒体：退出预览时触发（登记焚毁倒计时）；普通预览传 null。
     val openMediaPreview: (String, String, FileType, ChatMessage?, (() -> Unit)?) -> Unit = { path, name, type, saveTarget, onClose ->
@@ -321,8 +322,8 @@ fun ChatDetailScreen(
                             Icon(Icons.Default.Close, "关闭搜索")
                         }
                     } else {
-                        // 焚毁时长已定死（文字 15 秒 / 语音听完 / 图·视频·文件关预览即刻），故点击直接开关，
-                        // 不再弹时长选择框（客户 2026-07-27）。
+                        // 焚毁时机已定死（文字关弹窗 / 语音听完 / 图·视频·文件关预览，一律即刻焚），故点击
+                        // 直接开关，不再弹时长选择框（客户 2026-07-27 定死、2026-07-29 取消文字 15 秒窗口）。
                         IconButton(onClick = {
                             when {
                                 !connectedHere -> showBurnGateDialog = true   // 未连接：提示先建联
@@ -568,7 +569,12 @@ fun ChatDetailScreen(
                         msg = msg,
                         burnDeadline = burnTimers[msg.id],
                         transferFraction = transferProgress[msg.id],
-                        onReveal = { chatViewModel.revealBurnMessage(msg.id, contactId, msg.type) },
+                        // 焚毁文字改弹窗式（客户 2026-07-29）：点击不再就地揭示+倒计时，而是弹窗展示原文，
+                        // 关闭弹窗才登记焚毁（ttl=0 → 当场焚）。其余类型维持原就地揭示。
+                        onReveal = {
+                            if (msg.type == MessageType.TEXT) burnTextCard = msg
+                            else chatViewModel.revealBurnMessage(msg.id, contactId, msg.type)
+                        },
                         onDelete = { chatViewModel.deleteMessage(msg.id) },
                         onRecall = { chatViewModel.recallMessage(msg.id) },
                         onRecallBlocked = {
@@ -827,6 +833,17 @@ fun ChatDetailScreen(
         )
     }
 
+    // 焚毁文字弹窗：展示原文；关闭即焚（ttl=0，两端一并删）。
+    burnTextCard?.let { msg ->
+        BurnTextDialog(
+            content = msg.content,
+            onDismiss = {
+                chatViewModel.revealBurnMessage(msg.id, contactId, msg.type)
+                burnTextCard = null
+            }
+        )
+    }
+
     // 全屏拍摄页（微信式即拍即发）：盖在会话之上。拍完即发+退出；点右上 X 退出。
     if (showCamera) {
         CameraCaptureScreen(
@@ -878,6 +895,39 @@ private fun PlusTool(icon: androidx.compose.ui.graphics.vector.ImageVector, labe
         Spacer(Modifier.height(6.dp))
         Text(label, fontSize = 12.sp, color = TextSecondary)
     }
+}
+
+/**
+ * 焚毁文字弹窗（客户 2026-07-29 改版）：原先是点开就地揭示原文、给 15 秒可读窗口再焚；现改为弹窗展示，
+ * **关闭弹窗即焚**、无倒计时。好处是「读完」由用户的关闭动作明确界定，不会因为切后台/滚走而白白烧掉，
+ * 也不会在气泡里留一段明文可被截屏窗口（全局 FLAG_SECURE 只防录屏，防不住旁人肉眼）。
+ *
+ * 长文可滚动；不提供复制入口（选中即可复制会绕过焚毁语义）。
+ */
+@Composable
+private fun BurnTextDialog(content: String, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.LocalFireDepartment, null, tint = Warning) },
+        title = { Text("阅后即焚") },
+        text = {
+            Column {
+                Text(
+                    content,
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState())
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("关闭本窗口后立即焚毁，且不可再次查看。", color = TextSecondary, fontSize = 12.sp)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("我知道了", color = Primary) }
+        }
+    )
 }
 
 /**
@@ -1119,7 +1169,7 @@ private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, conten
             val (hint, hintColor) = when {
                 msg.status == MessageStatus.FAILED && !msg.isMine -> "接收失败" to Danger
                 // 焚毁文件（接收方）：不显「点击预览/保存」提示——焚毁文件不可保存、且看过一次即不可再看，
-                // 状态由火焰描边 + 「N秒后焚毁」标签承载（BurnStatusLabel）。
+                // 状态由火焰描边 + 「阅后即焚」标签承载（BurnStatusLabel）。
                 msg.burnAfterRead && !msg.isMine -> null to contentColor
                 // 发送方自己发的图/视频可点击预览（功能保留），但不再显文字提示。
                 msg.isMine -> null to contentColor
@@ -1305,8 +1355,8 @@ private fun ChatBubble(
     val isVideo = msg.type == MessageType.VIDEO
     val isAudio = msg.type == MessageType.AUDIO
 
-    // 焚毁消息（B 阶段）：接收方未点开 → 遮罩；点开后 burnDeadline 非空 → 露出原文（文字有 15 秒可读窗口，
-    // 其余类型 ttl=0，露出后当场焚、气泡随即消失）。
+    // 焚毁消息（B 阶段）：接收方未点开 → 遮罩。所有类型 ttl=0，一旦登记死线就当场焚、气泡随即消失，故
+    // 「已揭示」的气泡实际只是一瞬。文字改走弹窗后更是全程不脱遮罩（原文只在 BurnTextDialog 里出现）。
     // 焚毁**语音**特殊：死线在「听完」才落（在此之前 burnDeadline 为空），故揭示判据要叠加 [audioBurnOpened]
     // （已点开播放但还没听完）——否则点开后仍被遮罩、看不到播放 UI。
     val isBurn = msg.burnAfterRead

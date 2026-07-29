@@ -623,10 +623,10 @@ class P2PSessionManager @Inject constructor(
     }
 
     /**
-     * 接收方点开焚毁消息（B 阶段）：**死线落盘**（now + [burnTtlFor]）后挂倒计时，到点触发双端焚毁。
-     * 时长按消息类型定死：文字读后 15 秒，其余（语音听完 / 图·视频·文件关闭预览）ttl=0 即刻焚。
-     * 重复点开忽略（已在倒计时）。落盘是关键——文字那 15 秒里进程被杀，重认证时由 [restoreBurnDeadlines]
-     * 补焚，否则遮罩会复原、这条明文还能再看一次。ttl=0 那类死线即 now，落盘同样保证崩溃后必焚。
+     * 接收方**看完**焚毁消息后调用（B 阶段）：**死线落盘**（now + [burnTtlFor]）后挂倒计时，到点触发双端焚毁。
+     * 各类型 ttl 均为 0（文字关闭弹窗 / 语音听完 / 图·视频·文件关闭预览）→ 死线即 now，当场焚毁。
+     * 重复调用忽略（已登记）。死线仍要落盘：ttl=0 也存在「已 setBurnDeadline、burnMessage 未完成」的窗口，
+     * 落盘保证进程被杀后由 [restoreBurnDeadlines] 补焚，否则遮罩会复原、这条明文还能再看一次。
      */
     fun revealBurnMessage(messageId: String, contactId: String, type: MessageType) {
         if (_burnTimers.value.containsKey(messageId)) return
@@ -1135,15 +1135,15 @@ class P2PSessionManager @Inject constructor(
         private const val RECALL_TYPE = "RECALL"
         /** 阅后即焚「开/关模式」广播帧（payload="on" / "off"），仅同步模式，不带时长（B 阶段）。 */
         const val BURN_MODE_TYPE = "BURN_MODE"
-        /** 文字焚毁消息的读后时长（秒）：客户 2026-07-27 定死 15 秒，不再由用户选择。 */
-        const val BURN_TEXT_TTL_SEC = 15
-
         /**
-         * 焚毁时长（秒）按消息类型定死（客户 2026-07-27）：文字点开后 15 秒焚；语音听完、图/视频/文件
-         * 关闭预览后即刻焚（ttl=0 → 死线即 now，reveal 时当场焚毁）。
+         * 焚毁时长（秒）：一律 0——「读完」这个动作本身即焚点，不再有任何可读窗口。文字点开弹窗、关闭弹窗即焚
+         * （客户 2026-07-29 由原 15 秒倒计时改为弹窗式）；语音听完、图/视频/文件关闭预览同样即焚。
+         * ttl=0 → 死线即 now，reveal 时当场焚毁。
+         *
+         * 保留本函数而非直接写 0：`burnTtl` 是落盘字段（[com.example.midun.data.real.ChatStore]）且随帧传给对端，
+         * 将来若某类型要恢复可读窗口，改这里一处即可。
          */
-        fun burnTtlFor(type: MessageType): Int =
-            if (type == MessageType.TEXT) BURN_TEXT_TTL_SEC else 0
+        fun burnTtlFor(type: MessageType): Int = 0
         /** 阅后即焚「焚毁」控制帧（payload=目标消息 id）：读方倒计时到点 → 两端焚毁（B 阶段）。 */
         const val BURN_TYPE = "BURN"
         /** TCP 连接超时（ms）：不可达/对方未监听时快速失败。 */
