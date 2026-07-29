@@ -97,6 +97,14 @@ class DeviceViewModel @Inject constructor(
         clearSensitiveMemory()
     }
 
+    /**
+     * Activity 启动时复核插卡状态：Activity 曾被销毁（返回键退桌面）而进程还活着时，期间拔卡收不到广播，
+     * 内存里会残留「已认证」→ 无卡也能进主界面。见 [SecurityCardManager.revalidatePresence]。
+     */
+    fun revalidatePresence() {
+        cardManager.revalidatePresence()
+    }
+
     // —— 驱动模式测试面板（登录页 logo 连点弹出，测试鸿蒙 2.0 登录慢）——
     /** 当前驱动模式（0=libusb / 2=android 原生），持久化于 SettingsStore、重启保留。 */
     val driverMode: StateFlow<Int> =
@@ -210,9 +218,8 @@ class DeviceViewModel @Inject constructor(
         viewModelScope.launch { settingsStore.setOperationLogEnabled(enabled) }
     }
 
-    private var inactivityJob: Job? = null
-
     // 自动锁定超时（M7.5 + M11.6.4 持久化）：经 [SettingsStore]（DataStore）存手机本地，重启不丢。
+    // 本 StateFlow 仅供设置页显示/选择；真正的计时跑在 [SecurityCardManager]（进程作用域）上。
     val inactivityTimeoutMinutes: StateFlow<Int> = settingsStore.inactivityTimeoutMinutes
         .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsStore.DEFAULT_TIMEOUT_MIN)
 
@@ -220,21 +227,11 @@ class DeviceViewModel @Inject constructor(
         viewModelScope.launch { settingsStore.setInactivityTimeout(minutes) }
     }
 
-    private fun resetInactivityTimer() {
-        inactivityJob?.cancel()
-        inactivityJob = viewModelScope.launch {
-            delay(inactivityTimeoutMinutes.value * 60_000L)
-            cardManager.logout()
-        }
-    }
+    // 自动登出计时转交单例：本 VM 是 Activity 作用域，按返回键 finish 后 viewModelScope 被取消，
+    // 计时器会随之消失而认证态还在（→ 退出后永不登出）。见 [SecurityCardManager.onAppBackground]。
+    fun onAppBackground() = cardManager.onAppBackground()
 
-    fun onAppBackground() {
-        if (isAuthenticated.value) resetInactivityTimer()
-    }
-
-    fun onAppForeground() {
-        inactivityJob?.cancel()
-    }
+    fun onAppForeground() = cardManager.onAppForeground()
 
     private var screenOffJob: Job? = null
 

@@ -428,6 +428,33 @@ class RealUsbManager @Inject constructor(
             .getOrDefault(false)
     }
 
+    /** 系统设备列表是否非空。[revalidatePresence] 在 [openedDeviceName] 未知时的兜底判据。 */
+    private fun anyDevicePresent(): Boolean {
+        val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager ?: return false
+        return runCatching { usbManager.deviceList.isNotEmpty() }.getOrDefault(false)
+    }
+
+    /**
+     * 复核「内存里说卡还在」是否仍然成立（`[usb]` 安全修复 2026-07-29）。
+     *
+     * 病根：按**返回键**退到桌面会 finish Activity → `MainActivity` 里注册的 usbReceiver 随之注销，此后
+     * 拔卡收不到 DETACHED；而认证状态、DEK、盘句柄都挂在 `@Singleton` 上、随**进程**存活。于是再点桌面
+     * 图标时内存里仍是 AUTHENTICATED，Splash 直接路由进主界面——**无卡也能用全部功能**。原先只在「拔了
+     * 又插回来」的路径上做了补救（见 [connectUsb] 的 sameDevice 守卫），拔了不插回来这条是漏的。
+     *
+     * 故每次 Activity 启动都用系统 UsbManager 复核实际插卡情况。卡已不在 → **同步**把状态降级为
+     * DISCONNECTED；同步是关键，NavGraph/Splash 会在同一帧读这个状态，改成异步会先闪进主界面。
+     * 返回 true 表示确实降级了，由调用方随后异步补做句柄与 DEK 的释放（[closeDevice]）。
+     */
+    fun revalidatePresence(): Boolean {
+        if (_deviceStatus.value.status == UsbDeviceStatus.DISCONNECTED) return false
+        val opened = openedDeviceName
+        val present = if (opened != null) isDevicePresent(opened) else anyDevicePresent()
+        if (present) return false
+        _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
+        return true
+    }
+
     /** 拔卡 / 完全释放：关盘 + 关 USB 句柄，状态 DISCONNECTED。 */
     suspend fun closeDevice(): Result<Unit> = withContext(Dispatchers.IO) {
         detachEpoch.incrementAndGet() // 让并发中的 connectUsb 知道「这次连接已被拔卡作废」

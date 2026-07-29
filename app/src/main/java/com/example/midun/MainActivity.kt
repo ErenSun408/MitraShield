@@ -98,6 +98,11 @@ class MainActivity : ComponentActivity() {
             registerReceiver(usbReceiver, filter)
         }
 
+        // 先复核内存里的插卡状态（`[usb]` 安全修复 2026-07-29）：返回键 finish 掉 Activity 后 usbReceiver
+        // 已注销，这期间拔卡收不到 DETACHED，而认证态/DEK/盘句柄都在 @Singleton 上随进程存活 →
+        // 再点桌面图标会带着残留的 AUTHENTICATED 直接进主界面（无卡可用全部功能）。必须在渲染前同步纠正。
+        deviceViewModel.revalidatePresence()
+
         // 启动时若已插着卡，立即连接（USB 插拔广播只覆盖启动后的新插入）。无卡则保持 DISCONNECTED
         // → 由 UsbDisconnectedOverlay 提示插卡。
         val usbManager = getSystemService(USB_SERVICE) as UsbManager

@@ -1,7 +1,55 @@
 package com.example.midun
 
 import android.app.Application
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import android.os.Build
+import androidx.core.content.ContextCompat
+import com.example.midun.data.SecurityCardManager
 import dagger.hilt.android.HiltAndroidApp
+import javax.inject.Inject
 
 @HiltAndroidApp
-class MiDunApp : Application()
+class MiDunApp : Application() {
+
+    @Inject lateinit var cardManager: SecurityCardManager
+
+    /**
+     * **进程级**拔卡监听（`[usb]` 安全修复 2026-07-29）。
+     *
+     * 原先只有 [MainActivity] 注册 USB receiver，按返回键 finish Activity 后 `onDestroy` 就把它注销了；
+     * 此后拔卡无人知晓，而认证状态、DEK、盘句柄都挂在 `@Singleton` 上随**进程**存活 → 再点桌面图标即可
+     * 无卡进入全部功能。注册在 Application 上则只要进程还活着就收得到，把这个窗口彻底堵死。
+     *
+     * 只收 DETACHED：ATTACHED 侧要走 USB 权限申请等与界面相关的流程，仍留在 [MainActivity]。
+     * Activity 存活时两处会各收到一次同一广播，无害——[SecurityCardManager.onUsbDetached] 最终落到
+     * `closeDevice()`，重复调用只是再关一次已关的盘。
+     */
+    private val detachReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != UsbManager.ACTION_USB_DEVICE_DETACHED) return
+            val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
+            } else {
+                @Suppress("DEPRECATION")
+                intent.getParcelableExtra<UsbDevice>(UsbManager.EXTRA_DEVICE)
+            }
+            // 是不是本卡由卡层判（RealUsbManager.onDeviceDetached），拔耳机不会误伤。
+            cardManager.onUsbDetached(device?.deviceName)
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate() // Hilt 字段注入在此完成，cardManager 之后才可用
+        ContextCompat.registerReceiver(
+            this,
+            detachReceiver,
+            IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED),
+            ContextCompat.RECEIVER_NOT_EXPORTED // 受保护的系统广播
+        )
+    }
+}

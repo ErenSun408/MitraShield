@@ -1,13 +1,17 @@
 package com.example.midun.data
 
 import com.example.midun.data.model.DeviceInfo
+import com.example.midun.data.model.UsbDeviceStatus
 import com.example.midun.data.real.RealUsbManager
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /**
@@ -22,7 +26,9 @@ class SecurityCardManager @Inject constructor(
     private val real: RealUsbManager,
     // wipe 成功后清共享聊天/日志仓库（写穿空到卡 / 清内存明文）。
     private val chatRepo: ChatRepository,
-    private val operationLog: OperationLogRepository
+    private val operationLog: OperationLogRepository,
+    // 后台自动登出超时（分钟），见 [onAppBackground]。
+    private val settingsStore: SettingsStore
 ) : UsbCardOps {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -64,6 +70,42 @@ class SecurityCardManager @Inject constructor(
     /** [detachedName] = 广播里被拔设备的 deviceName（可能为 null）；由 [RealUsbManager.onDeviceDetached] 判是否本卡。 */
     fun onUsbDetached(detachedName: String?) {
         scope.launch { real.onDeviceDetached(detachedName) }
+    }
+
+    /**
+     * 复核插卡状态（Activity 每次启动时调）：内存说有卡但系统里已经没有 → 同步降级 DISCONNECTED，
+     * 再异步释放句柄 / 清 DEK。修「返回键退桌面后拔卡，再点图标可无卡登录」，
+     * 见 [RealUsbManager.revalidatePresence]。
+     */
+    fun revalidatePresence() {
+        if (real.revalidatePresence()) scope.launch { real.closeDevice() }
+    }
+
+    // —— 后台无操作自动登出（需求文档「APP转入后台后5分钟无操作即退出登录」）——
+
+    private var inactivityJob: Job? = null
+
+    /**
+     * 退到后台：挂自动登出计时（仅已认证时）。超时时长读 [SettingsStore]（默认 5 分钟，用户可改）。
+     *
+     * 计时器挂在**单例**上而不是 `DeviceViewModel`（`[usb]` 安全修复 2026-07-29）：后者是 Activity 作用域，
+     * 按**返回键**会 finish Activity → `onCleared` → `viewModelScope` 连同计时器一起取消，而认证态/DEK
+     * 都在本单例上随进程存活 → 退出后**永不登出**，回来还是登录态。搬到进程作用域后返回键与 Home 键
+     * 行为一致：超时前回来则取消计时（[onAppForeground]），超时未回来则登出。
+     */
+    fun onAppBackground() {
+        if (deviceStatus.value.status != UsbDeviceStatus.AUTHENTICATED) return
+        inactivityJob?.cancel()
+        inactivityJob = scope.launch {
+            delay(settingsStore.inactivityTimeoutMinutes.first() * 60_000L)
+            logout()
+        }
+    }
+
+    /** 回到前台：取消自动登出计时。新旧 Activity 面对的是同一个单例，故返回键重建后也能取消上次挂的计时。 */
+    fun onAppForeground() {
+        inactivityJob?.cancel()
+        inactivityJob = null
     }
 
     /** 用当前驱动模式重连（登录页驱动模式面板切换后触发，测试鸿蒙登录慢用）。 */
