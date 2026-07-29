@@ -135,7 +135,7 @@ class RealUsbManager @Inject constructor(
             val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
 
             CardPerf.mark("connectUsb 开始(driverMode=$activeDriverMode)")
-            runCatching { synchronized(fsShell) { fsShell.SFDiskSetDriverMode(activeDriverMode) } } // 必须在 Open 前
+            runCatching { synchronized(fsShell) { applyDriverMode() } } // USB Open 前先定一次通道
             val list = CardPerf.time("GetList") { helper.GetList() }
             if (list.count == 0) {
                 _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
@@ -170,7 +170,7 @@ class RealUsbManager @Inject constructor(
             // 旧代码一律当「已初始化」→ 新卡跳过初始化直进登录页 → 卡上还是默认密码，用户输什么都错、永远登不进。
             // 故设备级错误直接判连接失败并如实报因，绝不猜卡的状态；只有明确的密码类失败才算「已初始化」。
             val probe = CardPerf.time("SFOpenDiskEx(默认密码探测)") {
-                synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) }
+                synchronized(fsShell) { applyDriverMode(); fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) }
             }
             CardPerf.mark("默认密码探测 ret=$probe")
             if (FsErrors.isDeviceLevel(probe)) {
@@ -315,7 +315,9 @@ class RealUsbManager @Inject constructor(
     override suspend fun authenticate(password: String): Result<Unit> = withContext(Dispatchers.IO) {
         CardPerf.mark("authenticate 开始")
         val dn = diskName ?: return@withContext Result.failure(IllegalStateException("USB 未连接"))
-        val ret = CardPerf.time("SFOpenDiskEx(登录)") { synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, sha256(password)) } }
+        val ret = CardPerf.time("SFOpenDiskEx(登录)") {
+            synchronized(fsShell) { applyDriverMode(); fsShell.SFOpenDiskEx(dn, sha256(password)) }
+        }
         if (ret != 0) {
             CardPerf.mark("登录开盘失败 ret=$ret")
             // 开盘失败有三种原因，报错不能一律说成密码错误：卡被拔走、设备/驱动层打不开盘、真的密码不对。
@@ -641,6 +643,22 @@ class RealUsbManager @Inject constructor(
      * 拼「外部设备」diskName（SDK android_4.0 严格权限系统方式，文档 3.2 节）：
      * `name=fd;busnum=..;devaddr=..;fd=..;type=..;speed=..;ifaces=..;vid=..;pid=..;ep_in=..;ep_out=..;`
      */
+    /**
+     * 把当前驱动模式喂给 native 库。**每次 `SFOpenDiskEx` 前都要调一次**（`[usb]` 2026-07-29）。
+     *
+     * SDK 的 Android demo（`FSDemoListViewAdapter.SFOpenDiskThread`）就是这么写的：`USBStorage.Open` 之后、
+     * `SFOpenDisk3` 之前紧挨着调 `SFDiskSetDriverMode`，而不是整个连接流程只在最开头设一次。原实现只在
+     * [connectUsb] 里 USB Open 之前设了一次，[authenticate] 的登录开盘则完全没设——中间隔着 `helper.Open`、
+     * 默认密码探测、`SFCloseDisk` 等一串 native 调用，模式若被复位，登录就会用与 USB 层不匹配的通道开盘，
+     * 内核库起不来 → 返回 1001（`ERROR_CODE_FSKERNEL_NOT_INIT`）。
+     *
+     * ⚠️ 这是对「切到驱动模式 2 后登录报 1001」的**推断**，尚未在真机验证；模式 0 下语义不变（同样的值重复设）。
+     * 调用方需已持有 `fsShell` 锁。
+     */
+    private fun applyDriverMode() {
+        runCatching { fsShell.SFDiskSetDriverMode(activeDriverMode) }
+    }
+
     private fun buildExternalDiskName(h: USBStorageHelper, name: String): String =
         "$name=${h.FileHandle};" +
             "busnum=${h.BusNum};" +
