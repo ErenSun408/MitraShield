@@ -14,6 +14,9 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -52,6 +55,9 @@ class RealFileSystem @Inject constructor(
 
     /** 文件夹路径 → 拷贝策略（侧车缓存，懒加载）。 */
     private var folderPolicies: MutableMap<String, CopyPolicy>? = null
+
+    /** 已采样的创建时间条数（临时诊断，见 [sampleCreateTime]）。 */
+    private var timeSamples = 0
 
     override suspend fun getFolders(): List<FileItem> = withContext(Dispatchers.IO) {
         val policies = CardPerf.time("getFolders.loadPolicies(读元数据)") { loadPolicies() }
@@ -777,13 +783,28 @@ class RealFileSystem @Inject constructor(
      */
     private fun createTimeOf(handle: Int): Long {
         val raw = runCatching { fsShell.SFGetFileCreateTime(handle) }.getOrDefault(0L)
-        return when {
+        val ms = when {
             raw <= 0L -> 0L
             raw < 100_000_000_000L -> raw * 1000L                       // 秒（~1973 年至 5138 年）
             raw < 100_000_000_000_000L -> raw                           // 毫秒
             raw > FILETIME_EPOCH_DIFF -> (raw - FILETIME_EPOCH_DIFF) / 10_000L // Windows FILETIME
             else -> 0L
         }
+        sampleCreateTime(raw, ms)
+        return ms
+    }
+
+    /**
+     * **临时诊断**：把前 [TIME_SAMPLES] 条原始创建时间打进 CardPerf 日志（「下载」目录）。上面的量级归一是
+     * 猜的——SDK 文档没写单位/纪元，DOS 打包格式还会和 Unix 秒撞量级、静默解出一个看着合理的错日期。
+     * 拿到真机上的 raw 值 + 对照真实创建日期，即可把解码方式钉死，届时连同本函数一起删除。
+     */
+    private fun sampleCreateTime(raw: Long, ms: Long) {
+        if (timeSamples >= TIME_SAMPLES) return
+        timeSamples++
+        val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
+        val decoded = if (ms > 0) fmt.format(Date(ms)) else "未知"
+        CardPerf.mark("createTime raw=$raw → $decoded（当前时刻 ${fmt.format(Date())}）")
     }
 
     /** 从卡句柄精确读满 [buf]（SFRead 可能短读，0=EOF/<0=失败即停）。读满回 true。须在 fsShell 锁内调用。 */
@@ -860,6 +881,7 @@ class RealFileSystem @Inject constructor(
         const val MAX_IMPORT_BYTES = 100L * 1024 * 1024 // 100MB 导入上限（需求）
         // Windows FILETIME(1601-01-01, 100ns) → Unix 纪元的差值，供 createTimeOf 兜底换算。
         const val FILETIME_EPOCH_DIFF = 116_444_736_000_000_000L
+        const val TIME_SAMPLES = 5 // 临时诊断：只采前几条原始创建时间，够定档即可，不刷屏
 
     }
 }
