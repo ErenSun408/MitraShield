@@ -407,8 +407,10 @@ private fun CopyPolicy.exportLabel(): String =
         CopyPolicy.COPY_ENCRYPTED -> "密文导出"
     }
 
+/** 卡上读不到创建时间时（[timestamp] <= 0）显示 `--`，不能拿「今天」冒充。 */
 private fun formatFolderDate(timestamp: Long): String =
-    SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(timestamp))
+    if (timestamp <= 0L) "--"
+    else SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(timestamp))
 
 private fun formatFileSize(bytes: Long): String =
     when {

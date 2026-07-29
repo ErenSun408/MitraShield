@@ -61,6 +61,7 @@ class RealFileSystem @Inject constructor(
                 id = path,
                 name = name,
                 type = FileType.FOLDER,
+                createdAt = dirCreateTime(path),
                 copyPolicy = policies[path] ?: CopyPolicy.NO_COPY
             )
         }
@@ -70,8 +71,15 @@ class RealFileSystem @Inject constructor(
         withContext(Dispatchers.IO) {
             listEntries("$folderId/", dirs = false).map { name ->
                 val path = "$folderId/$name"
-                val (size, type) = fileMeta(path) // 一次读文件头拿明文大小 + 类型（M-files）
-                FileItem(id = path, name = name, type = type, size = size, parentId = folderId)
+                val meta = fileMeta(path) // 一次打开拿明文大小 + 类型（M-files）+ 卡上创建时间
+                FileItem(
+                    id = path,
+                    name = name,
+                    type = meta.type,
+                    size = meta.size,
+                    createdAt = meta.createdAt,
+                    parentId = folderId
+                )
             }
         }
 
@@ -295,9 +303,16 @@ class RealFileSystem @Inject constructor(
                 }
                 synchronized(fsShell) { LibJniFSShell.SFDelete(fileId) }
             }
-            val (size, type) = fileMeta(newPath) // 移动是密文整体搬运，文件头随之带走 → 读头得正确大小/类型
+            val meta = fileMeta(newPath) // 移动是密文整体搬运，文件头随之带走 → 读头得正确大小/类型
             Result.success(
-                FileItem(id = newPath, name = fileName, type = type, size = size, parentId = targetFolderId)
+                FileItem(
+                    id = newPath,
+                    name = fileName,
+                    type = meta.type,
+                    size = meta.size,
+                    createdAt = meta.createdAt,
+                    parentId = targetFolderId
+                )
             )
         }
 
@@ -717,20 +732,57 @@ class RealFileSystem @Inject constructor(
      * （`SFGetSize` 只给密文大小、类型靠后缀易误判，故都存在头里）。文件头缺失/MAGIC 不符（未加密旧文件，
      * 重导后不应出现）→ 回退原始大小 + 扩展名判型。失败回 (0, OTHER)。
      */
-    private fun fileMeta(path: String): Pair<Long, FileType> = synchronized(fsShell) {
+    private fun fileMeta(path: String): Meta = synchronized(fsShell) {
         val handle = LibJniFSShell.SFOpen(path)
-        if (handle <= 0) return 0L to FileType.OTHER
+        if (handle <= 0) return Meta(0L, FileType.OTHER, 0L)
         try {
+            val created = createTimeOf(handle)
             val raw = LibJniFSShell.SFGetSize(handle)
             if (raw >= FileHeader.BYTES) {
                 val head = ByteArray(FileHeader.BYTES)
                 if (readFullyFromCard(handle, head)) {
-                    FileHeader.parse(head)?.let { return it.plaintextSize to it.fileType }
+                    FileHeader.parse(head)?.let { return Meta(it.plaintextSize, it.fileType, created) }
                 }
             }
-            (if (raw >= 0) raw else 0L) to FileTypes.fromExtension(path.substringAfterLast('/'))
+            Meta(
+                size = if (raw >= 0) raw else 0L,
+                type = FileTypes.fromExtension(path.substringAfterLast('/')),
+                createdAt = created
+            )
         } finally {
             LibJniFSShell.SFClose(handle)
+        }
+    }
+
+    /** [fileMeta] 的返回：明文大小 + 类型 + 卡上创建时间（0 = 未知）。 */
+    private data class Meta(val size: Long, val type: FileType, val createdAt: Long)
+
+    /**
+     * 读文件夹的卡上创建时间（毫秒，0 = 读不到）。目录须用 `SFOpenAsDir` 拿句柄，不能用 `SFOpen`。
+     */
+    private fun dirCreateTime(path: String): Long = synchronized(fsShell) {
+        val handle = LibJniFSShell.SFOpenAsDir(path)
+        if (handle <= 0) return 0L
+        try {
+            createTimeOf(handle)
+        } finally {
+            LibJniFSShell.SFClose(handle)
+        }
+    }
+
+    /**
+     * 句柄 → 创建时间（毫秒）。SDK 文档只说 `SFGetFileCreateTime(fd)` 返回 long，未写明单位/纪元，
+     * 故按量级归一：秒 → ×1000；毫秒 → 原样；Windows FILETIME（1601 纪元、100ns）→ 换算；其余当未知（0）。
+     * 须在 [fsShell] 锁内调用。
+     */
+    private fun createTimeOf(handle: Int): Long {
+        val raw = runCatching { fsShell.SFGetFileCreateTime(handle) }.getOrDefault(0L)
+        return when {
+            raw <= 0L -> 0L
+            raw < 100_000_000_000L -> raw * 1000L                       // 秒（~1973 年至 5138 年）
+            raw < 100_000_000_000_000L -> raw                           // 毫秒
+            raw > FILETIME_EPOCH_DIFF -> (raw - FILETIME_EPOCH_DIFF) / 10_000L // Windows FILETIME
+            else -> 0L
         }
     }
 
@@ -806,6 +858,8 @@ class RealFileSystem @Inject constructor(
         // 而拖拽仍只读单个 16KB 块。实验：128KB（原 64KB，沿用 M11.5 已验证值）——测导入/导出是否更快。
         const val IO_CALL = 128 * 1024
         const val MAX_IMPORT_BYTES = 100L * 1024 * 1024 // 100MB 导入上限（需求）
+        // Windows FILETIME(1601-01-01, 100ns) → Unix 纪元的差值，供 createTimeOf 兜底换算。
+        const val FILETIME_EPOCH_DIFF = 116_444_736_000_000_000L
 
     }
 }
