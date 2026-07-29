@@ -77,8 +77,6 @@ fun ChatListScreen(
             }
         }
 
-        Spacer(Modifier.height(4.dp))
-        Text("端到端加密 · 无服务器中转 · 匿名通信", fontSize = 12.sp, color = TextSecondary)
         Spacer(Modifier.height(12.dp))
 
         if (contacts.isNotEmpty()) {
