@@ -26,8 +26,9 @@ class MiDunApp : Application() {
      * 无卡进入全部功能。注册在 Application 上则只要进程还活着就收得到，把这个窗口彻底堵死。
      *
      * 只收 DETACHED：ATTACHED 侧要走 USB 权限申请等与界面相关的流程，仍留在 [MainActivity]。
-     * Activity 存活时两处会各收到一次同一广播，无害——[SecurityCardManager.onUsbDetached] 最终落到
-     * `closeDevice()`，重复调用只是再关一次已关的盘。
+     * Activity 存活时两处会各收到一次同一广播 → [SecurityCardManager] 的事件队列按序处理，第二条被
+     * [com.example.midun.data.real.RealUsbManager.onDeviceDetached] 的幂等守卫直接吃掉（`[usb]` 2026-07-30
+     * 修：原先两条并发跑 `closeDevice()`，其中一条可能落在刚建好的连接之后，把它清成 DISCONNECTED）。
      */
     private val detachReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {

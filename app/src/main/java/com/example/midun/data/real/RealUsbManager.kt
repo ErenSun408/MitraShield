@@ -24,6 +24,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import seczure.device.usb.USBStorageHelper
@@ -84,13 +86,32 @@ class RealUsbManager @Inject constructor(
     /**
      * 当前已打开设备的系统路径（`UsbDevice.deviceName`，如 `/dev/bus/usb/001/005`）。
      * 用于识别「换了一个设备」——[connectUsb] 的去重守卫只能据此判断 attach 是杂散重播还是真的重新插卡。
+     *
+     * `@Volatile`：写在 IO 线程（[connectUsb]/[releaseUsbLayer]），而 [revalidatePresence] 由 Activity 启动时
+     * 在**主线程**同步读，需要跨线程可见性。
      */
-    private var openedDeviceName: String? = null
+    @Volatile private var openedDeviceName: String? = null
+
+    /**
+     * 连接/断开互斥锁（`[usb]` 2026-07-30）。[connectUsb]、[closeDevice]、[onDeviceDetached]、[reconnect]
+     * 全部在此锁内跑，杜绝「一边在建连接、一边在拆连接」。
+     *
+     * 病根：这几个入口由 `SecurityCardManager` 各自 `scope.launch`（Dispatchers.IO，真并行）。同一条 DETACHED
+     * 广播还会被两处 receiver 各收一次（`MainActivity` + 进程级的 `MiDunApp`），于是两条 `closeDevice()` 并发跑，
+     * 其中一条完全可能落在 [connectUsb] **已经发布 CONNECTED 之后**：`releaseUsbLayer()` 清掉刚拿到的句柄、
+     * 状态改回 DISCONNECTED → 卡插着却显示无卡、聊天会话被 `P2PSessionManager` 的认证态监听一并拆掉。
+     *
+     * 注意本锁只解决「不并发」；「按广播到达顺序处理」由 `SecurityCardManager` 的事件队列保证。
+     */
+    private val lifecycleMutex = Mutex()
 
     /**
      * 拔卡代次：每次 [closeDevice] +1。[connectUsb] 入口取快照、发布 CONNECTED 前比对——
      * 快速拔插时 attach/detach 是两条并发协程（`SecurityCardManager` 各 launch 一次、无序），
      * 若 connect 跑完才轮到 detach 收尾，会把刚建好的连接清掉并卡在 DISCONNECTED（须重启 App）。
+     *
+     * 上了 [lifecycleMutex] 之后 close 不可能再插进 connect 中间，本机制退居**兜底**：快照在锁内取，
+     * 排在前面的 close 已经计过次，不会再误判本次连接作废。
      */
     private val detachEpoch = AtomicInteger(0)
 
@@ -108,8 +129,20 @@ class RealUsbManager @Inject constructor(
      */
     suspend fun connectUsb(device: UsbDevice? = null): Result<Unit> = withContext(Dispatchers.IO) {
         // 单飞去重：已有一次连接流程在跑 → 忽略这次杂散/重复 attach（鸿蒙常连发多条广播）。
+        // 置位刻意放在取 [lifecycleMutex] **之前**：等锁期间到达的重复 attach 同样被丢弃，不会在锁后排成一串
+        // 重跑——每跑一次默认密码探测都可能消耗卡的密码尝试次数，且每次都可能再空等一轮授权超时。
         if (!connecting.compareAndSet(false, true)) return@withContext Result.success(Unit)
-        val epoch = detachEpoch.get() // 本次连接的拔卡代次快照，发布 CONNECTED 前比对
+        try {
+            lifecycleMutex.withLock { connectUsbLocked(device) }
+        } finally {
+            connecting.set(false)
+        }
+    }
+
+    /** [connectUsb] 的锁内实体：调用方须已持有 [lifecycleMutex]（[connectUsb] / [reconnect]）。 */
+    private suspend fun connectUsbLocked(device: UsbDevice?): Result<Unit> = withContext(Dispatchers.IO) {
+        // 拔卡代次快照。锁内取 → 排在本次之前的 closeDevice 已经计过次，不会把本次连接误判成「期间被拔出」。
+        val epoch = detachEpoch.get()
         try {
             // 已连接/已认证时的重复 attach 直接忽略：绝不重跑探测把 AUTHENTICATED 覆盖成 CONNECTED 且盘不关
             //（那正是「登录后被踢回登录页、之后反复报密码错误、须重启 App」的根因）。
@@ -202,8 +235,6 @@ class RealUsbManager @Inject constructor(
         } catch (e: Exception) {
             _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
             Result.failure(e)
-        } finally {
-            connecting.set(false)
         }
     }
 
@@ -413,14 +444,24 @@ class RealUsbManager @Inject constructor(
      * [detachedName] 为广播里 EXTRA_DEVICE 的 deviceName。个别机型/厂商可能不带该 extra → 退一步问系统
      * UsbManager：我们打开的那台还在设备列表里就说明拔的是别人，忽略。两条都判不了才保守关闭（宁可误关，
      * 也不留一个「显示已连接、句柄已失效」的状态——那只能重启 App）。
+     *
+     * **幂等**（`[usb]` 2026-07-30）：同一条 DETACHED 会被两处 receiver 各收一次（`MainActivity` 那份 +
+     * 进程级的 `MiDunApp` 那份，后者覆盖 Activity 已销毁的窗口）。已经无句柄且状态已是 DISCONNECTED = 上一条
+     * 已经处理完 → 直接返回，不再走一遍 [closeDevice]：否则会白白 [detachEpoch] +1，把紧随其后的 attach
+     * 误判成「连接期间被拔出」。
      */
-    suspend fun onDeviceDetached(detachedName: String?): Result<Unit> {
-        val opened = openedDeviceName
-        if (opened != null) {
-            if (detachedName != null && detachedName != opened) return Result.success(Unit)
-            if (detachedName == null && isDevicePresent(opened)) return Result.success(Unit)
+    suspend fun onDeviceDetached(detachedName: String?): Result<Unit> = withContext(Dispatchers.IO) {
+        lifecycleMutex.withLock {
+            if (usbHelper == null && _deviceStatus.value.status == UsbDeviceStatus.DISCONNECTED) {
+                return@withLock Result.success(Unit)
+            }
+            val opened = openedDeviceName
+            if (opened != null) {
+                if (detachedName != null && detachedName != opened) return@withLock Result.success(Unit)
+                if (detachedName == null && isDevicePresent(opened)) return@withLock Result.success(Unit)
+            }
+            closeDeviceLocked()
         }
-        return closeDevice()
     }
 
     /** 系统 UsbManager 的设备列表里是否还有这台（按 deviceName）。取不到服务时保守返回 false。 */
@@ -457,13 +498,18 @@ class RealUsbManager @Inject constructor(
         return true
     }
 
-    /** 拔卡 / 完全释放：关盘 + 关 USB 句柄，状态 DISCONNECTED。 */
+    /** 拔卡 / 完全释放：关盘 + 关 USB 句柄，状态 DISCONNECTED。与连接流程互斥，见 [lifecycleMutex]。 */
     suspend fun closeDevice(): Result<Unit> = withContext(Dispatchers.IO) {
-        detachEpoch.incrementAndGet() // 让并发中的 connectUsb 知道「这次连接已被拔卡作废」
+        lifecycleMutex.withLock { closeDeviceLocked() }
+    }
+
+    /** [closeDevice] 的锁内实体：调用方须已持有 [lifecycleMutex]。全同步调用，不挂起。 */
+    private fun closeDeviceLocked(): Result<Unit> {
+        detachEpoch.incrementAndGet() // 兜底：仍让（理论上已不可能并发的）connectUsb 判出「这次连接已作废」
         releaseUsbLayer()
         cardKeystore.lock() // 拔卡清内存 DEK（M12.1）
         _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
-        Result.success(Unit)
+        return Result.success(Unit)
     }
 
     /**
@@ -471,10 +517,13 @@ class RealUsbManager @Inject constructor(
      * [connectUsb]（其内从 [settingsStore] 读最新 driverMode 并 SFDiskSetDriverMode）。测试鸿蒙登录慢用。
      */
     suspend fun reconnect(): Result<Unit> = withContext(Dispatchers.IO) {
-        closeDevice()
-        val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
-        val device = usbManager?.deviceList?.values?.firstOrNull()
-        connectUsb(device)
+        // 整段持锁：关旧连接与重开之间不许插进别的插拔事件，否则「关完还没重开」的空档会被当成拔卡。
+        lifecycleMutex.withLock {
+            closeDeviceLocked()
+            val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+            val device = usbManager?.deviceList?.values?.firstOrNull()
+            connectUsbLocked(device)
+        }
     }
 
     /**
