@@ -14,9 +14,6 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -56,9 +53,6 @@ class RealFileSystem @Inject constructor(
     /** 文件夹路径 → 拷贝策略（侧车缓存，懒加载）。 */
     private var folderPolicies: MutableMap<String, CopyPolicy>? = null
 
-    /** 已采样的创建时间条数（临时诊断，见 [sampleCreateTime]）。 */
-    private var timeSamples = 0
-
     override suspend fun getFolders(): List<FileItem> = withContext(Dispatchers.IO) {
         val policies = CardPerf.time("getFolders.loadPolicies(读元数据)") { loadPolicies() }
         CardPerf.time("getFolders.listEntries(列文件夹)") { listEntries(ROOT, dirs = true) }.map { name ->
@@ -67,7 +61,11 @@ class RealFileSystem @Inject constructor(
                 id = path,
                 name = name,
                 type = FileType.FOLDER,
-                createdAt = dirCreateTime(path),
+                // 文件夹暂不读卡上创建时间（沿用 FileItem 默认值 = 此刻，即显示「今天」）。读它必须先用
+                // `SFOpenAsDir` 拿目录句柄——`SFGetTime` 只认句柄，而列目录走的是按路径的 GetFileList、
+                // 不产生句柄。`SFOpenAsDir` 是本 App 从未调用过、SDK 示例里也零覆盖的函数，恰好又是 2026-07-29
+                // 唯一新增的 native 调用面，与客户「发图片时会话断开」的起始版本重合，故先撤出、留作断连排查的
+                // 干净实验条件（`[files]` 2026-07-30）。断连定案后若仍要文件夹日期，再单独试它并真机验证。
                 copyPolicy = policies[path] ?: CopyPolicy.NO_COPY
             )
         }
@@ -764,47 +762,21 @@ class RealFileSystem @Inject constructor(
     private data class Meta(val size: Long, val type: FileType, val createdAt: Long)
 
     /**
-     * 读文件夹的卡上创建时间（毫秒，0 = 读不到）。目录须用 `SFOpenAsDir` 拿句柄，不能用 `SFOpen`。
-     */
-    private fun dirCreateTime(path: String): Long = synchronized(fsShell) {
-        val handle = LibJniFSShell.SFOpenAsDir(path)
-        if (handle <= 0) return 0L
-        try {
-            createTimeOf(handle)
-        } finally {
-            LibJniFSShell.SFClose(handle)
-        }
-    }
-
-    /**
-     * 句柄 → 创建时间（毫秒）。SDK 文档只说 `SFGetFileCreateTime(fd)` 返回 long，未写明单位/纪元，
-     * 故按量级归一：秒 → ×1000；毫秒 → 原样；Windows FILETIME（1601 纪元、100ns）→ 换算；其余当未知（0）。
-     * 须在 [fsShell] 锁内调用。
+     * 句柄 → 创建时间（毫秒，0 = 读不到）。须在 [fsShell] 锁内调用。
+     *
+     * 用 `SFGetTime(fd, long[3])`（本 jar 里是**静态**方法，同 SFOpen 那批）：返回 0 才算成功，数组依次是
+     * 创建/修改/访问时间，**单位秒**——这不是猜的，SDK 自带示例 `FSDemoConsole.SFGetFileSizeAndCreateTime`
+     * 就是这么用的，注释直接写着「精确到秒」；C 头亦为 `int SFGetTime(int fd, int64_t*, int64_t*, int64_t*)`。
+     *
+     * 原实现调的是 `SFGetFileCreateTime`（`[files]` 2026-07-30 修）：jar 里有 native 声明所以编译得过，但
+     * **两个 ABI 的 `libjniFSShell.so` 里都没有这个符号**（`strings` 计数 0，导出的是 `SFGetTime`/`SFSetTime`），
+     * 每次调用抛 UnsatisfiedLinkError 被 runCatching 吞掉、恒返回 0 —— 于是「显示卡上真实创建时间」这个功能
+     * 从上线那天起就只显示 `--`，连带那套「按量级猜秒/毫秒/FILETIME」的启发式和它的原值采样诊断都是白做。
      */
     private fun createTimeOf(handle: Int): Long {
-        val raw = runCatching { fsShell.SFGetFileCreateTime(handle) }.getOrDefault(0L)
-        val ms = when {
-            raw <= 0L -> 0L
-            raw < 100_000_000_000L -> raw * 1000L                       // 秒（~1973 年至 5138 年）
-            raw < 100_000_000_000_000L -> raw                           // 毫秒
-            raw > FILETIME_EPOCH_DIFF -> (raw - FILETIME_EPOCH_DIFF) / 10_000L // Windows FILETIME
-            else -> 0L
-        }
-        sampleCreateTime(raw, ms)
-        return ms
-    }
-
-    /**
-     * **临时诊断**：把前 [TIME_SAMPLES] 条原始创建时间打进 CardPerf 日志（「下载」目录）。上面的量级归一是
-     * 猜的——SDK 文档没写单位/纪元，DOS 打包格式还会和 Unix 秒撞量级、静默解出一个看着合理的错日期。
-     * 拿到真机上的 raw 值 + 对照真实创建日期，即可把解码方式钉死，届时连同本函数一起删除。
-     */
-    private fun sampleCreateTime(raw: Long, ms: Long) {
-        if (timeSamples >= TIME_SAMPLES) return
-        timeSamples++
-        val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA)
-        val decoded = if (ms > 0) fmt.format(Date(ms)) else "未知"
-        CardPerf.mark("createTime raw=$raw → $decoded（当前时刻 ${fmt.format(Date())}）")
+        val times = LongArray(3)
+        val ret = runCatching { LibJniFSShell.SFGetTime(handle, times) }.getOrDefault(-1)
+        return if (ret == 0 && times[0] > 0) times[0] * 1000L else 0L
     }
 
     /** 从卡句柄精确读满 [buf]（SFRead 可能短读，0=EOF/<0=失败即停）。读满回 true。须在 fsShell 锁内调用。 */
@@ -879,9 +851,6 @@ class RealFileSystem @Inject constructor(
         // 而拖拽仍只读单个 16KB 块。实验：128KB（原 64KB，沿用 M11.5 已验证值）——测导入/导出是否更快。
         const val IO_CALL = 128 * 1024
         const val MAX_IMPORT_BYTES = 100L * 1024 * 1024 // 100MB 导入上限（需求）
-        // Windows FILETIME(1601-01-01, 100ns) → Unix 纪元的差值，供 createTimeOf 兜底换算。
-        const val FILETIME_EPOCH_DIFF = 116_444_736_000_000_000L
-        const val TIME_SAMPLES = 5 // 临时诊断：只采前几条原始创建时间，够定档即可，不刷屏
 
     }
 }
