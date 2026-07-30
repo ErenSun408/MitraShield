@@ -68,7 +68,8 @@ class SecurityCardManager @Inject constructor(
     /** USB 生命周期事件，见 [usbEvents]。 */
     private sealed interface UsbEvent {
         data class Attached(val device: android.hardware.usb.UsbDevice?) : UsbEvent
-        data class Detached(val deviceName: String?) : UsbEvent
+        /** [generation] = 广播到达当场取的 [RealUsbManager.openGeneration]，用于识别过期投递。 */
+        data class Detached(val deviceName: String?, val generation: Int) : UsbEvent
         /** 复核发现卡已不在 → 补做句柄/DEK 释放，见 [revalidatePresence]。 */
         object Release : UsbEvent
         object Reconnect : UsbEvent
@@ -107,7 +108,7 @@ class SecurityCardManager @Inject constructor(
                         }
                         real.connectUsb(merged.device)
                     }
-                    is UsbEvent.Detached -> real.onDeviceDetached(event.deviceName)
+                    is UsbEvent.Detached -> real.onDeviceDetached(event.deviceName, event.generation)
                     UsbEvent.Release -> real.closeDevice()
                     UsbEvent.Reconnect -> real.reconnect()
                 }
@@ -119,9 +120,14 @@ class SecurityCardManager @Inject constructor(
         usbEvents.trySend(UsbEvent.Attached(device))
     }
 
-    /** [detachedName] = 广播里被拔设备的 deviceName（可能为 null）；由 [RealUsbManager.onDeviceDetached] 判是否本卡。 */
+    /**
+     * [detachedName] = 广播里被拔设备的 deviceName（可能为 null）；由 [RealUsbManager.onDeviceDetached] 判是否本卡。
+     *
+     * 开设备代次必须在**这里**取（= 广播到达当场，主线程），不能等到出队处理时再取：那时若已重新连上，
+     * 就分不清「这条广播是过期投递」还是「刚连上的这台又被拔了」。
+     */
     fun onUsbDetached(detachedName: String?) {
-        usbEvents.trySend(UsbEvent.Detached(detachedName))
+        usbEvents.trySend(UsbEvent.Detached(detachedName, real.openGeneration()))
     }
 
     /**

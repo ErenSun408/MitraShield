@@ -115,6 +115,15 @@ class RealUsbManager @Inject constructor(
      */
     private val detachEpoch = AtomicInteger(0)
 
+    /**
+     * 开设备代次：每次 [connectUsb] 成功打开 USB 设备 +1（关闭**不**计次）。用于识别「过期的 DETACHED 投递」——
+     * 见 [onDeviceDetached]：广播到达时取快照，处理时若代次已推进，说明这条广播说的是上一次连接。
+     */
+    private val openEpoch = AtomicInteger(0)
+
+    /** 当前开设备代次快照。由 `SecurityCardManager` 在收到 DETACHED 广播的**当场**取，随事件入队。 */
+    fun openGeneration(): Int = openEpoch.get()
+
     private val _deviceStatus = MutableStateFlow(DeviceInfo())
     override val deviceStatus: StateFlow<DeviceInfo> = _deviceStatus.asStateFlow()
 
@@ -191,6 +200,7 @@ class RealUsbManager @Inject constructor(
 
             val dn = buildExternalDiskName(helper, name).also { diskName = it }
             openedDeviceName = device?.deviceName
+            openEpoch.incrementAndGet() // 开设备代次 +1，供 [onDeviceDetached] 识别过期投递
 
             // SFDiskGetSN 需盘已打开才能读。先试免密直读（部分卡可经 USB 句柄读硬件序列号）；读不到则在
             // 默认密码探测打开盘时顺带读（盘临时打开）。默认密码能开 = 未初始化。已初始化卡此处读不到 SN
@@ -442,23 +452,40 @@ class RealUsbManager @Inject constructor(
      * 按 deviceName 比对（见 [connectUsb] 的守卫），这侧是漏的，本次补齐。
      *
      * [detachedName] 为广播里 EXTRA_DEVICE 的 deviceName。个别机型/厂商可能不带该 extra → 退一步问系统
-     * UsbManager：我们打开的那台还在设备列表里就说明拔的是别人，忽略。两条都判不了才保守关闭（宁可误关，
-     * 也不留一个「显示已连接、句柄已失效」的状态——那只能重启 App）。
+     * UsbManager。两条都判不了才保守关闭（宁可误关，也不留一个「显示已连接、句柄已失效」的状态——那只能
+     * 重启 App）。
      *
-     * **幂等**（`[usb]` 2026-07-30）：同一条 DETACHED 会被两处 receiver 各收一次（`MainActivity` 那份 +
-     * 进程级的 `MiDunApp` 那份，后者覆盖 Activity 已销毁的窗口）。已经无句柄且状态已是 DISCONNECTED = 上一条
-     * 已经处理完 → 直接返回，不再走一遍 [closeDevice]：否则会白白 [detachEpoch] +1，把紧随其后的 attach
-     * 误判成「连接期间被拔出」。
+     * **不依赖广播顺序**（`[usb]` 2026-07-30）：[generation] 是广播**到达那一刻**的 [openEpoch] 快照。名字对上
+     * 但卡仍在系统设备列表里、且这期间我们又开过一次设备（代次已推进）→ 这条广播说的是上一次连接，忽略。
+     *
+     * 为什么要判：原先名字对上即关，赌的是「同一条 DETACHED 的两次投递之间不会被 ATTACHED 插队」。两处
+     * receiver（`MainActivity` + 进程级 `MiDunApp`）都在 main looper 上、同一 BroadcastRecord 连续派发，按 AOSP
+     * 逻辑顺序是 D-D-A；但 Android 14+ 的 `BroadcastQueueModernImpl` 对 cached/frozen 进程有延迟投递策略，厂商
+     * ROM 也可能改过派发。真变成 D-A-D、且重插后 deviceName 被复用（同一个口、devnum 相同）时，第二条 D 会去
+     * 关一张刚连上的在位卡 —— 也就是本次要修的「插着卡显示无卡、聊天会话被拆」。
+     *
+     * 为什么**不**只判「卡还在列表里」：那会把「真拔卡但 ROM 的设备列表更新滞后于广播」也当成过期投递而漏掉，
+     * 方向正好反了（留下「显示已连接、句柄已失效」的状态）。故只在代次推进（= 确有一次更新的连接）时才敢忽略，
+     * 其余情形保持原来的保守姿态：宁可误关。
+     *
+     * **幂等**：重复投递的第二条走到这里通常已经无句柄且状态为 DISCONNECTED（上一条处理完了）→ 直接返回，
+     * 不再走一遍 [closeDevice]，否则白白 [detachEpoch] +1、把紧随其后的 attach 误判成「连接期间被拔出」。
      */
-    suspend fun onDeviceDetached(detachedName: String?): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun onDeviceDetached(detachedName: String?, generation: Int): Result<Unit> = withContext(Dispatchers.IO) {
         lifecycleMutex.withLock {
             if (usbHelper == null && _deviceStatus.value.status == UsbDeviceStatus.DISCONNECTED) {
                 return@withLock Result.success(Unit)
             }
             val opened = openedDeviceName
             if (opened != null) {
+                // 拔的是别的设备（耳机/坞）→ 与本卡无关。
                 if (detachedName != null && detachedName != opened) return@withLock Result.success(Unit)
+                // 广播没带设备、本卡还在 → 判不出拔的是谁，但既然本卡在位就不动它（`[usb]` 2026-07-25）。
                 if (detachedName == null && isDevicePresent(opened)) return@withLock Result.success(Unit)
+                // 名字对上、卡却仍在位，且这条广播到达后又开过设备 → 过期投递（D-A-D），不关在位的卡。
+                if (openEpoch.get() != generation && isDevicePresent(opened)) {
+                    return@withLock Result.success(Unit)
+                }
             }
             closeDeviceLocked()
         }
