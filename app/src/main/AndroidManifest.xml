@@ -7,6 +7,12 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- M11.1：FSShell SDK 底层用 libusb 操作 usbfs，部分严格系统需此权限访问 /dev/bus/usb（非必需项）。 -->
     <uses-permission android:name="android.permission.HARDWARE_TEST" />
+    <!--
+      文件传输期间按住 CPU（PARTIAL_WAKE_LOCK，见 TransferKeepAlive）：一张图片要传几十秒到几分钟，
+      屏一灭 CPU 睡下去，心跳协程不再按时醒、对端的帧也没人读，连接就被自己判死。安装时权限、无弹窗，
+      仅在有在途传输时持有，且带 10 分钟兜底超时。
+    -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-feature
         android:name="android.hardware.usb.host"
         android:required="false" />

@@ -33,9 +33,11 @@ import java.security.KeyPair
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.random.Random
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -235,6 +237,28 @@ class P2PSessionManager @Inject constructor(
     @Volatile private var lastInboundAt = 0L
 
     /**
+     * 最近一次**文件通道**上有帧收发的时刻（epoch ms）。判死时与 [lastInboundAt] 取较晚者
+     * （`[network]` 2026-07-30 客户故障：「发图片时会话断开」）。
+     *
+     * 病根：文件走的是另一条 TCP（[FileTransferChannel]，端口 8889），而判死只看聊天 socket 的入站帧。
+     * 发图片期间文件通道上正哗哗地传数据（活得再明显不过），聊天 socket 却几乎空闲、唯一活体信号是 20 秒
+     * 一次的 PING —— 连丢三次就把一条好连接关掉。而图片/视频恰恰是唯一会持续几十秒到几分钟的操作：
+     * 每块 64KB、收端每块写一次卡、发端还要同时写一份 `.sent_` 预览副本，全在同一把 `fsShell` 全局锁上串行。
+     * 文字消息瞬间完成，永远碰不到这个窗口 —— 所以只有发文件才暴露。
+     *
+     * **出站帧也计入**，尽管它比入站帧弱：TCP 缓冲区没满时 write 会立即返回，不能严格证明对端还在。取舍是
+     * 明知的——发送方在整个传输期间本就收不到任何入站帧，不计出站就等于对发送方毫无帮助；而对端真的没了，
+     * 文件通道自己会以 IO 异常收场（连带把在途传输标失败），不靠这把尺子兜。宁可判死晚一点，也不要再把
+     * 正在正常传输的连接掐掉。
+     */
+    @Volatile private var fileActivityAt = 0L
+
+    /** 文件通道上收发了一帧 → 刷新活体时刻。见 [fileActivityAt]。 */
+    private fun markFileActivity() {
+        fileActivityAt = System.currentTimeMillis()
+    }
+
+    /**
      * 文件传输通道（M11.5.3 / `[file-transfer]`）：与聊天 socket 物理隔离的第二条二进制 TCP。
      * [fileServerSocket] 仅 A 侧用（提前绑定 [FileTransferChannel.FILE_PORT]）；[fileChannel] 是握手后
      * 建立的双工通道（A accept / B connect），TCP 全双工 → 双向发文件复用同一条。建立失败不影响聊天会话。
@@ -244,6 +268,9 @@ class P2PSessionManager @Inject constructor(
 
     /** 文件发送串行化锁（M11.5.3）：一条通道上文件帧不能交错，收端单文件状态机才成立。 */
     private val fileSendMutex = Mutex()
+
+    /** 传输期间按住 CPU/WiFi，见 [TransferKeepAlive]。 */
+    private val keepAlive = TransferKeepAlive(context)
 
     /** 发送取消标志（M11.5.3 收尾）：用户取消在途发送时置位，发送循环检测到即发 FILE_CANCEL 并中止。 */
     @Volatile private var sendCancelled = false
@@ -426,9 +453,26 @@ class P2PSessionManager @Inject constructor(
             return@withContext Result.failure(IllegalStateException("文件超过 100MB 上限，无法发送"))
         }
         // 串行化文件发送：一条通道上 BEGIN/CHUNK/END 必须不被另一文件穿插，收端单文件状态机才成立。
-        fileSendMutex.withLock {
-            doSendFile(channel, session, contactId, fileName, size, mime, sourceCardPath, durationSec, openStream)
-        }
+        //
+        // 跑在**单例 scope** 而非调用方的 viewModelScope（`[network]` 2026-07-30）：传一张图片是几十秒到几分钟
+        // 的事，挂在 Activity 作用域上，用户退出会话页/系统回收 Activity 就会把传输腰斩，而 doSendFile 的
+        // catch 还会把 CancellationException 一起吞成「发送失败」。async + await：调用方被取消不影响传输本身。
+        scope.async {
+            keepAlive.acquire() // 传输期间按住 CPU/WiFi，屏灭了也别让心跳饿死
+            try {
+                fileSendMutex.withLock {
+                    doSendFile(channel, session, contactId, fileName, size, mime, sourceCardPath, durationSec, openStream)
+                }
+            } finally {
+                keepAlive.release()
+            }
+        }.await()
+    }
+
+    /** 发一帧文件通道数据，并把它记作活体信号（见 [fileActivityAt]）。 */
+    private fun sendFileFrame(channel: FileTransferChannel, type: Int, payload: ByteArray) {
+        channel.sendFrame(type, payload)
+        markFileActivity()
     }
 
     /** 音频 mime（语音消息）→ AUDIO 气泡（即收即播、不进选文件夹保存）；其余 → FILE。 */
@@ -477,7 +521,7 @@ class P2PSessionManager @Inject constructor(
                 if (durationSec > 0) put("durationSec", durationSec) // 语音消息时长（接收端建 AUDIO 气泡用）
                 if (burning) { put("burn", true); put("ttl", burnTtl) } // 阅后即焚标记 + 时长
             }.toString()
-            channel.sendFrame(FileTransferChannel.FILE_BEGIN, P2PCrypto.encrypt(key, beginJson))
+            sendFileFrame(channel, FileTransferChannel.FILE_BEGIN, P2PCrypto.encrypt(key, beginJson))
 
             val digest = MessageDigest.getInstance("SHA-256")
             openStream().use { input ->
@@ -485,7 +529,7 @@ class P2PSessionManager @Inject constructor(
                 for (index in 0 until totalChunks) {
                     if (sendCancelled) {
                         // 用户取消：通知对端删半成品后中止（落入 catch 标 FAILED）。
-                        runCatching { channel.sendFrame(FileTransferChannel.FILE_CANCEL, P2PCrypto.encrypt(key, msgId)) }
+                        runCatching { sendFileFrame(channel, FileTransferChannel.FILE_CANCEL, P2PCrypto.encrypt(key, msgId)) }
                         throw IOException("已取消发送")
                     }
                     val want = minOf(FILE_CHUNK_BYTES.toLong(), size - index.toLong() * FILE_CHUNK_BYTES)
@@ -496,7 +540,7 @@ class P2PSessionManager @Inject constructor(
                     digest.update(chunk)
                     val isLast = index == totalChunks - 1
                     val cipher = P2PCrypto.encryptChunk(key, fileNonce, index, isLast, chunk)
-                    channel.sendFrame(FileTransferChannel.FILE_CHUNK, intToBytes(index) + cipher)
+                    sendFileFrame(channel, FileTransferChannel.FILE_CHUNK, intToBytes(index) + cipher)
                     sent += want
                     setProgress(msgId, if (size > 0) sent.toFloat() / size else 1f)
                 }
@@ -506,7 +550,7 @@ class P2PSessionManager @Inject constructor(
                 put("msgId", msgId)
                 put("sha256", toHex(digest.digest()))
             }.toString()
-            channel.sendFrame(FileTransferChannel.FILE_END, P2PCrypto.encrypt(key, endJson))
+            sendFileFrame(channel, FileTransferChannel.FILE_END, P2PCrypto.encrypt(key, endJson))
 
             // 副本写全 → 记 localPath（发送方此后可预览自己发的图/视频）。
             if (copyHandle != null) {
@@ -517,17 +561,29 @@ class P2PSessionManager @Inject constructor(
             clearProgress(msgId)
             _incomingMessages.emit(contactId)
             Result.success(Unit)
+        } catch (e: CancellationException) {
+            // 协程被取消（会话拆除等）：同样清理半成品，但**必须原样抛出**，不能吞成一个「发送失败」的
+            // 普通结果——吞掉会让取消不再向上传播，协程作用域以为自己已经收拾干净了（`[network]` 2026-07-30）。
+            cleanupFailedSend(copyHandle, sentCopyPath, msgId, contactId)
+            throw e
         } catch (e: Exception) {
             // 失败/取消：关副本句柄并删半成品（localPath 仍为 null，发送方不会预览到残片）。
-            if (copyHandle != null) {
-                runCatching { stagingStore.close(copyHandle) }
-                sentCopyPath?.let { runCatching { stagingStore.delete(it) } }
-            }
-            chatRepo.updateFileStatus(msgId, contactId, MessageStatus.FAILED)
-            clearProgress(msgId)
-            _incomingMessages.emit(contactId)
+            cleanupFailedSend(copyHandle, sentCopyPath, msgId, contactId)
             Result.failure(e)
         }
+    }
+
+    /** 发送失败/取消的收尾：关副本句柄、删半成品、标 FAILED、刷 UI。 */
+    private suspend fun cleanupFailedSend(
+        copyHandle: Int?, sentCopyPath: String?, msgId: String, contactId: String
+    ) {
+        if (copyHandle != null) {
+            runCatching { stagingStore.close(copyHandle) }
+            sentCopyPath?.let { runCatching { stagingStore.delete(it) } }
+        }
+        chatRepo.updateFileStatus(msgId, contactId, MessageStatus.FAILED)
+        clearProgress(msgId)
+        _incomingMessages.emit(contactId)
     }
 
     /**
@@ -694,11 +750,25 @@ class P2PSessionManager @Inject constructor(
     private fun startHeartbeat(session: P2PSession) {
         heartbeatJob?.cancel()
         lastInboundAt = System.currentTimeMillis()
+        fileActivityAt = 0L
         heartbeatJob = scope.launch {
             while (true) {
+                val tickStart = System.currentTimeMillis()
                 delay(HEARTBEAT_INTERVAL_MS)
                 if (_activeSession.value !== session) break // 会话已换/已断,本协程退场
-                if (System.currentTimeMillis() - lastInboundAt > HEARTBEAT_TIMEOUT_MS) {
+                val now = System.currentTimeMillis()
+                // 刚从休眠/冻结里回来（本轮墙钟远超名义间隔）→ 这段静默不算对端的账（`[network]` 2026-07-30）。
+                // `delay` 走的是不计深睡的时钟：CPU 睡 10 分钟，delay(20s) 也可能 10 分钟后才返回，且这期间
+                // 对端的 PING 根本没人读。醒来时按墙钟一算必然超 60 秒，于是心跳把一条完好的连接当场处死——
+                // 用户放下手机等一张图片传完，回来就「未连接」。故重置观察窗口、下一轮重新老实观察，
+                // 真断了也就晚一个周期发现。
+                val justWoke = now - tickStart > HEARTBEAT_INTERVAL_MS + SLEEP_GRACE_MS
+                if (justWoke) {
+                    lastInboundAt = now // 重置观察窗口，下一轮重新老实观察
+                }
+                // 刚醒来这轮不判死，但**照样发 PING**：我们静默了整个休眠期，对端正在盘算我们是不是死了，
+                // 越早证明自己还在越好。
+                if (!justWoke && now - maxOf(lastInboundAt, fileActivityAt) > HEARTBEAT_TIMEOUT_MS) {
                     runCatching { session.socket.close() } // 长时间无入站=连接已死→关 socket 打断 readLine
                     break
                 }
@@ -754,6 +824,7 @@ class P2PSessionManager @Inject constructor(
      * FILE_END→校验 sha256、FILE_CANCEL→删半成品。接收为单文件状态机（发送端已串行化保证帧不交错）。
      */
     private suspend fun handleFileFrame(type: Int, payload: ByteArray) {
+        markFileActivity() // 文件通道上有入站帧 = 对端活着，别让心跳把正在传输的连接判死
         val session = _activeSession.value ?: return
         val key = session.sessionKey
         when (type) {
@@ -768,6 +839,9 @@ class P2PSessionManager @Inject constructor(
     /** FILE_BEGIN：解密元数据 → 真卡建暂存文件 `0:/.recv_<msgId>` → 插「接收中」FILE 气泡。 */
     private suspend fun handleFileBegin(session: P2PSession, key: ByteArray, payload: ByteArray) {
         val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT } ?: return
+        // 上一份还没收完就来了新的 BEGIN（发送端已串行化，故只会来自异常/恶意对端）：先把那份作废。
+        // 不然它的卡内句柄、暂存半成品和 [keepAlive] 的一次 acquire 都会被下面的覆盖直接漏掉。
+        if (incoming != null) abortIncoming(MessageStatus.FAILED)
         val json = runCatching { JSONObject(P2PCrypto.decrypt(key, payload)) }.getOrNull() ?: return
         val msgId = json.getString("msgId")
         val fileName = json.getString("fileName")
@@ -792,6 +866,8 @@ class P2PSessionManager @Inject constructor(
             msgId, contactId, fileName, fileSize, fileNonce, totalChunks, stagingPath, handle,
             MessageDigest.getInstance("SHA-256")
         )
+        // 接收也要按住 CPU/WiFi，与 [handleFileEnd]/[abortIncoming] 的 release 配对（`incoming` 非空即持有）。
+        keepAlive.acquire()
         chatRepo.addFileMessage(
             contactId, msgId, isMine = false, fileName, fileSize, MessageStatus.RECEIVED,
             type = msgType, audioDurationSec = durationSec, burnAfterRead = burning, burnTtl = burnTtl
@@ -819,6 +895,7 @@ class P2PSessionManager @Inject constructor(
     private suspend fun handleFileEnd(key: ByteArray, payload: ByteArray) {
         val f = incoming ?: return
         incoming = null
+        keepAlive.release() // 与 handleFileBegin 的 acquire 配对
         stagingStore.close(f.handle)
         val expect = runCatching { JSONObject(P2PCrypto.decrypt(key, payload)).getString("sha256") }.getOrNull()
         if (expect != null && expect == toHex(f.digest.digest())) {
@@ -876,6 +953,7 @@ class P2PSessionManager @Inject constructor(
     private fun abortIncoming(status: MessageStatus) {
         val f = incoming ?: return
         incoming = null
+        keepAlive.release() // 与 handleFileBegin 的 acquire 配对
         runCatching { stagingStore.close(f.handle) }
         runCatching { stagingStore.delete(f.stagingPath) }
         chatRepo.updateFileStatus(f.msgId, f.contactId, status)
@@ -1155,6 +1233,12 @@ class P2PSessionManager @Inject constructor(
         private const val HEARTBEAT_INTERVAL_MS = 20_000L
         /** 入站静默判死阈值（ms）：超 60s 无任何入站帧即认连接已死（约 3 个心跳周期容错）。 */
         private const val HEARTBEAT_TIMEOUT_MS = 60_000L
+
+        /**
+         * 心跳一轮允许的墙钟宽限（ms）：超出即认定「刚从休眠/冻结回来」，重置观察窗口而不判死。
+         * 取 10 秒——正常调度抖动远小于此，而深睡/冻结造成的偏差通常是分钟级，两者不会混。
+         */
+        private const val SLEEP_GRACE_MS = 10_000L
         /** 出站源地址探测锚点：阿里公共 DNS 的 IPv6（国内可达）。UDP connect 不发包，仅用于让内核选源地址。 */
         private const val OUTBOUND_PROBE_V6 = "2400:3200::1"
         /** 文件分块大小（64KB，与 RealFileSystem.writeFile 分块一致）。 */
