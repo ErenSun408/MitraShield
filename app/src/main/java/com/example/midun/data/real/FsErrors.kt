@@ -79,8 +79,46 @@ object FsErrors {
     /**
      * 该返回码是否为**设备/驱动级**失败（即「盘压根没打开」，与密码无关）。
      * 白名单：只列码表里明确与密码无关的项，未知码返回 false（沿用旧的「当密码问题处理」行为）。
+     *
+     * ⚠️ 这是**报错文案**用的判据（「别把设备故障说成密码错误」），**不是**「该不该中止连接」的判据 ——
+     * 后者见 [isUnusableDevice]。
      */
     fun isDeviceLevel(ret: Int): Boolean = ret in DEVICE_LEVEL_CODES
+
+    /**
+     * 该返回码是否**铁定说明设备/句柄不可用**，连接必须就地判失败。[DEVICE_LEVEL_CODES] 的真子集。
+     *
+     * **为什么要和 [isDeviceLevel] 分开**（`[usb]` 2026-07-30 客户故障）：两个判据的**代价完全不对称**。
+     * - 在登录 `authenticate` 处，判错只是文案不准；
+     * - 在 `connectUsb` 的默认密码探测处，判「设备级」= 中止连接 → 状态回 DISCONNECTED → 用户看到的是**无卡
+     *   等待页**，连错误码都看不到（连接失败的 Result 没有任何接收方），只能杀掉 App 重开。
+     *
+     * 现场故障：插卡开 App、授权 USB 后显示「正在检测硬件」，随后落到无卡等待页，重开 App 才进得了登录页。
+     * 2026-07-29 那次「顺手补齐码表」把内核库段（1000-1009）、1056-1058、1106-1110、1113-1116、1119、1130-1132
+     * 一并塞进了设备级白名单，于是这些码在探测处从「按已初始化处理 → 进登录页」变成了「中止连接 → 无卡页」。
+     * 首次插卡那一轮是「Open 失败 → 弹授权框 → 授权后重开」，内核库很可能就在这一轮没起来（1001
+     * `KERNEL_NOT_INIT`）；重开 App 时权限已授过、一次干净 Open，于是又好了——正好对上「重开就正常」。
+     *
+     * 故探测处只对本集合中止连接，其余一律沿用「默认密码开不进 = 已初始化 → 进登录页」（7/28 及之前在客户
+     * 机器上能用的行为）。**把判决推迟到登录**还顺带解决了「错误不可见」：登录处的失败会带着
+     * [describe] 的原因显示在登录页上，用户看得到、也知道下一步做什么。
+     */
+    fun isUnusableDevice(ret: Int): Boolean = ret in UNUSABLE_DEVICE_CODES
+
+    /**
+     * 「设备/句柄不可用」窄集合：物理设备层的打开/IO/型号校验失败，外壳库的句柄与盘符类失败，以及
+     * 「驱动通道不支持」。全是**再往下走也没有意义**的失败——盘符不存在、句柄无效、卡不是本产品的卡。
+     *
+     * 刻意**不含**内核库段与数据/用户状态段（1001 内核未就绪、1106-1110 数据损坏、1130 卡被锁定……）：
+     * 这些要么可能在登录那次开盘时就恢复正常，要么应当让用户在登录页上看到原因，而不是被无卡页顶替掉。
+     */
+    private val UNUSABLE_DEVICE_CODES = setOf(
+        DEVICE_LIB_LOST, DEVICE_LIB_ERROR, DEVICE_NO_DRIVES, DEVICE_IO_ERROR,
+        DEVICE_ACCESS_DENIED, DEVICE_OPEN_FAIL, DEVICE_INQUIRY_FAIL, DEVICE_INVALID_VENDOR,
+        SHELL_MEM_OUT, SHELL_INVALID_HANDLE, SHELL_INVALID_DRIVE, SHELL_HANDLED_DRIVE,
+        SHELL_NOT_INIT_DRIVE, SHELL_DISK_ERROR, SHELL_DISK_NOT_FOUND,
+        SHELL_NO_DRIVES, SHELL_NO_FSUDISK_DRIVES, NOT_SUPPORT
+    )
 
     private val DEVICE_LEVEL_CODES = setOf(
         KERNEL_MEM_OUT, KERNEL_NOT_INIT, KERNEL_FSSYSTEM_NULL, KERNEL_STORAGE_MANAGER_NULL,

@@ -209,14 +209,18 @@ class RealUsbManager @Inject constructor(
                 CardPerf.time("SFDiskGetSN(免密)") { synchronized(fsShell) { fsShell.SFDiskGetSN(dn) } }
             }.getOrNull().orEmpty()
             // 「是否已初始化」探测。**非 0 ≠ 已初始化**：默认密码开不进只是可能之一，设备 IO 错/句柄失效/
-            // 驱动通道不支持同样返回非 0（2026-07-27 鸿蒙日志实证：driverMode=2 下这里恒非 0、0-3ms 快速失败）。
-            // 旧代码一律当「已初始化」→ 新卡跳过初始化直进登录页 → 卡上还是默认密码，用户输什么都错、永远登不进。
-            // 故设备级错误直接判连接失败并如实报因，绝不猜卡的状态；只有明确的密码类失败才算「已初始化」。
+            // 驱动通道不支持同样返回非 0。旧代码一律当「已初始化」→ 新卡跳过初始化直进登录页 → 卡上还是
+            // 默认密码，用户输什么都错、永远登不进。
+            //
+            // 但中止连接的判据必须窄（[FsErrors.isUnusableDevice] 而非 isDeviceLevel）：这里中止 = 状态回
+            // DISCONNECTED = 用户看到无卡等待页、连错误码都看不到，只能杀 App 重开（2026-07-30 客户故障）。
+            // 只有「句柄/盘符铁定不可用」才就地判死；其余（内核未就绪、数据损坏、卡被锁定……）沿用「当已初始化
+            // → 进登录页」，把判决推迟到登录那次开盘——那里失败会带原因显示在登录页上，用户看得到。
             val probe = CardPerf.time("SFOpenDiskEx(默认密码探测)") {
                 synchronized(fsShell) { applyDriverMode(); fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) }
             }
             CardPerf.mark("默认密码探测 ret=$probe")
-            if (FsErrors.isDeviceLevel(probe)) {
+            if (FsErrors.isUnusableDevice(probe)) {
                 releaseUsbLayer()
                 _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
                 return@withContext Result.failure(
@@ -355,7 +359,7 @@ class RealUsbManager @Inject constructor(
      */
     override suspend fun authenticate(password: String): Result<Unit> = withContext(Dispatchers.IO) {
         CardPerf.mark("authenticate 开始")
-        val dn = diskName ?: return@withContext Result.failure(IllegalStateException("USB 未连接"))
+        val dn = diskName ?: return@withContext Result.failure(CardDeviceException("USB 未连接"))
         val ret = CardPerf.time("SFOpenDiskEx(登录)") {
             synchronized(fsShell) { applyDriverMode(); fsShell.SFOpenDiskEx(dn, sha256(password)) }
         }
@@ -367,13 +371,17 @@ class RealUsbManager @Inject constructor(
             val stillPresent = runCatching { usbHelper?.GetList()?.count ?: 0 }.getOrDefault(0) > 0
             if (!stillPresent) {
                 closeDevice()
-                return@withContext Result.failure(IllegalStateException("安全卡已断开，请重新插入后再试"))
+                return@withContext Result.failure(CardDeviceException("安全卡已断开，请重新插入后再试"))
             }
             // 卡还在但返回的是设备级错误码 = 盘压根没打开，与密码无关（错误码表见 [FsErrors]）。如实报因，
             // 否则用户会以为自己记错密码而反复重试——每次重试都在消耗卡的密码尝试次数。
+            //
+            // [CardDeviceException]：这类失败不该计入登录页的 5 次尝试上限（`[usb]` 2026-07-30）。自 connectUsb
+            // 的探测只对「句柄铁定不可用」中止连接起，内核未就绪/数据损坏/卡被锁定这些码都会走到这里来，
+            // 计进尝试次数就会把用户锁进「身份认证失败，请联系技术人员」——而他一个字都没输错。
             if (FsErrors.isDeviceLevel(ret)) {
                 return@withContext Result.failure(
-                    IllegalStateException("安全卡打开失败：${FsErrors.describe(ret)}（错误码 $ret）")
+                    CardDeviceException("安全卡打开失败：${FsErrors.describe(ret)}（错误码 $ret）")
                 )
             }
             return@withContext Result.failure(IllegalStateException("密码错误或打开失败，错误码=$ret"))
@@ -381,7 +389,8 @@ class RealUsbManager @Inject constructor(
         val boundId = CardPerf.time("readBoundId(.bind)") { readBoundId() }
         if (boundId != null && boundId != androidId()) {
             runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
-            return@withContext Result.failure(IllegalStateException("此卡已绑定其他设备，无法在本机登录"))
+            // 绑定不符也与密码无关：换台手机再输一百次也是同一个结果，不计尝试次数。
+            return@withContext Result.failure(CardDeviceException("此卡已绑定其他设备，无法在本机登录"))
         }
         // App 层密钥库（M12.1）：开盘后载入 keystore、解出 DEK 驻内存。
         // M12.4：keystore 缺失/损坏 → 拒登并关盘，**不静默跑明文**。正常卡（恢复出厂 + 重新 init）必有 keystore；
@@ -390,7 +399,7 @@ class RealUsbManager @Inject constructor(
         if (!cardKeystore.load(keystoreBlob)) {
             runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
             cardKeystore.lock()
-            return@withContext Result.failure(IllegalStateException("密钥库缺失或损坏，请恢复出厂后重新初始化"))
+            return@withContext Result.failure(CardDeviceException("密钥库缺失或损坏，请恢复出厂后重新初始化"))
         }
         sessionPwdHash = sha256(password)
         // 退出自动清理「下次登录补清」：盘已打开、AUTHENTICATED 尚未置位（ChatRepository 未加载）→ 无竞态。

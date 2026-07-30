@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.model.OperationType
+import com.example.midun.data.real.CardDeviceException
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +30,14 @@ class AuthViewModel @Inject constructor(
         object Idle : LoginState()
         object Loading : LoginState()
         object Success : LoginState()
+
+        /**
+         * [attemptsLeft] 三种取值，`LoginScreen` 据此渲染：
+         * - `> 0`：真的密码错，文案后面追加「（剩余N次）」，登录按钮仍可用；
+         * - `0`：尝试次数用尽，按钮禁用；
+         * - [NO_ATTEMPT_SPENT]：与密码无关的失败（卡打不开/卡被拔走/绑定不符/密钥库损坏），
+         *   只报原因、不显示次数、按钮保持可用，也**不消耗**尝试次数。
+         */
         data class Error(val message: String, val attemptsLeft: Int) : LoginState()
     }
 
@@ -71,6 +80,14 @@ class AuthViewModel @Inject constructor(
                     _loginState.value = LoginState.Success
                 }
                 .onFailure {
+                    // 与密码无关的失败不计尝试次数（`[usb]` 2026-07-30）：盘压根没打开、卡被拔走、卡绑定了
+                    // 别的设备、密钥库损坏——再输一次也是同一个结果，把它们计进去会把用户锁进「请联系技术
+                    // 人员」，而他一个字都没输错。自 connectUsb 的探测只对「句柄铁定不可用」中止连接起，
+                    // 内核未就绪这类码都会走到登录这里来报，这个区分从「稳妥」变成了必需。
+                    if (it is CardDeviceException) {
+                        _loginState.value = LoginState.Error(it.message ?: "安全卡打开失败", NO_ATTEMPT_SPENT)
+                        return@onFailure
+                    }
                     loginAttempts++
                     val attemptsLeft = MAX_ATTEMPTS - loginAttempts
                     _loginState.value = if (attemptsLeft <= 0) {
@@ -82,8 +99,10 @@ class AuthViewModel @Inject constructor(
         }
     }
 
-    private companion object {
-        const val MAX_ATTEMPTS = 5
-        const val LOCKOUT_MESSAGE = "身份认证失败，请联系技术人员"
+    companion object {
+        /** [LoginState.Error.attemptsLeft] 的哨兵值：本次失败与密码无关，没有消耗尝试次数。 */
+        const val NO_ATTEMPT_SPENT = -1
+        private const val MAX_ATTEMPTS = 5
+        private const val LOCKOUT_MESSAGE = "身份认证失败，请联系技术人员"
     }
 }

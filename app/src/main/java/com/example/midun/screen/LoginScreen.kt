@@ -138,6 +138,8 @@ fun LoginScreen(
                     supportingText = if (error != null) {
                         {
                             Text(
+                                // 只有真的密码错才报剩余次数。0 = 已锁定，负数 = 与密码无关的失败（未计次），
+                                // 两者都只显示原因本身，见 AuthViewModel.LoginState.Error。
                                 if (error.attemptsLeft > 0) "${error.message}（剩余${error.attemptsLeft}次）"
                                 else error.message,
                                 color = Danger
