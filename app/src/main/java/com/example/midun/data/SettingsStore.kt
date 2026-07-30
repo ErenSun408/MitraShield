@@ -11,7 +11,6 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.settingsDataStore: DataStore<Preferences> by preferencesDataStore(name = "midun_settings")
@@ -62,20 +61,6 @@ class SettingsStore @Inject constructor(
         store.edit { it[KEY_OPERATION_LOG_ENABLED] = enabled }
     }
 
-    /**
-     * USB 驱动模式（鸿蒙 2.0 登录慢的诊断/测试开关，登录页隐藏面板可切、重启保留）：
-     * [DRIVER_MODE_LIBUSB]（0，默认）= libusb 通道；[DRIVER_MODE_NATIVE]（2）= android 原生（DEVFS）通道。
-     */
-    val driverMode: Flow<Int> =
-        store.data.map { it[KEY_DRIVER_MODE] ?: DRIVER_MODE_LIBUSB }
-
-    /** 一次性读当前驱动模式（connectUsb 在开盘前取用）。 */
-    suspend fun getDriverMode(): Int = driverMode.first()
-
-    suspend fun setDriverMode(mode: Int) {
-        store.edit { it[KEY_DRIVER_MODE] = mode }
-    }
-
     companion object {
         const val OPERATION_LOG_DEFAULT = false
         private val KEY_OPERATION_LOG_ENABLED = booleanPreferencesKey("operation_log_enabled")
@@ -87,8 +72,5 @@ class SettingsStore @Inject constructor(
         const val SCREEN_OFF_EXIT_IMMEDIATE = 0
         private val KEY_SCREEN_OFF_EXIT_SEC = intPreferencesKey("screen_off_exit_sec")
 
-        const val DRIVER_MODE_LIBUSB = 0
-        const val DRIVER_MODE_NATIVE = 2
-        private val KEY_DRIVER_MODE = intPreferencesKey("usb_driver_mode")
     }
 }

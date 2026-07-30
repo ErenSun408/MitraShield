@@ -7,7 +7,6 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import com.example.midun.data.ExitClearPrefs
-import com.example.midun.data.SettingsStore
 import com.example.midun.data.UsbCardOps
 import com.example.midun.data.crypto.CardKeystore
 import com.example.midun.data.model.DeviceInfo
@@ -52,9 +51,7 @@ class RealUsbManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val realFileSystem: RealFileSystem,
     // App 层文件密钥库（M12.1）：init 生成落卡、auth 解锁载入 DEK、登出/拔卡/恢复出厂锁定清零。
-    private val cardKeystore: CardKeystore,
-    // 驱动模式持久化（鸿蒙慢诊断/测试）：connectUsb 开盘前读、决定走 libusb(0)/android 原生(2) 通道。
-    private val settingsStore: SettingsStore
+    private val cardKeystore: CardKeystore
 ) : UsbCardOps {
 
     // 懒加载：getLibFSShellInstance() 会 System.loadLibrary ~15MB native 库。@Singleton 在启动构建依赖图时
@@ -80,8 +77,15 @@ class RealUsbManager @Inject constructor(
      */
     private val connecting = AtomicBoolean(false)
 
-    /** 本次连接实际使用的驱动模式（connectUsb 开盘前从 [settingsStore] 读定；Open/Close 据此选通道）。 */
-    @Volatile private var activeDriverMode = SettingsStore.DRIVER_MODE_LIBUSB
+    /**
+     * 驱动通道：0 = libusb。**定死不再可切**（`[usb]` 2026-07-30）。
+     *
+     * 曾有个登录页隐藏面板能切 0/2，用来定位鸿蒙 2.0 mate40 登录要几分钟的问题；客户升级系统后慢的问题消失，
+     * 面板连同持久化一并删除。模式 2（android 原生 DEVFS 通道）在 2026-07-27 的真机日志里从来没工作过——
+     * 每次 `SFOpenDiskEx` 都在 0-3ms 内失败——留着只是个地雷：切过去登录必失败，而且这个选择是落盘的，
+     * 用户自己切不回来。
+     */
+    private val driverMode = DRIVER_MODE_LIBUSB
 
     /**
      * 当前已打开设备的系统路径（`UsbDevice.deviceName`，如 `/dev/bus/usb/001/005`）。
@@ -168,16 +172,16 @@ class RealUsbManager @Inject constructor(
                 return@withContext Result.success(Unit)
             }
             releaseUsbLayer() // 换设备/重连：先拆掉可能已失效的旧句柄，避免 claimInterface 与旧 fd 打架
-            // 驱动模式（鸿蒙慢诊断/测试）：开盘前定一次，决定 Open/Close 走 libusb(0) 还是 android 原生(2) 通道。
-            activeDriverMode = settingsStore.getDriverMode()
             val helper = USBStorageHelper(context, context.packageName).also { usbHelper = it }
             helper.PermissionHandler = Handler(Looper.getMainLooper(), Handler.Callback { true })
             // 双保险信号源（客户机型 SDK 私有权限标志时序对不上）：用 Android 系统 UsbManager.hasPermission
             // 作可靠的授权真信号，[awaitPermissionAndReopen] 优先据此重开，不再只依赖 SDK 标志。
             val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
 
-            CardPerf.mark("connectUsb 开始(driverMode=$activeDriverMode)")
-            runCatching { synchronized(fsShell) { applyDriverMode() } } // USB Open 前先定一次通道
+            CardPerf.mark("connectUsb 开始")
+            // 通道只在 USB Open 前定这一次（SDK demo 亦然）。曾在每次 SFOpenDiskEx 前都补设一次，那是对
+            // 「模式 2 登录报 1001」的推断性修法、从未在真机验证，随模式切换面板一起撤掉（`[usb]` 2026-07-30）。
+            runCatching { synchronized(fsShell) { fsShell.SFDiskSetDriverMode(driverMode) } }
             val list = CardPerf.time("GetList") { helper.GetList() }
             if (list.count == 0) {
                 _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
@@ -187,7 +191,8 @@ class RealUsbManager @Inject constructor(
             // SDK 怪癖（javap 核实 RequestPermission）：未授权时首次 Open 会异步弹授权框、但**立即返回 false**
             // （返回的是请求前的旧 hasPermission）。故首次失败后等授权结果：授权了再 Open 一次即成功（此时
             // hasPermission 已被系统缓存为 true）；拒绝/超时/真·打开失败 → 保持 DISCONNECTED（白屏等待、不退出）。
-            val firstOpen = CardPerf.time("Open(首次)") { helper.Open(name, activeDriverMode == 2) }
+            // 第二参数 = 是否走 android 原生(DEVFS)通道；通道定死 libusb，故恒为 false。
+            val firstOpen = CardPerf.time("Open(首次)") { helper.Open(name, false) }
             if (!firstOpen &&
                 !CardPerf.time("awaitPermissionAndReopen") { awaitPermissionAndReopen(helper, name, device, usbManager) }) {
                 _deviceStatus.value = DeviceInfo(status = UsbDeviceStatus.DISCONNECTED)
@@ -217,7 +222,7 @@ class RealUsbManager @Inject constructor(
             // 只有「句柄/盘符铁定不可用」才就地判死；其余（内核未就绪、数据损坏、卡被锁定……）沿用「当已初始化
             // → 进登录页」，把判决推迟到登录那次开盘——那里失败会带原因显示在登录页上，用户看得到。
             val probe = CardPerf.time("SFOpenDiskEx(默认密码探测)") {
-                synchronized(fsShell) { applyDriverMode(); fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) }
+                synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, DEFAULT_PASSWORD) }
             }
             CardPerf.mark("默认密码探测 ret=$probe")
             if (FsErrors.isUnusableDevice(probe)) {
@@ -275,7 +280,7 @@ class RealUsbManager @Inject constructor(
         // 等用户点授权框，还是耗在 Open 本身（鸿蒙 driverMode=2 下 Open 已实测 6s/10s 的慢例）。
         fun reopen(polls: Int): Boolean {
             CardPerf.mark("授权就绪(轮询${polls}次/${System.currentTimeMillis() - start}ms) → 重开")
-            return CardPerf.time("Open(授权后重开)") { helper.Open(name, activeDriverMode == 2) }
+            return CardPerf.time("Open(授权后重开)") { helper.Open(name, false) }
         }
 
         if (granted()) return reopen(0)
@@ -361,7 +366,7 @@ class RealUsbManager @Inject constructor(
         CardPerf.mark("authenticate 开始")
         val dn = diskName ?: return@withContext Result.failure(CardDeviceException("USB 未连接"))
         val ret = CardPerf.time("SFOpenDiskEx(登录)") {
-            synchronized(fsShell) { applyDriverMode(); fsShell.SFOpenDiskEx(dn, sha256(password)) }
+            synchronized(fsShell) { fsShell.SFOpenDiskEx(dn, sha256(password)) }
         }
         if (ret != 0) {
             CardPerf.mark("登录开盘失败 ret=$ret")
@@ -549,26 +554,12 @@ class RealUsbManager @Inject constructor(
     }
 
     /**
-     * 用当前驱动模式重连（登录页驱动模式面板切换后触发）：关旧连接 → 从系统 UsbManager 重新取设备 →
-     * [connectUsb]（其内从 [settingsStore] 读最新 driverMode 并 SFDiskSetDriverMode）。测试鸿蒙登录慢用。
-     */
-    suspend fun reconnect(): Result<Unit> = withContext(Dispatchers.IO) {
-        // 整段持锁：关旧连接与重开之间不许插进别的插拔事件，否则「关完还没重开」的空档会被当成拔卡。
-        lifecycleMutex.withLock {
-            closeDeviceLocked()
-            val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
-            val device = usbManager?.deviceList?.values?.firstOrNull()
-            connectUsbLocked(device)
-        }
-    }
-
-    /**
      * 释放 USB/盘层句柄（关盘 + 关 helper + 清路径/会话密码），**不动状态、不计拔卡代次**。
      * 供 [closeDevice] 与 [connectUsb] 的重连路径共用——后者只是换句柄，不该被自己的代次判为拔卡。
      */
     private fun releaseUsbLayer() {
         runCatching { synchronized(fsShell) { fsShell.SFCloseDisk() } }
-        runCatching { usbHelper?.Close(false, activeDriverMode == 2) }
+        runCatching { usbHelper?.Close(false, false) } // 第二参数同 Open：原生通道标志，恒 false
         usbHelper = null
         diskName = null
         openedDeviceName = null
@@ -728,22 +719,6 @@ class RealUsbManager @Inject constructor(
      * 拼「外部设备」diskName（SDK android_4.0 严格权限系统方式，文档 3.2 节）：
      * `name=fd;busnum=..;devaddr=..;fd=..;type=..;speed=..;ifaces=..;vid=..;pid=..;ep_in=..;ep_out=..;`
      */
-    /**
-     * 把当前驱动模式喂给 native 库。**每次 `SFOpenDiskEx` 前都要调一次**（`[usb]` 2026-07-29）。
-     *
-     * SDK 的 Android demo（`FSDemoListViewAdapter.SFOpenDiskThread`）就是这么写的：`USBStorage.Open` 之后、
-     * `SFOpenDisk3` 之前紧挨着调 `SFDiskSetDriverMode`，而不是整个连接流程只在最开头设一次。原实现只在
-     * [connectUsb] 里 USB Open 之前设了一次，[authenticate] 的登录开盘则完全没设——中间隔着 `helper.Open`、
-     * 默认密码探测、`SFCloseDisk` 等一串 native 调用，模式若被复位，登录就会用与 USB 层不匹配的通道开盘，
-     * 内核库起不来 → 返回 1001（`ERROR_CODE_FSKERNEL_NOT_INIT`）。
-     *
-     * ⚠️ 这是对「切到驱动模式 2 后登录报 1001」的**推断**，尚未在真机验证；模式 0 下语义不变（同样的值重复设）。
-     * 调用方需已持有 `fsShell` 锁。
-     */
-    private fun applyDriverMode() {
-        runCatching { fsShell.SFDiskSetDriverMode(activeDriverMode) }
-    }
-
     private fun buildExternalDiskName(h: USBStorageHelper, name: String): String =
         "$name=${h.FileHandle};" +
             "busnum=${h.BusNum};" +
@@ -758,6 +733,9 @@ class RealUsbManager @Inject constructor(
             "ep_out=${h.endpoint_out};"
 
     private companion object {
+        /** libusb 驱动通道（`SFDiskSetDriverMode`）。唯一在真机上工作过的通道，见 [driverMode]。 */
+        const val DRIVER_MODE_LIBUSB = 0
+
         const val DEFAULT_PASSWORD = "123456"
         /** 等 USB 授权结果的轮询间隔/超时（首次 Open 怪癖重试用）。120s 足够用户在弹框上操作。 */
         const val PERMISSION_POLL_MS = 200

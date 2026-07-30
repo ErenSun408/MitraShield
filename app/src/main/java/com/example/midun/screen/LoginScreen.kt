@@ -185,13 +185,6 @@ fun LoginScreen(
             }
         }
 
-        // 驱动模式测试入口：左上角三点按钮（加载页也有同一个，见 DriverModeEntry）。
-        DriverModeEntry(
-            deviceViewModel = deviceViewModel,
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(top = 24.dp, start = 8.dp)
-        )
     }
 
     if (showForgotDialog) {

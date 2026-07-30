@@ -72,7 +72,6 @@ class SecurityCardManager @Inject constructor(
         data class Detached(val deviceName: String?, val generation: Int) : UsbEvent
         /** 复核发现卡已不在 → 补做句柄/DEK 释放，见 [revalidatePresence]。 */
         object Release : UsbEvent
-        object Reconnect : UsbEvent
     }
 
     /**
@@ -110,7 +109,6 @@ class SecurityCardManager @Inject constructor(
                     }
                     is UsbEvent.Detached -> real.onDeviceDetached(event.deviceName, event.generation)
                     UsbEvent.Release -> real.closeDevice()
-                    UsbEvent.Reconnect -> real.reconnect()
                 }
             }
         }
@@ -166,11 +164,6 @@ class SecurityCardManager @Inject constructor(
     fun onAppForeground() {
         inactivityJob?.cancel()
         inactivityJob = null
-    }
-
-    /** 用当前驱动模式重连（登录页驱动模式面板切换后触发，测试鸿蒙登录慢用）。同样入队，与插拔事件保持有序。 */
-    fun reconnectWithCurrentDriverMode() {
-        usbEvents.trySend(UsbEvent.Reconnect)
     }
 
     /** 真卡序列号（诊断 / 后续 P2P deviceSn）。 */
