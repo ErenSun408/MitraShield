@@ -10,6 +10,8 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 import com.example.midun.data.SecurityCardManager
+import com.example.midun.data.real.CardPerf
+import com.example.midun.diag.ProcessExitLog
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -46,6 +48,11 @@ class MiDunApp : Application() {
 
     override fun onCreate() {
         super.onCreate() // Hilt 字段注入在此完成，cardManager 之后才可用
+        // 诊断日志接线要最早（[CardPerf.attach] 幂等，卡层 init 里也会调一次）：进程启动与上次退出原因是
+        // 排查「会话断开」时区分「App 自己断的」与「进程被打死」的关键，见 [ProcessExitLog]。
+        CardPerf.attach(this)
+        CardPerf.mark("[diag] 进程启动")
+        ProcessExitLog.logLastExit(this)
         ContextCompat.registerReceiver(
             this,
             detachReceiver,

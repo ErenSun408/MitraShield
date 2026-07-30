@@ -8,6 +8,7 @@ import com.example.midun.data.FileCachePaths
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.ChatRepository
 import com.example.midun.data.OperationLogRepository
+import com.example.midun.data.real.CardPerf
 import com.example.midun.data.real.RealFileSystem
 import com.example.midun.data.staging.StagingStore
 import com.example.midun.data.model.Contact
@@ -160,7 +161,7 @@ class P2PSessionManager @Inject constructor(
                 if (info.status != UsbDeviceStatus.AUTHENTICATED &&
                     _connectionState.value != ConnectionState.DISCONNECTED
                 ) {
-                    disconnect()
+                    disconnect("本机卡离开认证态（${info.status}）——拔卡/登出/自动锁定/恢复出厂")
                 }
             }
         }
@@ -328,6 +329,7 @@ class P2PSessionManager @Inject constructor(
                 val session = performListenerHandshake(socket)
                 _activeSession.value = session
                 _connectionState.value = ConnectionState.CONNECTED
+                CardPerf.mark("[net] 会话建立（本机监听方 A）→ CONNECTED")
                 onConnected(session)
                 // A 侧联系人在收到 B 的 IDENTITY 帧后才建（A 事先不知对端身份）。
                 onSessionEstablished(session)
@@ -360,10 +362,12 @@ class P2PSessionManager @Inject constructor(
                 val session = handshaken.copy(contactId = contactId)
                 _activeSession.value = session
                 _connectionState.value = ConnectionState.CONNECTED
+                CardPerf.mark("[net] 会话建立（本机扫码方 B）→ CONNECTED")
                 onSessionEstablished(session)
                 establishFileChannelAsConnector(info.ipv6) // B 侧：连接文件通道端口
                 Result.success(session)
             } catch (e: Exception) {
+                CardPerf.mark("[net] 建立连接失败：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}")
                 _connectionState.value = ConnectionState.FAILED
                 Result.failure(e)
             }
@@ -459,9 +463,16 @@ class P2PSessionManager @Inject constructor(
         // catch 还会把 CancellationException 一起吞成「发送失败」。async + await：调用方被取消不影响传输本身。
         scope.async {
             keepAlive.acquire() // 传输期间按住 CPU/WiFi，屏灭了也别让心跳饿死
+            val startedAt = System.currentTimeMillis()
+            CardPerf.mark("[net] 开始发送文件（$mime，${size / 1024}KB）")
             try {
                 fileSendMutex.withLock {
                     doSendFile(channel, session, contactId, fileName, size, mime, sourceCardPath, durationSec, openStream)
+                }.also {
+                    CardPerf.mark(
+                        "[net] 发送文件结束：${if (it.isSuccess) "成功" else "失败（${it.exceptionOrNull()?.message}）"}" +
+                            "，耗时 ${(System.currentTimeMillis() - startedAt) / 1000}s"
+                    )
                 }
             } finally {
                 keepAlive.release()
@@ -769,11 +780,18 @@ class P2PSessionManager @Inject constructor(
                 // 刚醒来这轮不判死，但**照样发 PING**：我们静默了整个休眠期，对端正在盘算我们是不是死了，
                 // 越早证明自己还在越好。
                 if (!justWoke && now - maxOf(lastInboundAt, fileActivityAt) > HEARTBEAT_TIMEOUT_MS) {
+                    CardPerf.mark(
+                        "[net] 心跳判死：静默 ${(now - maxOf(lastInboundAt, fileActivityAt)) / 1000}s" +
+                            "（末次入站 ${(now - lastInboundAt) / 1000}s 前" +
+                            (if (fileActivityAt > 0) "，末次文件帧 ${(now - fileActivityAt) / 1000}s 前" else "，无文件传输") +
+                            "）→ 主动关 socket"
+                    )
                     runCatching { session.socket.close() } // 长时间无入站=连接已死→关 socket 打断 readLine
                     break
                 }
                 // 发心跳;写失败=连接已断→关 socket,由接收循环 finally 归位状态
                 if (runCatching { writeFrame(session, generateMessageId(), PING_TYPE, "") }.isFailure) {
+                    CardPerf.mark("[net] 心跳 PING 写失败（socket 已断）→ 关 socket")
                     runCatching { session.socket.close() }
                     break
                 }
@@ -790,9 +808,11 @@ class P2PSessionManager @Inject constructor(
             try {
                 val sock = (fileServerSocket?.accept() ?: return@launch).apply { keepAlive = true }
                 channel = FileTransferChannel(sock).also { fileChannel = it }
+                CardPerf.mark("[net] 文件通道已建立（A 侧 accept）")
                 channel.receiveLoop { type, payload -> handleFileFrame(type, payload) }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 // 文件通道建立/中断不影响聊天会话；仅清空，后续发文件会失败提示。
+                CardPerf.mark("[net] 文件通道结束（A 侧）：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}")
             } finally {
                 channel?.close()
                 if (fileChannel === channel) fileChannel = null
@@ -810,8 +830,10 @@ class P2PSessionManager @Inject constructor(
                     connect(InetSocketAddress(host, FileTransferChannel.FILE_PORT), CONNECT_TIMEOUT_MS)
                 }
                 channel = FileTransferChannel(sock).also { fileChannel = it }
+                CardPerf.mark("[net] 文件通道已建立（B 侧 connect）")
                 channel.receiveLoop { type, payload -> handleFileFrame(type, payload) }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                CardPerf.mark("[net] 文件通道结束（B 侧）：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}")
             } finally {
                 channel?.close()
                 if (fileChannel === channel) fileChannel = null
@@ -873,6 +895,7 @@ class P2PSessionManager @Inject constructor(
             type = msgType, audioDurationSec = durationSec, burnAfterRead = burning, burnTtl = burnTtl
         )
         setProgress(msgId, 0f)
+        CardPerf.mark("[net] 开始接收文件（${fileSize / 1024}KB，$totalChunks 块）")
         _incomingMessages.emit(contactId)
     }
 
@@ -899,8 +922,10 @@ class P2PSessionManager @Inject constructor(
         stagingStore.close(f.handle)
         val expect = runCatching { JSONObject(P2PCrypto.decrypt(key, payload)).getString("sha256") }.getOrNull()
         if (expect != null && expect == toHex(f.digest.digest())) {
+            CardPerf.mark("[net] 接收文件完成（${f.written / 1024}KB，校验通过）")
             chatRepo.updateFileStatus(f.msgId, f.contactId, MessageStatus.RECEIVED)
         } else {
+            CardPerf.mark("[net] 接收文件失败：sha256 校验不通过（收到 ${f.written}/${f.fileSize} 字节）")
             stagingStore.delete(f.stagingPath)
             chatRepo.updateFileStatus(f.msgId, f.contactId, MessageStatus.FAILED)
         }
@@ -977,15 +1002,21 @@ class P2PSessionManager @Inject constructor(
     /** 后台读 socket：逐行解析 MessageFrame → 解密 → 分发（身份帧 / 普通消息）。对端关闭则归位状态。 */
     private fun startReceiveLoop(session: P2PSession) {
         scope.launch {
+            // 读循环怎么结束的，是判断「谁先断、为什么断」的关键一行：readLine 返回 null = 对端**主动**关了
+            // socket（对端进程还在，是它那边的逻辑决定断的）；抛异常 = 本端关了 socket（心跳判死/主动拆会话，
+            // 前面会有对应的 `[net]` 行）或链路断了。日志里若两种都没有、直接停在这里，那就是进程被打死了。
+            var ending = "对端关闭连接（readLine 返回 null）"
             try {
                 while (true) {
                     val line = session.reader.readLine() ?: break // null = 对端关闭
                     lastInboundAt = System.currentTimeMillis() // 任意入站帧都视为存活（含 PING/PONG）
                     handleIncoming(line)
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 // socket 被 disconnect() 关闭或断网，正常结束循环
+                ending = "读循环异常：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}"
             } finally {
+                CardPerf.mark("[net] 读循环结束：$ending")
                 onPeerDisconnected()
             }
         }
@@ -1073,6 +1104,7 @@ class P2PSessionManager @Inject constructor(
     /** 接收循环结束（对端断开）：若非主动 disconnect，归位为 DISCONNECTED 并抹密钥。 */
     private fun onPeerDisconnected() {
         if (_connectionState.value == ConnectionState.CONNECTED) {
+            CardPerf.mark("[net] 会话结束 → DISCONNECTED（读循环退出后归位）")
             heartbeatJob?.cancel(); heartbeatJob = null
             _activeSession.value?.sessionKey?.fill(0)
             _activeSession.value = null
@@ -1083,7 +1115,11 @@ class P2PSessionManager @Inject constructor(
     }
 
     /** 断开连接并清理：销毁会话密钥（v4 验收「断开后会话密钥清除」）+ 清临时私钥。 */
-    fun disconnect() {
+    @JvmOverloads
+    fun disconnect(reason: String = "调用方主动断开") {
+        if (_activeSession.value != null || _connectionState.value != ConnectionState.DISCONNECTED) {
+            CardPerf.mark("[net] 主动拆会话：$reason")
+        }
         heartbeatJob?.cancel(); heartbeatJob = null
         _activeSession.value?.let { session ->
             session.sessionKey.fill(0) // 抹掉内存中的会话密钥

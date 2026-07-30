@@ -409,7 +409,7 @@ class ChatViewModel @Inject constructor(
      * → 后台开始监听对端连入。返回 JSON 供渲染二维码。每次重新出码都会重置会话。
      */
     suspend fun prepareConnection(): String {
-        p2pManager.disconnect() // 关旧 ServerSocket/会话，避免端口占用与状态残留
+        p2pManager.disconnect("重新出码：关旧 ServerSocket/会话") // 避免端口占用与状态残留
         val info = p2pManager.generateConnectionInfo()
         listenForPeer()
         return info.toJson()
@@ -489,6 +489,6 @@ class ChatViewModel @Inject constructor(
 
     /** 停止当前连接/监听（离开扫码屏且未连上时调用，释放 ServerSocket）。 */
     fun stopConnection() {
-        p2pManager.disconnect()
+        p2pManager.disconnect("离开扫码屏，停止监听")
     }
 }

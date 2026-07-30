@@ -11,36 +11,30 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * 卡层耗时诊断（鸿蒙 mate40 登录/进主界面慢的定位工具）。
+ * 现场诊断日志：**专注于「聊天会话为什么断了」**（2026-07-30 收窄；此前是鸿蒙 mate40 登录慢的卡层计时工具，
+ * 客户升级系统后慢的问题消失，各调用点的 `time()` 包裹已整体撤除）。
  *
- * 卡操作全走同一把 `synchronized(fsShell)` 全局锁、串行执行，鸿蒙 2.0.0 上底层 libusb 传输若慢/重试会被
- * 逐调用放大且互相排队叠加成分钟级。源码层只能排嫌疑、无法定罪——本工具给每个关键 native 调用打「起止 +
- * 毫秒」日志，**同时写到手机「下载」目录的文本文件**，客户不连电脑也能在文件管理器里找到、发回来分析。
- * 定位后整体移除（连带各调用点的 CardPerf.time 包裹）。
+ * 记什么：
+ * - `[net]`：会话建立/断开及其**原因**（心跳判死、PING 写失败、读循环怎么结束的、卡掉认证态、主动拆会话）、
+ *   文件通道起止、收发文件起止——见 `P2PSessionManager`；
+ * - `[diag]`：进程启动，以及**上次进程是怎么退出的**——见 `ProcessExitLog`；
+ * - 少量卡层**错误码**记录（开盘失败 `ret=`），不是耗时，留着是因为「登录进不去」那条线还没在真机上定案。
  *
- * 用法：进程首次用卡时 [attach] 一个 Context（[RealUsbManager] init 已接线）；再
- * `CardPerf.time("SFOpenDiskEx(auth)") { fsShell.SFOpenDiskEx(dn, hash) }` 计时。
- * 超过 [SLOW_MS] 的调用额外打一条 `SLOW`，在噪声里一眼挑出瓶颈。
+ * **为什么这份日志能定案**：断连只有两种可能——App 自己断的（日志里必有一行 `[net]` 说明原因），或者进程被
+ * 打死了（App 一行都写不出，但下次启动时 `[diag] 上次退出` 会点名原因）。两者在日志里长得完全不一样。
  *
- * 文件位置：`下载/midun_perf_<启动时刻>.log`（每次进程启动一份，避免覆盖上一轮）。每个节点整表重写，
- * 一次登录只有几十行，重写开销可忽略。
+ * 写在手机「下载」目录的文本文件里，客户不连电脑也能在文件管理器找到、直接发回来。
+ * 文件位置：`下载/midun_perf_<启动时刻>.log`（每次进程启动一份，避免覆盖上一轮）。每条即时整表重写并刷盘，
+ * 保证进程被杀也不丢已写的行——这正是排查崩溃时最需要的性质。
  */
 object CardPerf {
     private const val TAG = "MiDunPerf"
-    private const val SLOW_MS = 1_000L
     private const val FILE_PREFIX = "midun_perf_"
 
     private val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
     private val lines = StringBuilder()
-
-    /** 实时耗时文本，供登录页驱动模式面板显示（测试人员切模式后直接看数字，不必翻「下载」目录 log）。 */
-    private val _log = MutableStateFlow("")
-    val log: StateFlow<String> = _log.asStateFlow()
 
     @Volatile private var appContext: Context? = null
     @Volatile private var fileUri: Uri? = null // Android 10+ MediaStore 目标（Q 以下走直接文件）
@@ -50,38 +44,16 @@ object CardPerf {
         if (appContext == null) appContext = ctx.applicationContext
     }
 
-    /** 计时执行 [block]，返回其结果；耗时记入日志（慢调用额外标 SLOW）。异常也计时并原样抛出。 */
-    inline fun <T> time(label: String, block: () -> T): T {
-        val start = System.currentTimeMillis()
-        try {
-            val result = block()
-            log(label, start, ok = true)
-            return result
-        } catch (e: Throwable) {
-            log("$label!ERR(${e.javaClass.simpleName})", start, ok = false)
-            throw e
-        }
-    }
-
-    /** 记一条即时事件点（无耗时，仅标时间线，如「AUTHENTICATED 已发布」）。 */
+    /** 记一条事件（带时刻）。同时打一份到 logcat，方便能连电脑时直接看。 */
     fun mark(label: String) {
         record("· $label")
+        Log.i(TAG, label)
     }
 
-    fun log(label: String, startMs: Long, ok: Boolean) {
-        val ms = System.currentTimeMillis() - startMs
-        record("${if (ok) "" else "✗ "}$label = ${ms}ms" + if (ms >= SLOW_MS) "   <<< SLOW" else "")
-        Log.i(TAG, "$label = ${ms}ms")
-    }
-
-    /**
-     * 追加一行并即时刷盘。写的是手机「下载」目录、不碰卡的 fsShell 锁 → 不会污染被测调用的耗时；
-     * 每行都落盘保证 App 中途被杀也不丢日志。
-     */
+    /** 追加一行并即时刷盘。写的是手机「下载」目录，不碰卡的 fsShell 锁。 */
     @Synchronized
     private fun record(line: String) {
         lines.append(now()).append("  ").append(line).append('\n')
-        _log.value = lines.toString()
         flush()
     }
 

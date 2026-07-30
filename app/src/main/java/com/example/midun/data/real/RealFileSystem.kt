@@ -54,8 +54,8 @@ class RealFileSystem @Inject constructor(
     private var folderPolicies: MutableMap<String, CopyPolicy>? = null
 
     override suspend fun getFolders(): List<FileItem> = withContext(Dispatchers.IO) {
-        val policies = CardPerf.time("getFolders.loadPolicies(读元数据)") { loadPolicies() }
-        CardPerf.time("getFolders.listEntries(列文件夹)") { listEntries(ROOT, dirs = true) }.map { name ->
+        val policies = loadPolicies()
+        listEntries(ROOT, dirs = true).map { name ->
             val path = ROOT + name
             FileItem(
                 id = path,
