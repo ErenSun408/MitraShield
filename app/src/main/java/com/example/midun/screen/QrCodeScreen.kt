@@ -47,6 +47,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
+import com.example.midun.util.rememberNetworkHint
 import com.example.midun.viewmodel.ChatViewModel
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
@@ -114,6 +115,10 @@ fun QrCodeScreen(
 
     // 真实连接状态（M10.3）：源自 P2PSessionManager 单例，A 出码后显示等待/已连接。
     val connectionState by chatViewModel.connectionState.collectAsStateWithLifecycle()
+
+    // 底部网络提示条：文案随网络实时变化；叉掉后本次停留在本页期间不再出现（重进本页会重新显示）。
+    val networkHint = rememberNetworkHint()
+    var showNetworkHint by remember { mutableStateOf(true) }
 
     // 离开本屏时：若未建立连接，停止监听释放 ServerSocket；已连接则保留会话供后续聊天（M10.4）。
     DisposableEffect(Unit) {
@@ -195,6 +200,13 @@ fun QrCodeScreen(
                     navigationIconContentColor = Color.White
                 )
             )
+        },
+        // 底部网络提示条（客户需求 2026-07-31）：当前跨网直连只在电信数据↔电信数据之间实测通过，故在建联页
+        // 提示本机接入类型与对端所需类型。**纯提示，不参与任何连接判定**；可叉掉（本次进入本页内不再显示）。
+        bottomBar = {
+            if (showNetworkHint) {
+                NetworkHintBar(text = networkHint, onDismiss = { showNetworkHint = false })
+            }
         }
     ) { padding ->
         // 出码前只剩一颗按钮（连接信息卡已删）→ 该状态不滚动、用 weight 留白把按钮压到页面中间（客户要求）；
@@ -639,3 +651,45 @@ private fun CameraPreview(
     )
 }
 
+
+/**
+ * 底部网络提示条（客户需求 2026-07-31）：一行文案 + 一个叉。
+ *
+ * 只讲「本端现在是什么网、对端需要是什么网」，并明确标注仅供参考——能不能通最终由实测决定，
+ * 不能让这行字被当成承诺。**不参与任何连接判定**，叉掉也不影响功能。
+ */
+@Composable
+private fun NetworkHintBar(text: String, onDismiss: () -> Unit) {
+    Surface(color = Surface, tonalElevation = 2.dp) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Info,
+                contentDescription = null,
+                tint = TextSecondary,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text,
+                color = TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "关闭提示",
+                    tint = TextSecondary,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    }
+}

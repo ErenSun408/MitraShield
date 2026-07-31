@@ -471,15 +471,19 @@ class ChatViewModel @Inject constructor(
      * 而那句对 `ECONNREFUSED`（包已到达对方、只是没人监听）是**说反的**，对 `EHOSTUNREACH`/`ENETUNREACH`
      * 也没点破缺的是什么。用户读完不知道下一步该干嘛，就只能反复重扫。
      */
+    @Suppress("UNUSED_PARAMETER") // info 仅被下方注释掉的诊断块使用，恢复时即用得上
     private fun friendlyConnectError(e: Throwable, info: ConnectionInfo): String {
-        val diag = p2pManager.networkDiagnostics()
+        // val diag = p2pManager.networkDiagnostics() // 连同下面的诊断块一起收起
         // 一条候选地址都够不着：连 SYN 都没发，谈不上「超时/路由不可达」，直接说缺的是哪一端的 IPv6。
         if (e is P2PSessionManager.NoRoutableAddressException) {
-            return buildString {
-                appendLine(e.message)
-                appendLine("· 对端地址：${info.candidates().joinToString("、")}")
-                append("· 本机地址：${diag.selectedAddress}")
-            }
+            return e.message.orEmpty()
+            // 诊断细节暂时收起（客户 2026-07-31：弹窗只留原因）。排查时把下面三行放回来即可，
+            // 同样的信息也仍然写在「下载」目录的诊断日志里（`[net] 建立连接失败：…`）。
+            // return buildString {
+            //     appendLine(e.message)
+            //     appendLine("· 对端地址：${info.candidates().joinToString("、")}")
+            //     append("· 本机地址：${diag.selectedAddress}")
+            // }
         }
         // 按 errno 分流。Android 把这三种都包成 ConnectException，差别只在 message 里的 errno 名——
         // 类型判不出来，只能按串匹配（2026-07-31 现场实证的两条原文：
@@ -501,12 +505,15 @@ class ChatViewModel @Inject constructor(
                 "对方设备未在监听。邀请码可能已失效，请让对方重新生成后再扫。"
             else -> "连接失败：${e.javaClass.simpleName}。"
         }
-        return buildString {
-            appendLine(cause)
-            appendLine("· 目标地址：${info.candidates().joinToString("、")}")
-            appendLine("· 本机地址：${diag.selectedAddress}")
-            append("· 底层异常：${e.javaClass.simpleName}: ${e.message ?: "无附加信息"}")
-        }
+        return cause
+        // 诊断细节暂时收起（客户 2026-07-31：弹窗只留原因，地址/异常这些对用户没有意义）。
+        // 排查时把下面几行放回来即可；这些信息本来也都在「下载」目录的诊断日志里。
+        // return buildString {
+        //     appendLine(cause)
+        //     appendLine("· 目标地址：${info.candidates().joinToString("、")}")
+        //     appendLine("· 本机地址：${diag.selectedAddress}")
+        //     append("· 底层异常：${e.javaClass.simpleName}: ${e.message ?: "无附加信息"}")
+        // }
     }
 
     /** 停止当前连接/监听（离开扫码屏且未连上时调用，释放 ServerSocket）。 */
