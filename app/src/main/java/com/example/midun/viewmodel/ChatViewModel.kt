@@ -471,6 +471,14 @@ class ChatViewModel @Inject constructor(
      */
     private fun friendlyConnectError(e: Throwable, info: ConnectionInfo): String {
         val diag = p2pManager.networkDiagnostics()
+        // 一条候选地址都够不着：连 SYN 都没发，谈不上「超时/路由不可达」，直接说缺的是哪一端的 IPv6。
+        if (e is P2PSessionManager.NoRoutableAddressException) {
+            return buildString {
+                appendLine(e.message)
+                appendLine("· 对端地址：${info.candidates().joinToString("、")}")
+                append("· 本机地址：${diag.selectedAddress}")
+            }
+        }
         val cause = when (e) {
             is java.net.SocketTimeoutException ->
                 //SYN 已发出但对方未回——多为对方入站被防火墙拦截，或对方未在监听。

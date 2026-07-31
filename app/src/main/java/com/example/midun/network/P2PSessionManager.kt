@@ -51,6 +51,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -305,10 +306,14 @@ class P2PSessionManager @Inject constructor(
     suspend fun generateConnectionInfo(): ConnectionInfo = withContext(Dispatchers.IO) {
         val keyPair = P2PCrypto.generateEcKeyPair()
         listenerKeyPair = keyPair
+        val scan = scanAddresses()
+        // 全部候选，局域网 IPv4 在前（同网时最快）、公网 IPv6 在后（跨网时唯一的指望）。见 ConnectionInfo.addresses。
+        val candidates = listOfNotNull(scan.wifiV4, scan.globalV6)
         ConnectionInfo(
             version = 1,
             deviceSn = currentDeviceSn(),
-            ipv6 = getLocalReachableAddress(), // 可能是 WiFi 局域网 IPv4 或公网 IPv6（字段名沿用 ipv6）
+            ipv6 = candidates.firstOrNull() ?: "::1", // 首选地址；旧版客户端只认这个字段
+            addresses = candidates,
             sessionId = generateRandomHex(8),
             // 压缩公钥（33 字节，需求规格）→ Base64，替换原 X.509(SPKI ~91 字节)，二维码更小。
             tempPublicKey = Base64.encodeToString(P2PCrypto.compressPublicKey(keyPair.public), Base64.NO_WRAP),
@@ -352,11 +357,7 @@ class P2PSessionManager @Inject constructor(
         withContext(Dispatchers.IO) {
             _connectionState.value = ConnectionState.CONNECTING
             try {
-                // 显式连接超时：不可达/对方未监听时快速失败（默认无超时会卡到系统级 ~分钟）。
-                val socket = Socket().apply {
-                    keepAlive = true
-                    connect(InetSocketAddress(info.ipv6, port), CONNECT_TIMEOUT_MS)
-                }
+                val (socket, usedHost) = connectToFirstReachable(info, port)
                 val handshaken = performConnectorHandshake(socket, info.tempPublicKey)
                 val (contactId, _) = bindContact(info.deviceSn, remark)
                 val session = handshaken.copy(contactId = contactId)
@@ -364,7 +365,7 @@ class P2PSessionManager @Inject constructor(
                 _connectionState.value = ConnectionState.CONNECTED
                 CardPerf.mark("[net] 会话建立（本机扫码方 B）→ CONNECTED")
                 onSessionEstablished(session)
-                establishFileChannelAsConnector(info.ipv6) // B 侧：连接文件通道端口
+                establishFileChannelAsConnector(usedHost) // B 侧：文件通道走**刚刚连通的那个**地址
                 Result.success(session)
             } catch (e: Exception) {
                 CardPerf.mark("[net] 建立连接失败：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}")
@@ -372,6 +373,75 @@ class P2PSessionManager @Inject constructor(
                 Result.failure(e)
             }
         }
+
+    /**
+     * 在对端通告的候选地址里挑出**本机确实够得着**的，逐个连，返回首个连通的 socket 及其地址。
+     *
+     * 先筛再连，不盲试（`[network]` 2026-07-31）：
+     * - 对端的**私网 IPv4** 只在「本机也有局域网地址且同网段」时才试——不同网时它必然不可达，试它只是白等
+     *   一个超时（现场日志里就是 10 秒）；
+     * - 对端的**公网 IPv6** 只在本机有 IPv6 出站路由时才试——没有就是立刻 ENETUNREACH。
+     *
+     * 一条都筛不出来 → 抛 [NoRoutableAddressException]，由 UI 直接说清楚是哪一端没有 IPv6，
+     * 而不是让用户对着一串 ConnectException 反复重扫。
+     *
+     * 每个候选给 [ATTEMPT_TIMEOUT_MS]（短于原来的单地址 10 秒），两个候选轮完也不比过去慢。
+     */
+    private fun connectToFirstReachable(info: ConnectionInfo, port: Int): Pair<Socket, String> {
+        val local = scanAddresses()
+        val peers = info.candidates()
+        val reachable = peers.filter { canReach(it, local) }
+        if (reachable.isEmpty()) throw NoRoutableAddressException(unreachableReason(peers, local))
+
+        var last: Exception? = null
+        for (host in reachable) {
+            try {
+                val socket = Socket().apply {
+                    keepAlive = true
+                    // 显式连接超时：不可达/对方未监听时快速失败（默认无超时会卡到系统级 ~分钟）。
+                    connect(InetSocketAddress(host, port), ATTEMPT_TIMEOUT_MS)
+                }
+                return socket to host
+            } catch (e: Exception) {
+                CardPerf.mark("[net] 候选地址连接失败 $host：${e.javaClass.simpleName}")
+                last = e
+            }
+        }
+        throw last ?: NoRoutableAddressException(unreachableReason(peers, local))
+    }
+
+    /**
+     * 本机能否走到这个对端地址：私网 IPv4 要求本机也在局域网上，公网 IPv6 要求本机有 v6 出站路由。
+     *
+     * 刻意**不**比对网段：网段不同未必不可达（网关互通、非 /24 掩码都可能），而误判的代价是「本可连通却
+     * 拒绝尝试」，还会连带报出一句错误的原因；判错的代价远大于多等一个 [ATTEMPT_TIMEOUT_MS]。这里只挡住
+     * 「本机压根没有局域网/没有 v6」这类**确定**不可达的情形——现场那 10 秒白等正是这一类。
+     */
+    private fun canReach(host: String, local: AddressScan): Boolean {
+        val addr = runCatching { InetAddress.getByName(host) }.getOrNull() ?: return false
+        return when {
+            addr is Inet4Address && addr.isSiteLocalAddress -> local.wifiV4 != null
+            addr is Inet6Address && isGlobalUnicast(addr) -> local.globalV6 != null
+            else -> false // 回环/链路本地/占位 ::1 等，连了也没用
+        }
+    }
+
+    /** 一条候选都走不通时，说清楚缺的是谁的 IPv6——这是用户唯一能据以行动的信息。 */
+    private fun unreachableReason(peers: List<String>, local: AddressScan): String {
+        val peerHasV6 = peers.any { host ->
+            val a = runCatching { InetAddress.getByName(host) }.getOrNull()
+            a is Inet6Address && isGlobalUnicast(a)
+        }
+        val localHasV6 = local.globalV6 != null
+        return when {
+            !peerHasV6 && !localHasV6 -> "双端设备均未获取到 IPv6 地址，无法建立连接。"
+            !localHasV6 -> "本端设备未获取到 IPv6 地址，无法建立连接。"
+            else -> "对端设备未获取到 IPv6 地址，无法建立连接。"
+        }
+    }
+
+    /** 对端候选地址全都不可达（连 SYN 都不必发）。消息即给用户看的原因，见 [unreachableReason]。 */
+    class NoRoutableAddressException(message: String) : IOException(message)
 
     /**
      * A 侧握手：用暂存的临时私钥 + 对端经 socket 发来的公钥派生会话密钥。
@@ -1262,6 +1332,9 @@ class P2PSessionManager @Inject constructor(
         const val BURN_TYPE = "BURN"
         /** TCP 连接超时（ms）：不可达/对方未监听时快速失败。 */
         private const val CONNECT_TIMEOUT_MS = 10_000
+
+        /** 单个候选地址的连接超时（ms）：候选是逐个试的，单个给短些，两个轮完也不比过去的 10 秒久。 */
+        private const val ATTEMPT_TIMEOUT_MS = 6_000
         /** 心跳帧（`[network]` 保活）：本端探活发 PING，对端回 PONG；payload 为空。 */
         private const val PING_TYPE = "PING"
         private const val PONG_TYPE = "PONG"
@@ -1295,8 +1368,21 @@ data class ConnectionInfo(
     val ipv6: String,
     val sessionId: String,
     val tempPublicKey: String,
-    val expiresAt: Long
+    val expiresAt: Long,
+    /**
+     * 出码方的**全部**候选地址，按优先级排（局域网 IPv4 在前、公网 IPv6 在后）。
+     *
+     * 原先只带一个地址（[ipv6] 字段，实际可能是 IPv4），于是两端网络一旦不同，这唯一的地址必然踩空，
+     * 而另一条本可走通的路连试都没试过（2026-07-31 现场：Wi-Fi 那台通告 192.168.31.69，蜂窝那台够不着；
+     * 蜂窝那台通告公网 IPv6，Wi-Fi 那台没有 v6 路由 → 双向死锁）。带全部候选，由扫码方挑能走的那条。
+     *
+     * 兼容：旧版二维码没有本字段 → 解析出空表，[candidates] 回退到 [ipv6] 单地址，行为同旧版。
+     */
+    val addresses: List<String> = emptyList()
 ) {
+    /** 可尝试的对端地址表（新版取 [addresses]，旧版二维码回退到单个 [ipv6]）。 */
+    fun candidates(): List<String> = addresses.ifEmpty { listOf(ipv6) }
+
     fun toJson(): String = JSONObject().apply {
         put("ver", version)
         put("sn", deviceSn)
@@ -1304,6 +1390,7 @@ data class ConnectionInfo(
         put("sid", sessionId)
         put("tpk", tempPublicKey)
         put("exp", expiresAt)
+        if (addresses.isNotEmpty()) put("addrs", JSONArray(addresses))
     }.toString()
 
     companion object {
@@ -1314,7 +1401,10 @@ data class ConnectionInfo(
                 ipv6 = getString("ipv6"),
                 sessionId = getString("sid"),
                 tempPublicKey = getString("tpk"),
-                expiresAt = getLong("exp")
+                expiresAt = getLong("exp"),
+                addresses = optJSONArray("addrs")?.let { arr ->
+                    (0 until arr.length()).mapNotNull { arr.optString(it).takeIf(String::isNotBlank) }
+                }.orEmpty()
             )
         }
     }

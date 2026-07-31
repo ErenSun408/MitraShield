@@ -375,7 +375,9 @@ fun QrCodeScreen(
                             onError = { msg ->
                                 connecting = false
                                 connectError = msg
-                                scanned = false // 允许重扫
+                                // 这里**不**解禁扫描：错误弹窗弹出时相机仍在取景、码还在画面里，一解禁就会
+                                // 立刻重扫→重连→再失败→弹窗刷新，循环刷屏（2026-07-31 现场日志：跨网时
+                                // 每次立即 ENETUNREACH，200ms 一轮连刷 17 次）。改为关弹窗时才允许重扫。
                             }
                         )
                     }
@@ -401,15 +403,19 @@ fun QrCodeScreen(
         )
     }
 
-    // 连接失败：提示原因，关闭后可重扫（scanned 已置 false）。
+    // 连接失败：提示原因。**关掉弹窗才解禁扫描**——见 onError 处说明，否则弹窗期间会被同一个码反复触发。
     connectError?.let { msg ->
+        val dismiss = {
+            connectError = null
+            scanned = false // 此刻才允许重扫
+        }
         AlertDialog(
-            onDismissRequest = { connectError = null },
+            onDismissRequest = dismiss,
             icon = { Icon(Icons.Default.ErrorOutline, null, tint = Danger) },
             title = { Text("连接失败") },
             text = { Text(msg, color = TextSecondary, fontSize = 12.sp) },
             confirmButton = {
-                TextButton(onClick = { connectError = null }) { Text("知道了", color = Primary) }
+                TextButton(onClick = dismiss) { Text("知道了", color = Primary) }
             }
         )
     }
