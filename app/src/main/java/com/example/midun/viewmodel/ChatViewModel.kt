@@ -465,9 +465,11 @@ class ChatViewModel @Inject constructor(
     fun networkDiagnostics(): P2PSessionManager.NetworkDiagnostics = p2pManager.networkDiagnostics()
 
     /**
-     * 把底层 socket 异常翻译成可读的连接失败提示，并**附带真实诊断细节**（M10.6 排障强化）：
-     * 底层异常类名+message、目标 IPv6、本机出站 IPv6 及是否有公网全局地址。用于真机定位
-     * ENETUNREACH（本机/对方无可路由公网 IPv6）vs 超时（对方入站被防火墙拦）vs 拒绝。
+     * 把底层 socket 异常翻译成可读的连接失败提示，并附带真实诊断细节（M10.6 排障强化）。
+     *
+     * 四种失败要分开说（`[network]` 2026-07-31）：原先只把超时单列，其余一律「本机路由无法抵达目标地址」，
+     * 而那句对 `ECONNREFUSED`（包已到达对方、只是没人监听）是**说反的**，对 `EHOSTUNREACH`/`ENETUNREACH`
+     * 也没点破缺的是什么。用户读完不知道下一步该干嘛，就只能反复重扫。
      */
     private fun friendlyConnectError(e: Throwable, info: ConnectionInfo): String {
         val diag = p2pManager.networkDiagnostics()
@@ -479,17 +481,29 @@ class ChatViewModel @Inject constructor(
                 append("· 本机地址：${diag.selectedAddress}")
             }
         }
-        val cause = when (e) {
-            is java.net.SocketTimeoutException ->
-                //SYN 已发出但对方未回——多为对方入站被防火墙拦截，或对方未在监听。
-                "连接超时：目标未响应。"
-            else ->
-                //跨蜂窝网络的公网 IPv6 常被运营商挡死；同一 WiFi 下不受影响。"
-                "连接失败：本机路由无法抵达目标地址。"
+        // 按 errno 分流。Android 把这三种都包成 ConnectException，差别只在 message 里的 errno 名——
+        // 类型判不出来，只能按串匹配（2026-07-31 现场实证的两条原文：
+        // `…isConnected failed: EHOSTUNREACH (No route to host)` / `…connect failed: ENETUNREACH (Network is unreachable)`）。
+        val errno = generateSequence(e as Throwable?) { it.cause }.mapNotNull { it.message }.joinToString(" ")
+        val cause = when {
+            e is java.net.SocketTimeoutException ->
+                // SYN 发出去了但对方没回：多为对方所在网络（家用路由器的 IPv6 防火墙、运营商）拦了入站。
+                "连接超时：目标未响应。对方所在网络可能拦截了入站连接。"
+            errno.contains("EHOSTUNREACH") ->
+                // 目标地址在本机所处的网络里问不到人。跨网时最常见的成因是两家路由器都用 192.168.1.x，
+                // 扫码方拿着对端的私网地址在**自己家**的网里 ARP（2026-07-31 现场即此）。
+                "目标设备在当前网络中无响应。若两台设备不在同一 Wi-Fi 下，私网地址无法跨网络访问——" +
+                    "跨网络连接需要双方都获取到 IPv6 地址。"
+            errno.contains("ENETUNREACH") ->
+                "本机没有可抵达该地址的网络。目标为 IPv6 地址时，说明本端设备未获取到 IPv6。"
+            errno.contains("ECONNREFUSED") ->
+                // 包到了对方手机，只是 8888 没人监听——和路由毫无关系，旧文案在这里是彻底说反的。
+                "对方设备未在监听。邀请码可能已失效，请让对方重新生成后再扫。"
+            else -> "连接失败：${e.javaClass.simpleName}。"
         }
         return buildString {
             appendLine(cause)
-            appendLine("· 目标地址：${info.ipv6}")
+            appendLine("· 目标地址：${info.candidates().joinToString("、")}")
             appendLine("· 本机地址：${diag.selectedAddress}")
             append("· 底层异常：${e.javaClass.simpleName}: ${e.message ?: "无附加信息"}")
         }
