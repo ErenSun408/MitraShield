@@ -71,6 +71,9 @@ class ChatViewModel @Inject constructor(
     /** 出码方（A）对端身份确定事件 `(contactId, isNew)`：QR 屏据此弹备注（新建）或直接进会话（已是好友）。 */
     val peerIdentified = p2pManager.peerIdentified
 
+    /** 出码方侧的连接失败原因（对端已连入但握手失败），供邀请码页弹失败弹窗。 */
+    val listenerError = p2pManager.listenerError
+
     // 当前活动会话绑定的 contactId（M10.6）：会话详情据此判断「本会话是否已连接」以驱动加密横幅。
     val activeContactId: StateFlow<String?> =
         p2pManager.activeSession

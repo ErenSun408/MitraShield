@@ -136,6 +136,12 @@ fun QrCodeScreen(
         }
     }
 
+    // A（出码方）：对端已连入但握手失败 → 弹与扫码端同款的失败弹窗（复用 connectError）。
+    // 注意只有「已经连到本机」的失败才会到这儿；对端根本没连通的失败 A 侧看不到，只能由扫码端自己报。
+    LaunchedEffect(Unit) {
+        chatViewModel.listenerError.collect { msg -> connectError = msg }
+    }
+
     LaunchedEffect(qrGenerated) {
         if (qrGenerated) {
             while (countdown > 0) {
@@ -325,6 +331,12 @@ fun QrCodeScreen(
                             CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp), color = Primary)
                             Spacer(Modifier.width(8.dp))
                             Text("等待对方扫码连接…", color = TextSecondary, fontSize = 13.sp)
+                        }
+                        // 对端已落到 accept、正在握手（客户需求 2026-07-31：出码方也要看得见进展）。
+                        ConnectionState.CONNECTING -> Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp), color = Accent)
+                            Spacer(Modifier.width(8.dp))
+                            Text("对方连接中…", color = Primary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                         }
                         else -> {}
                     }

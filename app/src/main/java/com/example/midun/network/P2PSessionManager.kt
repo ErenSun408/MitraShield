@@ -110,6 +110,13 @@ class P2PSessionManager @Inject constructor(
     val peerIdentified: SharedFlow<Pair<String, Boolean>> = _peerIdentified.asSharedFlow()
 
     /**
+     * 出码方（A）侧的连接失败原因：对端**已经连进来了**但握手没成（见 [startListening]）。供邀请码页弹与
+     * 扫码端同款的失败弹窗。对端根本没连上来的失败不会出现在这里——那些包压根没到本机。
+     */
+    private val _listenerError = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val listenerError: SharedFlow<String> = _listenerError.asSharedFlow()
+
+    /**
      * 文件传输进度（M11.5.3）：messageId → 0f..1f。发送/接收共用，UI 观察以画进度条；完成/失败即移除。
      * 进度是瞬时态、不入库（消息本体只存 SENDING/SENT/RECEIVED/FAILED 状态）。
      */
@@ -321,7 +328,19 @@ class P2PSessionManager @Inject constructor(
         )
     }
 
-    /** 监听方（A，生成二维码）：阻塞等待对端连入并完成 ECDH 握手。 */
+    /**
+     * 监听方（A，生成二维码）：等待对端连入并完成 ECDH 握手。
+     *
+     * **出码方也要看得见进展**（客户需求 2026-07-31）：对端一落到 accept，状态就转 [ConnectionState.CONNECTING]
+     * （UI 显示「对方连接中…」），握手成功才转 CONNECTED。握手途中失败的原因经 [listenerError] 报给 UI，
+     * 弹与扫码端同款的失败弹窗。
+     *
+     * ⚠️ 能看见的只有「已经到达本机的事」：对端若是 `EHOSTUNREACH`/超时之类**根本没打通**的失败，一个包都
+     * 到不了这里，A 侧原理上无从知晓，只会继续显示等待——那种情况只能由扫码端自己报。
+     *
+     * **握手失败不再让监听死掉**：原实现 accept 一次就结束，握手一抛异常整个监听就没了，而二维码还挂在屏幕上，
+     * 对端再扫只会收到 ECONNREFUSED（「对方设备未在监听」）。现在改成循环 accept，失败一次接着等下一次。
+     */
     suspend fun startListening(port: Int = 8888, onConnected: (P2PSession) -> Unit) {
         withContext(Dispatchers.IO) {
             try {
@@ -330,15 +349,32 @@ class P2PSessionManager @Inject constructor(
                 // 文件通道端口提前绑定：B 握手后会立即 connect，提前 bind 让其入 backlog、避免 accept 时序竞态。
                 fileServerSocket = ServerSocket(FileTransferChannel.FILE_PORT)
                 _connectionState.value = ConnectionState.LISTENING
-                val socket = server.accept().apply { keepAlive = true } // 阻塞；disconnect() 关闭 server 会以异常打断
-                val session = performListenerHandshake(socket)
-                _activeSession.value = session
-                _connectionState.value = ConnectionState.CONNECTED
-                CardPerf.mark("[net] 会话建立（本机监听方 A）→ CONNECTED")
-                onConnected(session)
-                // A 侧联系人在收到 B 的 IDENTITY 帧后才建（A 事先不知对端身份）。
-                onSessionEstablished(session)
-                establishFileChannelAsListener() // A 侧：accept 文件通道连接
+                while (true) {
+                    val socket = server.accept().apply { keepAlive = true } // 阻塞；disconnect() 关闭 server 会以异常打断
+                    _connectionState.value = ConnectionState.CONNECTING
+                    CardPerf.mark("[net] 对端已连入，开始握手")
+                    val session = try {
+                        // 握手期间给读超时：对端连上却不发公钥（半开连接/异常退出）时不能把 accept 循环卡死。
+                        socket.soTimeout = HANDSHAKE_TIMEOUT_MS
+                        performListenerHandshake(socket).also { socket.soTimeout = 0 }
+                    } catch (e: Exception) {
+                        runCatching { socket.close() }
+                        CardPerf.mark("[net] 握手失败：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}")
+                        _listenerError.emit(
+                            "对方已连接，但安全握手失败。邀请码可能已过期或已被重新生成，请重新生成邀请码后再试。"
+                        )
+                        _connectionState.value = ConnectionState.LISTENING // 继续等下一次连入
+                        continue
+                    }
+                    _activeSession.value = session
+                    _connectionState.value = ConnectionState.CONNECTED
+                    CardPerf.mark("[net] 会话建立（本机监听方 A）→ CONNECTED")
+                    onConnected(session)
+                    // A 侧联系人在收到 B 的 IDENTITY 帧后才建（A 事先不知对端身份）。
+                    onSessionEstablished(session)
+                    establishFileChannelAsListener() // A 侧：accept 文件通道连接
+                    break // 会话已建立，不再接受新的连入
+                }
             } catch (e: Exception) {
                 // accept 被 disconnect() 主动关闭打断属正常拆除，不标 FAILED
                 if (_connectionState.value != ConnectionState.CONNECTED) {
@@ -1335,6 +1371,9 @@ class P2PSessionManager @Inject constructor(
 
         /** 单个候选地址的连接超时（ms）：候选是逐个试的，单个给短些，两个轮完也不比过去的 10 秒久。 */
         private const val ATTEMPT_TIMEOUT_MS = 6_000
+
+        /** 握手读超时（ms）：对端连上却不发公钥时，别把 A 的 accept 循环永久卡住。 */
+        private const val HANDSHAKE_TIMEOUT_MS = 10_000
         /** 心跳帧（`[network]` 保活）：本端探活发 PING，对端回 PONG；payload 为空。 */
         private const val PING_TYPE = "PING"
         private const val PONG_TYPE = "PONG"
