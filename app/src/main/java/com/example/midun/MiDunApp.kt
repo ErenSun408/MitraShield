@@ -11,6 +11,7 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 import com.example.midun.data.SecurityCardManager
 import com.example.midun.data.real.CardPerf
+import com.example.midun.diag.NetworkEventLog
 import com.example.midun.diag.ProcessExitLog
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
@@ -53,6 +54,7 @@ class MiDunApp : Application() {
         CardPerf.attach(this)
         CardPerf.mark("[diag] 进程启动")
         ProcessExitLog.logLastExit(this)
+        NetworkEventLog.start(this) // 网络丢失/切换/IP 变更 —— 断连时刻旁边有没有它，是定案的关键
         ContextCompat.registerReceiver(
             this,
             detachReceiver,

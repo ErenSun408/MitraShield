@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 网络事件诊断（NetworkEventLog）：监听默认网络的丢失/切换/IP 变更。安装时权限，无弹窗。 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- M11.1：FSShell SDK 底层用 libusb 操作 usbfs，部分严格系统需此权限访问 /dev/bus/usb（非必需项）。 -->
