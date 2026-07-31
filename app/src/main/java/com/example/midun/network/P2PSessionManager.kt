@@ -307,8 +307,8 @@ class P2PSessionManager @Inject constructor(
         val keyPair = P2PCrypto.generateEcKeyPair()
         listenerKeyPair = keyPair
         val scan = scanAddresses()
-        // 全部候选，局域网 IPv4 在前（同网时最快）、公网 IPv6 在后（跨网时唯一的指望）。见 ConnectionInfo.addresses。
-        val candidates = listOfNotNull(scan.wifiV4, scan.globalV6)
+        // 全部候选，**公网 IPv6 在前**、局域网 IPv4 兜底。见 ConnectionInfo.addresses 对顺序的说明。
+        val candidates = listOfNotNull(scan.globalV6, scan.wifiV4)
         ConnectionInfo(
             version = 1,
             deviceSn = currentDeviceSn(),
@@ -1370,11 +1370,16 @@ data class ConnectionInfo(
     val tempPublicKey: String,
     val expiresAt: Long,
     /**
-     * 出码方的**全部**候选地址，按优先级排（局域网 IPv4 在前、公网 IPv6 在后）。
+     * 出码方的**全部**候选地址，按优先级排：**公网 IPv6 在前，局域网私网 IPv4 兜底**。
      *
-     * 原先只带一个地址（[ipv6] 字段，实际可能是 IPv4），于是两端网络一旦不同，这唯一的地址必然踩空，
-     * 而另一条本可走通的路连试都没试过（2026-07-31 现场：Wi-Fi 那台通告 192.168.31.69，蜂窝那台够不着；
-     * 蜂窝那台通告公网 IPv6，Wi-Fi 那台没有 v6 路由 → 双向死锁）。带全部候选，由扫码方挑能走的那条。
+     * 顺序是这么定的（`[network]` 2026-07-31）：产品的主场景是**两人各在自己家的 Wi-Fi 下跨网通信**，
+     * 那种情况下私网 IPv4 不但没用，还有害——两家路由器几乎必然都用 `192.168.1.x`，扫码方拿着对端的
+     * `192.168.1.5` 会在**自己家的网里** ARP，要么无人应答（现场即 `EHOSTUNREACH`），要么问到自家某台
+     * 不相干的设备身上。故公网 IPv6 优先；IPv4 只在两台确实同处一个局域网、且该网络没有 IPv6 时才用得上，
+     * 留作兜底。
+     *
+     * 原先只带一个地址（[ipv6] 字段，实际可能是 IPv4），两端网络一旦不同，这唯一的地址必然踩空，而另一条
+     * 本可走通的路连试都没试过。带全部候选，由扫码方挑能走的那条。
      *
      * 兼容：旧版二维码没有本字段 → 解析出空表，[candidates] 回退到 [ipv6] 单地址，行为同旧版。
      */
