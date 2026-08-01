@@ -23,7 +23,7 @@ import com.example.midun.data.real.CardPerf
  * 断掉它的网**，TCP 被本机协议栈中止。这解释了「断连总发生在发文件时」——不是传输把连接压垮的（793KB 的文件
  * 0 秒就传完了），是**打开选取器这个动作**把 App 推到了后台。
  *
- * 已有的 [com.example.midun.network.TransferKeepAlive] 只按住 CPU 与 WiFi，改变不了「你是后台应用」这个身份，
+ * 已有的 [com.example.midun.network.SessionKeepAlive] 只按住 CPU 与 WiFi，改变不了「你是后台应用」这个身份，
  * 对这类拦截无效。前台服务是 Android 上唯一正规的解法：跑着它，进程重要度被钉在
  * [android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE]，Doze、待机分组、
  * 数据保护的后台限制以及缓存进程冻结全部不再适用。

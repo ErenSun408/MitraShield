@@ -179,8 +179,15 @@ class P2PSessionManager @Inject constructor(
         // 漏掉任何一条都会留下一个吊着进程的空壳通知；状态流是它们唯一的汇合处。
         scope.launch {
             _connectionState.collect { state ->
-                if (state == ConnectionState.CONNECTED) SessionForegroundService.start(context)
-                else SessionForegroundService.stop(context)
+                val connected = state == ConnectionState.CONNECTED
+                if (connected) SessionForegroundService.start(context) else SessionForegroundService.stop(context)
+                // 同一处一并管 CPU/WiFi 锁（`[network]` 2026-08-01）：前台服务保「网络不被系统拦」，保不了
+                // CPU 不睡；息屏深睡会让心跳停发，对端数满 60s 静默就判死。两者必须同起同落，故用一个布尔
+                // 守住配对，绝不能重复 acquire（引用计数会永远归不了零，把用户的电一直按着）。
+                if (connected != sessionHeld) {
+                    sessionHeld = connected
+                    if (connected) keepAlive.acquire() else keepAlive.release()
+                }
             }
         }
     }
@@ -288,8 +295,11 @@ class P2PSessionManager @Inject constructor(
     /** 文件发送串行化锁（M11.5.3）：一条通道上文件帧不能交错，收端单文件状态机才成立。 */
     private val fileSendMutex = Mutex()
 
-    /** 传输期间按住 CPU/WiFi，见 [TransferKeepAlive]。 */
-    private val keepAlive = TransferKeepAlive(context)
+    /** 会话/传输期间按住 CPU/WiFi，见 [SessionKeepAlive]。 */
+    private val keepAlive = SessionKeepAlive(context)
+
+    /** 会话级持锁是否已 acquire。只由 init 里那条状态流协程读写（单协程串行），故无需同步。 */
+    private var sessionHeld = false
 
     /** 发送取消标志（M11.5.3 收尾）：用户取消在途发送时置位，发送循环检测到即发 FILE_CANCEL 并中止。 */
     @Volatile private var sendCancelled = false
@@ -883,6 +893,7 @@ class P2PSessionManager @Inject constructor(
                 val tickStart = System.currentTimeMillis()
                 delay(HEARTBEAT_INTERVAL_MS)
                 if (_activeSession.value !== session) break // 会话已换/已断,本协程退场
+                keepAlive.refresh() // 续上会话级 WakeLock 的兜底超时，别让长会话聊到一半 CPU 又睡下去
                 val now = System.currentTimeMillis()
                 // 刚从休眠/冻结里回来（本轮墙钟远超名义间隔）→ 这段静默不算对端的账（`[network]` 2026-07-30）。
                 // `delay` 走的是不计深睡的时钟：CPU 睡 10 分钟，delay(20s) 也可能 10 分钟后才返回，且这期间
