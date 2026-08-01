@@ -672,7 +672,9 @@ private fun CameraPreview(
  */
 @Composable
 private fun NetworkHintBar(text: String, onDismiss: () -> Unit) {
-    Surface(color = Surface, tonalElevation = 2.dp) {
+    // 浅红底 + 红字（客户 2026-08-01）：原来的灰字灰底和页面背景几乎同色，用户根本注意不到「网络不对」这件事，
+    // 而它恰恰是建联失败最常见的原因。用 Danger 的浅色底把它从背景里拎出来，措辞不变。
+    Surface(color = DangerBg, tonalElevation = 2.dp) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -683,13 +685,13 @@ private fun NetworkHintBar(text: String, onDismiss: () -> Unit) {
             Icon(
                 Icons.Default.Info,
                 contentDescription = null,
-                tint = TextSecondary,
+                tint = Danger,
                 modifier = Modifier.size(16.dp)
             )
             Spacer(Modifier.width(8.dp))
             Text(
                 text,
-                color = TextSecondary,
+                color = Danger,
                 fontSize = 12.sp,
                 lineHeight = 16.sp,
                 modifier = Modifier.weight(1f)
@@ -698,7 +700,7 @@ private fun NetworkHintBar(text: String, onDismiss: () -> Unit) {
                 Icon(
                     Icons.Default.Close,
                     contentDescription = "关闭提示",
-                    tint = TextSecondary,
+                    tint = Danger,
                     modifier = Modifier.size(16.dp)
                 )
             }
