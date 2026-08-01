@@ -140,6 +140,21 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                // 拔卡即打回加载页（客户 2026-08-01）：原先只是「不渲染 NavGraph + 盖遮罩」，导航栈仍停在
+                // 原界面（会话/私藏…），插回卡后 NavHost 恢复的还是那一页，要等它自己跌回登录，中间会闪一下
+                // 旧界面。这里在拔卡当场就把栈清成 Splash，遮罩底下与恢复后都从加载页重新路由。
+                // NavHost 此刻已随 status 离开组合，但 NavController 是独立的状态持有者、图还在，navigate 仍生效；
+                // 万一某些时序下图已失效，runCatching 兜住即可——最差不过是退回旧行为。
+                LaunchedEffect(status) {
+                    if (status == UsbDeviceStatus.DISCONNECTED && hasConnectedBefore) {
+                        runCatching {
+                            navController.navigate(Screen.Splash.route) {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        }
+                    }
+                }
+
                 // de-auth 守卫（修复闪退根因A）：自动锁定 / 会话失效使状态从 AUTHENTICATED 跌回 CONNECTED 时，
                 // 主流程界面（Main/私藏/会话等）仍停在已 SFCloseDisk 的盘上，用户下一次卡操作会命中已关闭句柄 →
                 // 原生 SIGSEGV 崩溃。此处监听「认证态跌落且未拔卡」，导回 Splash 让其重新路由到登录页。
@@ -205,9 +220,20 @@ class MainActivity : ComponentActivity() {
                                 dismissOnClickOutside = false
                             )
                         ) {
-                            UsbDisconnectedOverlay(onCountdownFinished = {
-                                finishAndRemoveTask()
-                            })
+                            UsbDisconnectedOverlay(
+                                // 直接问系统设备表：卡插回来了就停表，不依赖广播时序。
+                                isDevicePresent = {
+                                    (getSystemService(USB_SERVICE) as? UsbManager)
+                                        ?.deviceList?.isNotEmpty() == true
+                                },
+                                onCountdownFinished = {
+                                    // 再核一次当下状态：倒计时结束与「连接刚好成功」可能撞在同一瞬间，
+                                    // 那时本层已在离开组合的路上，不该再把已恢复的 App 退掉。
+                                    if (deviceViewModel.deviceStatus.value.status == UsbDeviceStatus.DISCONNECTED) {
+                                        finishAndRemoveTask()
+                                    }
+                                }
+                            )
                         }
                     }
                 }
