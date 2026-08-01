@@ -5,15 +5,24 @@ import android.content.pm.PackageManager
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
+import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -48,6 +57,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -73,6 +83,7 @@ import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
 import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
+import com.example.midun.util.KeyboardHeightStore
 import com.example.midun.viewmodel.ChatViewModel
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -154,10 +165,41 @@ fun ChatDetailScreen(
     val density = LocalDensity.current
     val imeBottom = with(density) { WindowInsets.ime.getBottom(density).toDp() }
     val navBottom = with(density) { WindowInsets.navigationBars.getBottom(density).toDp() }
-    var lastImeHeight by remember { mutableStateOf(280.dp) }          // 记住键盘高度，面板照此高度开
-    LaunchedEffect(imeBottom) { if (imeBottom > 120.dp) lastImeHeight = imeBottom }
+    // 记住键盘高度，面板照此高度开。跨启动持久化（见 [KeyboardHeightStore]）：只活在组合里的话，本次进程内
+    // 没弹过键盘就点 ⊕，面板会按写死的猜测值展开，之后再切换就会跳一下。
+    var lastImeHeight by remember { mutableStateOf(KeyboardHeightStore.read(context).dp) }
+    // 必须等键盘**停稳**再记（`[ui]` 2026-08-01 实测定位）：收起时高度会连续经过 278→200→150→127→0，
+    // 若见到 >120 就记，最后留在手里的是「正在收起途中」的 127dp，面板从此按半个键盘的高度开。本效应随
+    // imeBottom 每次变化重启，故 delay 能走完就说明这个值已经稳定 250ms，那才是真正的键盘高度。
+    LaunchedEffect(imeBottom) {
+        if (imeBottom <= 120.dp) return@LaunchedEffect
+        delay(250)
+        lastImeHeight = imeBottom
+        KeyboardHeightStore.write(context, imeBottom.value.toInt())
+    }
+    // 关面板去弹键盘时按住面板高度，等键盘顶上来再撤（见下方 [panelHeight] 说明）。
+    var panelHold by remember { mutableStateOf(false) }
+    LaunchedEffect(panelHold, imeBottom) {
+        if (!panelHold) return@LaunchedEffect
+        // 必须等键盘**升到顶**才撤，不能只判「已经露头」：键盘才到 121dp 就撤，面板同时往下掉，掉得比键盘
+        // 升得快，max 照样塌一截——这正是「文件切键盘仍抖一下」的原因。留 8dp 容差给取整与动画末帧。
+        if (imeBottom >= lastImeHeight - 8.dp) { panelHold = false; return@LaunchedEffect }
+        delay(600) // 兜底：键盘没弹出来（被系统拦、输入法崩了）也得撤，否则空间一直空撑着
+        panelHold = false
+    }
+    /**
+     * 面板高度。**任一时刻只允许一条高度在动**（`[ui]` 2026-08-01 修抖动）：
+     *
+     * 共享空间取 `max(键盘, 面板, 导航栏)`。若键盘落与面板升同时进行，两条曲线在中点交叉——那一刻两者都只有
+     * 一半高，`max` 跟着塌一半再弹回来，就是用户看到的「切换时抖一下」。曲线怎么调都躲不开，只能错开：
+     * - **只要键盘在场，面板高度就 [snap] 瞬间切换**，视觉全交给键盘自己的升降动画，`max` 全程等于满高；
+     * - 关面板去弹键盘 → [panelHold] 把面板按住不撤，等键盘**升到顶**（或 600ms 兜底）才撤。
+     *
+     * 只有「从彻底收起态开面板」「面板直接收回底部」这两种没有键盘参与的情况才真正播放高度动画。
+     */
     val panelHeight by animateDpAsState(
-        targetValue = if (showPlusPanel) lastImeHeight else 0.dp,
+        targetValue = if (showPlusPanel || panelHold) lastImeHeight else 0.dp,
+        animationSpec = if (imeBottom > 120.dp) snap() else tween(250),
         label = "plusPanelHeight"
     )
     // 面板淡入淡出（键盘上升时淡出、下落时淡入），避免与键盘交叠的一瞬间硬切。
@@ -250,17 +292,57 @@ fun ChatDetailScreen(
     // 首次进会话**瞬时**跳到底（避免先停在最旧消息、再花约 1s 动画滚下来）；之后新消息才平滑滚动。
     // remember(contactId)：切换联系人时重置，使每个新打开的会话都先瞬时定位。
     var didInitialScroll by remember(contactId) { mutableStateOf(false) }
+    /** 未读新消息计数（用户不在底部时攒着，由右下角气泡告知）。切联系人清零。 */
+    var pendingNewCount by remember(contactId) { mutableStateOf(0) }
+    /** 列表是否已贴底。`canScrollForward` 为 false 即到底，比自己算 offset 稳。 */
+    val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
+    val lastVisibleIndex by remember {
+        derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+    }
+    LaunchedEffect(atBottom) { if (atBottom) pendingNewCount = 0 } // 自己滑回底部即销账
+
     // 同时以末条消息 id 为 key：重发会「删旧+插新」使 size 不变，但末条变化仍需滚到底。
     // 键仍取原始 messages：搜索过滤只改可见条数，不该触发「跳到底」。
     LaunchedEffect(messages.size, messages.lastOrNull()?.id) {
-        if (displayMessages.isNotEmpty()) {
-            val last = displayMessages.size - 1
-            if (!didInitialScroll) {
+        if (displayMessages.isEmpty()) return@LaunchedEffect
+        val last = displayMessages.size - 1
+        // 判据取「插入前的末条是否还看得见」（lastVisibleIndex >= last - 1）而非 [atBottom]：新消息此刻已经
+        // 插进来了，`atBottom` 必然为 false，用它会把「原本贴着底的用户」也误判成在翻历史。
+        val wasAtBottom = lastVisibleIndex >= last - 1
+        when {
+            !didInitialScroll -> {
                 listState.scrollToItem(last)
                 didInitialScroll = true
-            } else {
-                listState.animateScrollToItem(last)
             }
+            // 自己发的、或本就贴着底 → 跟到底（客户 2026-08-01 前的唯一行为）
+            messages.lastOrNull()?.isMine == true || wasAtBottom -> listState.animateScrollToItem(last)
+            // 用户正在翻历史 → 别拽他，攒进计数由气泡提示（微信同款）
+            else -> pendingNewCount++
+        }
+    }
+
+    // 键盘或 ⊕ 面板升起 → 底部始终贴住最新消息（微信同款，客户 2026-08-01）。
+    // 布局本就把列表顶起而非盖住，但列表按顶部锚定：视口从下方缩小后，最底下几条会滑出屏幕，用户还得自己往下拖。
+    //
+    // **瞬时贴底、每帧都贴，而不是播一次滚动动画**（2026-08-01 改）：`animateScrollToItem` 要真的滚过去，
+    // 沿途每条消息都得组合测量一遍——从历史深处点回输入框时要一次性趟过几十条（还含图片气泡），又正撞上键盘
+    // 升起、列表每帧重新测量，两边抢帧就是肉眼可见的卡顿。改为跟着底部空间高度每变一帧就 `scrollToItem`：
+    // 只组合目标那一屏，没有动画开销，观感是内容被键盘顶着走。
+    //
+    // 只在升起方向贴；落下时不动，免得用户刚翻上去看历史、一收键盘又被拽回来。搜索态不跟：那时列表是过滤
+    // 结果，跳到底毫无意义。
+    val inputExpanded = imeBottom > 120.dp || showPlusPanel
+    LaunchedEffect(imeBottom, panelHeight, showPlusPanel) {
+        if (!inputExpanded || searchQuery.isNotBlank() || displayMessages.isEmpty()) return@LaunchedEffect
+        listState.scrollToItem(displayMessages.size - 1)
+    }
+
+    // 手指一拖消息列表就收起键盘与 ⊕ 面板（微信同款，客户 2026-08-01）：要翻历史，先把下面那半屏还回来。
+    // judged by DragInteraction 而非 isScrollInProgress——后者连**程序滚动**也算，上面那个「升起即滚到底」
+    // 会立刻把自己触发的滚动当成用户翻页，键盘刚弹就被收掉。只认手指按下那一刻，惯性滑行不重复触发。
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start) collapseAll()
         }
     }
 
@@ -286,22 +368,22 @@ fun ChatDetailScreen(
                         )
                     } else {
                         // 顶栏左侧：联系人名 + 其下连接状态（「已加密」已按客户要求去掉，连接状态搬到它原来的位置，
-                        // 不再居中放大）。状态 14sp 常规字重——比原「已加密」10sp 大、比联系人名 16sp 小，
-                        // 主次仍是「先看是谁、再看通没通」。名过长时单行截断，避免换行撑高顶栏。
+                        // 不再居中放大）。名 17sp、状态 13sp（客户 2026-08-01 装机看过后定的）——主次拉开一档，
+                        // 仍是「先看是谁、再看通没通」。名过长时单行截断，避免换行撑高顶栏。
                         Column(modifier = Modifier.clickable { onOpenProfile() }) {
-                            Text(contact?.remark ?: "聊天", fontSize = 16.sp, maxLines = 1)
+                            Text(contact?.remark ?: "聊天", fontSize = 17.sp, maxLines = 1)
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     if (connectedHere) "已连接" else "未连接",
-                                    fontSize = 14.sp,
+                                    fontSize = 13.sp,
                                     color = if (connectedHere) Accent else Danger
                                 )
                                 // 点建连链接触发 onGoConnect（内层 clickable 消费事件，不冒泡到进资料页）。
                                 if (!connectedHere) {
-                                    Text(" · ", fontSize = 14.sp, color = Color.White.copy(0.7f))
+                                    Text(" · ", fontSize = 13.sp, color = Color.White.copy(0.7f))
                                     Text(
                                         "前往建立连接",
-                                        fontSize = 14.sp,
+                                        fontSize = 13.sp,
                                         color = Color.White,
                                         textDecoration = TextDecoration.Underline,
                                         modifier = Modifier
@@ -389,7 +471,7 @@ fun ChatDetailScreen(
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(48.dp)
+                                .height(44.dp) // 与输入框同高（客户 2026-08-01 压低输入区）
                                 .clip(RoundedCornerShape(20.dp))
                                 .background(if (recording && !cancelArmed) PrimaryLight else Surface)
                                 .pointerInput(voiceMode) {
@@ -442,19 +524,40 @@ fun ChatDetailScreen(
                             )
                         }
                     } else {
-                        OutlinedTextField(
-                            value = inputText,
-                            onValueChange = { inputText = it },
-                            placeholder = { Text("输入消息...", fontSize = 14.sp) },
-                            // 点输入框 → 键盘升起，功能面板同时收起（互斥，微信同款）。
+                        // 输入框（客户 2026-08-01「纵向宽度减小些」）：M3 的 OutlinedTextField 高度写死在
+                        // 56dp（内部 defaultMinSize + 16dp 上下内边距），高层 API 不给改内边距，故换成
+                        // BasicTextField 自绘边框——外观照旧（1dp 描边、圆角 20dp），高度落到 44dp，与左侧
+                        // 语音按钮同高。多行仍可长到 110dp。
+                        Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .heightIn(max = 120.dp)
-                                .focusRequester(inputFocusRequester)
-                                .onFocusChanged { if (it.isFocused) showPlusPanel = false },
-                            shape = RoundedCornerShape(20.dp),
-                            maxLines = 4
-                        )
+                                .heightIn(min = 44.dp, max = 110.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .border(1.dp, TextSecondary.copy(0.5f), RoundedCornerShape(20.dp))
+                                .padding(horizontal = 14.dp, vertical = 11.dp),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (inputText.isEmpty()) {
+                                Text("输入消息...", fontSize = 14.sp, color = TextSecondary)
+                            }
+                            BasicTextField(
+                                value = inputText,
+                                onValueChange = { inputText = it },
+                                textStyle = LocalTextStyle.current.copy(fontSize = 14.sp, color = TextPrimary),
+                                cursorBrush = SolidColor(Primary),
+                                maxLines = 4,
+                                // 点输入框 → 键盘升起，功能面板同时收起（互斥，微信同款）。
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(inputFocusRequester)
+                                    // 点输入框 → 面板让位给键盘，同样先按住高度再撤（见 panelHeight）。
+                                    .onFocusChanged {
+                                        if (!it.isFocused) return@onFocusChanged
+                                        if (showPlusPanel) panelHold = true
+                                        showPlusPanel = false
+                                    }
+                            )
+                        }
                     }
                     Spacer(Modifier.width(8.dp))
                     // 最右槽位：输入框为空(或语音模式)→ 文件图标(开来源菜单)；有内容 → 渐变为发送按钮。
@@ -481,6 +584,7 @@ fun ChatDetailScreen(
                                     showSourceMenu = false
                                     if (showPlusPanel) {
                                         showPlusPanel = false
+                                        panelHold = true // 面板先别塌，等键盘顶上来（见 panelHeight）
                                         if (voiceMode) { voiceMode = false; pendingKeyboardFocus = true }
                                         else runCatching { inputFocusRequester.requestFocus() }
                                     } else {
@@ -539,11 +643,11 @@ fun ChatDetailScreen(
             }
         }
     ) { padding ->
+      Box(modifier = Modifier.fillMaxSize().padding(padding)) {
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
                 // 点消息区空白（气泡等自身可点元素会先吃掉手势）→ 收键盘 + 收功能面板，回到贴底态。
                 .pointerInput(Unit) { detectTapGestures { collapseAll() } }
                 .padding(horizontal = 12.dp),
@@ -662,6 +766,40 @@ fun ChatDetailScreen(
                 }
             }
         }
+
+        // 「N 条新消息」气泡（微信同款，客户 2026-08-01）：只在用户翻着历史、又有新消息到达时出现，
+        // 点一下跳到底并销账。悬在列表之上、贴右下角，不占布局空间。
+        AnimatedVisibility(
+            visible = pendingNewCount > 0,
+            enter = fadeIn() + slideInVertically { it / 2 },
+            exit = fadeOut(),
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 12.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = CardBg,
+                shadowElevation = 4.dp,
+                modifier = Modifier.clickable {
+                    scope.launch { listState.scrollToItem(displayMessages.size - 1) }
+                    pendingNewCount = 0
+                }
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.KeyboardDoubleArrowDown,
+                        null,
+                        tint = Primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("${pendingNewCount}条新消息", color = Primary, fontSize = 13.sp)
+                }
+            }
+        }
+      }
     }
 
     if (showBurnGateDialog) {

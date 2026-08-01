@@ -17,6 +17,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -29,6 +31,7 @@ import com.example.midun.R
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.AuthViewModel
 import com.example.midun.viewmodel.DeviceViewModel
+import kotlinx.coroutines.delay
 
 /**
  * 登录页「忘记密码？」入口开关（暂时隐藏）。真卡在未登录态调 wipeAll 必然失败
@@ -36,6 +39,9 @@ import com.example.midun.viewmodel.DeviceViewModel
  * 入口只会把用户引到一条走不通的路。置 true 即恢复，弹框与擦卡逻辑原样保留。
  */
 private const val SHOW_FORGOT_PASSWORD = false
+
+/** 登录成功后在本页多停的时长：够键盘收完，又不拖沓。 */
+private const val SUCCESS_HOLD_MS = 450L
 
 @Composable
 fun LoginScreen(
@@ -52,10 +58,26 @@ fun LoginScreen(
 
     val loginState by authViewModel.loginState.collectAsState()
     val isLoading = loginState is AuthViewModel.LoginState.Loading
+    val succeeded = loginState is AuthViewModel.LoginState.Success
     val error = loginState as? AuthViewModel.LoginState.Error
 
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+
+    /**
+     * 登录成功后的收尾（客户 2026-08-01）：原先密码一对就立刻 [onLoginSuccess]，于是按钮从转圈直接跳回
+     * 「登 录」（`isLoading` 转 false 而已），键盘则要等主界面组合完才被收走——用户看到的是「按钮复原 →
+     * 换页 → 键盘再慢半拍地落下」。
+     *
+     * 改为：**先收键盘**、按钮一路转圈不变，等键盘收起动画走完再进主界面。停顿取 [SUCCESS_HOLD_MS]
+     * （约够 250ms 的收起动画），既不让人觉得卡，主界面也不会顶着一块正在消失的键盘出场。
+     */
     LaunchedEffect(loginState) {
-        if (loginState is AuthViewModel.LoginState.Success) onLoginSuccess()
+        if (loginState !is AuthViewModel.LoginState.Success) return@LaunchedEffect
+        keyboard?.hide()
+        focusManager.clearFocus(force = true) // 双保险：个别 ROM 上只 hide() 会被输入框的焦点重新拉起来
+        delay(SUCCESS_HOLD_MS)
+        onLoginSuccess()
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -157,12 +179,14 @@ fun LoginScreen(
 
                 Button(
                     onClick = { authViewModel.login(password) },
-                    enabled = password.isNotEmpty() && !isLoading && error?.attemptsLeft != 0,
+                    enabled = password.isNotEmpty() && !isLoading && !succeeded && error?.attemptsLeft != 0,
                     modifier = Modifier.fillMaxWidth().height(48.dp),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Primary)
                 ) {
-                    if (isLoading) {
+                    // 成功后**继续转圈**、不换文案不换色（客户 2026-08-01 定）：密码对了到进主界面之间只有
+                    // 几百毫秒，此间按钮若跳回「登 录」会像是没登上，故一路转到换页为止。
+                    if (isLoading || succeeded) {
                         CircularProgressIndicator(
                             color = Color.White,
                             strokeWidth = 2.dp,
