@@ -11,6 +11,7 @@ import com.example.midun.data.OperationLogRepository
 import com.example.midun.data.real.CardPerf
 import com.example.midun.data.real.RealFileSystem
 import com.example.midun.data.staging.StagingStore
+import com.example.midun.service.SessionForegroundService
 import com.example.midun.data.model.Contact
 import com.example.midun.data.model.MessageStatus
 import com.example.midun.data.model.MessageType
@@ -171,6 +172,15 @@ class P2PSessionManager @Inject constructor(
                 ) {
                     disconnect("本机卡离开认证态（${info.status}）——拔卡/登出/自动锁定/恢复出厂")
                 }
+            }
+        }
+        // 会话在跑就起前台服务，否则停（`[network]` 2026-08-01）。挂在状态流上而非各个起止点，是因为
+        // 「离开 CONNECTED」的路径有一大把（对端掉线、心跳判死、主动拆、拔卡/登出经上面那条 disconnect），
+        // 漏掉任何一条都会留下一个吊着进程的空壳通知；状态流是它们唯一的汇合处。
+        scope.launch {
+            _connectionState.collect { state ->
+                if (state == ConnectionState.CONNECTED) SessionForegroundService.start(context)
+                else SessionForegroundService.stop(context)
             }
         }
     }

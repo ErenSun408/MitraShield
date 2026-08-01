@@ -220,10 +220,16 @@ object NetworkEventLog {
         ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND -> "前台"
         ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE -> "前台服务"
         ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE -> "可见"
+        // 325 = TOP_SLEEPING：仍是最前面那个界面，只是屏幕灭了。分开点名很重要——它和「切去开选取器」
+        // 落到的 400(CACHED) 是两种完全不同的现场，2026-08-01 的日志里两种都出现过。
+        IMPORTANCE_TOP_SLEEPING -> "熄屏(仍在最前)"
         ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE -> "服务"
         ActivityManager.RunningAppProcessInfo.IMPORTANCE_CACHED -> "已缓存(后台)"
         else -> "后台($importance)"
     }
+
+    /** `IMPORTANCE_TOP_SLEEPING` 在部分 SDK 版本被标注为隐藏/废弃，硬编码取值避免编译期依赖。 */
+    private const val IMPORTANCE_TOP_SLEEPING = 325
 
     // UsageStatsManager 的分组常量：RESTRICTED 是 API 30 才加的，硬编码避免为一个数字加版本判断。
     private const val BUCKET_ACTIVE = 10

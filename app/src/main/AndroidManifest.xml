@@ -15,6 +15,14 @@
       仅在有在途传输时持有，且带 10 分钟兜底超时。
     -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!--
+      会话期间的前台服务（见 SessionForegroundService）：2026-08-01 日志证实，用户一开系统文件选取器或一锁屏，
+      App 被判后台、系统当场断其网，socket 被本机协议栈中止。前台服务是唯一能让进程不被判后台的正规手段。
+      三条均为安装时权限、无弹窗；DATA_SYNC 只作 connectedDevice 被 ROM 判不过时的退路。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-feature
         android:name="android.hardware.usb.host"
         android:required="false" />
@@ -49,6 +57,12 @@
                 android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/device_filter" />
         </activity>
+
+        <!-- 会话保活。不导出：只由本进程按会话状态起停，不提供任何 IPC 面。 -->
+        <service
+            android:name=".service.SessionForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice|dataSync" />
 
         <!-- 分享二维码图片用：把 cache 下的 PNG 经内容 URI 授权给分享目标。 -->
         <provider
