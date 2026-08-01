@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  波波自适应图标前景（`[ui]` 2026-08-02 修「桌面图标被放大裁掉」）。
+
+  bobo_icon_fg.png 是一张**完整的方图**（自带深蓝底 + 两个气泡），此前直接当前景用：自适应图标的前景是
+  108dp 画布而只有中间 72dp 可见，等于把整张图放大 1.5 倍再裁四周——气泡被顶出画面、四角露出图自身的深色边。
+
+  这里把它缩进中间 72dp（四边各让 18dp），启动器那 1.5 倍放大正好抵消，整张图完整落在图标里。图自己的圆角
+  会被启动器的遮罩再切一次，切掉的部分本就是深色，与下层的 navy 渐变背景无缝衔接。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:left="18dp"
+        android:top="18dp"
+        android:right="18dp"
+        android:bottom="18dp">
+        <bitmap
+            android:src="@drawable/bobo_icon_fg"
+            android:gravity="fill" />
+    </item>
+</layer-list>
