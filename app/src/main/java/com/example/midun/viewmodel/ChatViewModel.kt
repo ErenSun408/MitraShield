@@ -488,6 +488,9 @@ class ChatViewModel @Inject constructor(
             //     append("· 本机地址：${diag.selectedAddress}")
             // }
         }
+        // TCP 连上了、握手确认没过（对端根本没 accept、或已换了邀请码）：原因已经在异常里说清楚了，
+        // 按 errno 分流那套在这里一条也套不上（`[network]` 2026-08-02）。
+        if (e is P2PSessionManager.HandshakeFailedException) return e.message.orEmpty()
         // 按 errno 分流。Android 把这三种都包成 ConnectException，差别只在 message 里的 errno 名——
         // 类型判不出来，只能按串匹配（2026-07-31 现场实证的两条原文：
         // `…isConnected failed: EHOSTUNREACH (No route to host)` / `…connect failed: ENETUNREACH (Network is unreachable)`）。
