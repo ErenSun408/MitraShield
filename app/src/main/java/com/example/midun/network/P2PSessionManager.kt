@@ -337,6 +337,22 @@ class P2PSessionManager @Inject constructor(
         val handle: Int, val digest: MessageDigest, var written: Long = 0
     )
 
+    /**
+     * 一条已建立的 P2P 会话。
+     *
+     * ⚠️ **不要拿实例同一性判断「会话是不是还是原来那条」**——用 [isSessionCurrent]（比 [socket]）。
+     * 本类型不可变，而 [contactId] 是
+     * 会话建立后才补上的：A（出码方）握手时并不知道连进来的是谁（二维码里全是 A 自己的信息），只能先填
+     * [UNKNOWN_CONTACT]，等对端的 IDENTITY 帧报上 SN 才绑定联系人，此时只能 `copy` 出一个新实例写回
+     * [_activeSession]。同一条 TCP、同一把密钥，只有 contactId 变了，`===` 却已经不成立。
+     *
+     * 曾因此让 A 侧心跳协程在收到 IDENTITY 后的第一个 tick 就退场（`[network]` 2026-08-02）：它把
+     * 「同一会话补了个字段」当成了「会话没了」。[socket] 在整条会话期间恒为同一对象，才是会话真正的身份。
+     *
+     * 那为什么不干脆把 [contactId] 改成 `var` 就地改？因为 [activeSession] 是 StateFlow：写回同一个实例
+     * 不会触发下游发射，UI 侧靠它派生的「本会话是否已连接」（`ChatViewModel.activeContactId`）就永远收不到
+     * 联系人绑定这件事。要那么改就得把 contactId 挪出去单独做一条流，那是另一件事。
+     */
     data class P2PSession(
         val socket: Socket,
         val contactId: String,
@@ -412,7 +428,7 @@ class P2PSessionManager @Inject constructor(
                     onConnected(session)
                     // A 侧联系人在收到 B 的 IDENTITY 帧后才建（A 事先不知对端身份）。
                     onSessionEstablished(session)
-                    startFileChannelAsListener() // A 侧：常驻 accept 文件通道连接（断了自愈）
+                    startFileChannelAsListener(session) // A 侧：常驻 accept 文件通道连接（断了自愈）
                     break // 会话已建立，不再接受新的连入
                 }
             } catch (e: Exception) {
@@ -442,7 +458,7 @@ class P2PSessionManager @Inject constructor(
                 CardPerf.mark("[net] 会话建立（本机扫码方 B）→ CONNECTED")
                 onSessionEstablished(session)
                 // B 侧：文件通道走**刚刚连通的那个**地址；断了带退避自动重连。
-                startFileChannelAsConnector(usedHost)
+                startFileChannelAsConnector(session, usedHost)
                 Result.success(session)
             } catch (e: Exception) {
                 CardPerf.mark("[net] 建立连接失败：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}")
@@ -599,7 +615,7 @@ class P2PSessionManager @Inject constructor(
         val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT }
             ?: return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
         // 通道缺失不再当场失败：催醒维持协程并短等一次重连（见 [ensureFileChannel]）。
-        val channel = ensureFileChannel()
+        val channel = ensureFileChannel(session)
             ?: return@withContext Result.failure(IllegalStateException("文件通道正在重连，请稍后重试"))
         if (size > MAX_FILE_BYTES) {
             return@withContext Result.failure(IllegalStateException("文件超过 100MB 上限，无法发送"))
@@ -904,6 +920,17 @@ class P2PSessionManager @Inject constructor(
         }
     }
 
+    /**
+     * 「当前活动会话是否仍是 [session] 这一条」——所有挂在某条会话上的常驻协程（心跳、文件通道维持）
+     * 用它决定该不该继续跑。
+     *
+     * **比 [P2PSession.socket]，不比会话实例**：A 侧收到对端 IDENTITY 帧时会 `copy` 出新实例只为填
+     * contactId（见 [P2PSession]），比实例会在那一刻把一条好端端的会话判成「没了」。socket 在整条会话
+     * 期间恒为同一对象，是会话真正的身份。
+     */
+    private fun isSessionCurrent(session: P2PSession): Boolean =
+        _activeSession.value?.socket === session.socket
+
     /** 握手完成后：启动接收循环 + 心跳保活 + 主动发送本机身份帧（供对端建联系人/绑定会话）。 */
     private fun onSessionEstablished(session: P2PSession) {
         startReceiveLoop(session)
@@ -920,7 +947,10 @@ class P2PSessionManager @Inject constructor(
             while (true) {
                 val tickStart = System.currentTimeMillis()
                 delay(HEARTBEAT_INTERVAL_MS)
-                if (_activeSession.value !== session) break // 会话已换/已断,本协程退场
+                // 会话已换/已断 → 本协程退场。判据见 [isSessionCurrent]：曾用会话实例比较，害得 A 的心跳
+                // 在收到 IDENTITY 后的第一个 tick 就退场、此后只会被动回 PONG——对端心跳也停时，A 会一直
+                // 挂着一条死连接不自知。
+                if (!isSessionCurrent(session)) break
                 keepAlive.refresh() // 续上会话级 WakeLock 的兜底超时，别让长会话聊到一半 CPU 又睡下去
                 val now = System.currentTimeMillis()
                 // 刚从休眠/冻结里回来（本轮墙钟远超名义间隔）→ 这段静默不算对端的账（`[network]` 2026-07-30）。
@@ -966,14 +996,13 @@ class P2PSessionManager @Inject constructor(
      *
      * accept 抛异常（系统断网把监听 socket 也收了）→ 关掉重绑端口再来，退避见 [reconnectBackoffMs]。
      *
-     * 循环的终止条件是**本协程被取消**（[teardownFileChannel]）或会话已空，刻意不拿 [_activeSession] 的实例
-     * 做同一性比较：A 侧收到对端 IDENTITY 帧时会把会话对象 `copy` 换掉，比实例会在那一刻误判为「会话没了」。
+     * 循环的终止条件是**本协程被取消**（[teardownFileChannel]）或[会话已不是这一条][isSessionCurrent]。
      */
-    private fun startFileChannelAsListener() {
+    private fun startFileChannelAsListener(session: P2PSession) {
         fileChannelJob?.cancel()
         fileChannelJob = scope.launch {
             var attempt = 0
-            while (isActive && _activeSession.value != null) {
+            while (isActive && isSessionCurrent(session)) {
                 try {
                     val server = fileServerSocket
                         ?: ServerSocket(FileTransferChannel.FILE_PORT).also { fileServerSocket = it }
@@ -984,7 +1013,7 @@ class P2PSessionManager @Inject constructor(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    if (_activeSession.value == null) break // 会话已拆（teardown 关了监听 socket）：正常退场
+                    if (!isSessionCurrent(session)) break // 会话已拆（teardown 关了监听 socket）：正常退场
                     CardPerf.mark(
                         "[net] 文件通道监听中断：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}"
                     )
@@ -1001,11 +1030,11 @@ class P2PSessionManager @Inject constructor(
      * [ensureFileChannel] 可催醒）。目标地址恒为聊天 socket 实际连通的那个 [host]——它已被验证可达。
      * 终止条件同 [startFileChannelAsListener]。
      */
-    private fun startFileChannelAsConnector(host: String) {
+    private fun startFileChannelAsConnector(session: P2PSession, host: String) {
         fileChannelJob?.cancel()
         fileChannelJob = scope.launch {
             var attempt = 0
-            while (isActive && _activeSession.value != null) {
+            while (isActive && isSessionCurrent(session)) {
                 try {
                     val sock = Socket().apply {
                         keepAlive = true
@@ -1021,7 +1050,7 @@ class P2PSessionManager @Inject constructor(
                         "[net] 文件通道连接失败：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}"
                     )
                 }
-                if (_activeSession.value == null) break
+                if (!isSessionCurrent(session)) break
                 waitBeforeReconnect(++attempt)
             }
         }
@@ -1056,14 +1085,14 @@ class P2PSessionManager @Inject constructor(
      * [CONNECT_TIMEOUT_MS] 的重连）。等不到才让调用方报错——这比原来「一看是 null 就当场失败」强得多：
      * 现场那类断网通常在用户从选取器回来时早已恢复，缺的只是一次重连。
      */
-    private suspend fun ensureFileChannel(): FileTransferChannel? {
+    private suspend fun ensureFileChannel(session: P2PSession): FileTransferChannel? {
         fileChannel?.let { return it }
         CardPerf.mark("[net] 发送前文件通道缺失 → 催重建并等待")
         fileReconnectSignal.tryEmit(Unit)
         val deadline = System.currentTimeMillis() + FILE_CHANNEL_WAIT_MS
         while (System.currentTimeMillis() < deadline) {
             delay(FILE_CHANNEL_POLL_MS)
-            if (_activeSession.value == null) return null // 会话都没了，等下去没有意义
+            if (!isSessionCurrent(session)) return null // 会话都没了/换了，等下去没有意义
             fileChannel?.let {
                 CardPerf.mark("[net] 文件通道已恢复，继续发送")
                 return it
