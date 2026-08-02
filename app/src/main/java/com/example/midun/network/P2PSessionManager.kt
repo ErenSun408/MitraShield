@@ -48,10 +48,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -292,6 +295,23 @@ class P2PSessionManager @Inject constructor(
     private var fileServerSocket: ServerSocket? = null
     @Volatile private var fileChannel: FileTransferChannel? = null
 
+    /**
+     * 文件通道维持协程（`[network]` 2026-08-02 客户故障「选图片发送时提示未建立文件发送通道」）。
+     *
+     * **原来它是一次性的**：A 侧只在 `startListening` accept 一次、B 侧只在 `connectTo` connect 一次，通道一断
+     * 就 `fileChannel = null` 且**再无任何重建路径**。而聊天 socket 有心跳、断了会归位 DISCONNECTED，文件通道
+     * 却既无心跳也无自愈——于是只要有一瞬间的断网（现场即「开系统选取器 → 本应用被判后台 → 系统当场断网 →
+     * 8889 被协议栈 abort」）把它打掉、而聊天 socket 恰好空闲扛了过去，App 就会一直显示「已连接」却永远发不了
+     * 文件，直到用户重新扫码配对。
+     *
+     * 现在改成**每会话一条常驻维持协程**：A 侧常驻 accept（对端重连能随时顶掉半开的旧通道），B 侧断了就带退避
+     * 重连；[ensureFileChannel] 在用户点发送时催醒它并短等一会儿。会话结束（[teardownFileChannel]）才收摊。
+     */
+    private var fileChannelJob: Job? = null
+
+    /** 催醒退避中的重连：用户点了发送就别再干等退避走完（见 [ensureFileChannel]）。 */
+    private val fileReconnectSignal = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
     /** 文件发送串行化锁（M11.5.3）：一条通道上文件帧不能交错，收端单文件状态机才成立。 */
     private val fileSendMutex = Mutex()
 
@@ -392,7 +412,7 @@ class P2PSessionManager @Inject constructor(
                     onConnected(session)
                     // A 侧联系人在收到 B 的 IDENTITY 帧后才建（A 事先不知对端身份）。
                     onSessionEstablished(session)
-                    establishFileChannelAsListener() // A 侧：accept 文件通道连接
+                    startFileChannelAsListener() // A 侧：常驻 accept 文件通道连接（断了自愈）
                     break // 会话已建立，不再接受新的连入
                 }
             } catch (e: Exception) {
@@ -421,7 +441,8 @@ class P2PSessionManager @Inject constructor(
                 _connectionState.value = ConnectionState.CONNECTED
                 CardPerf.mark("[net] 会话建立（本机扫码方 B）→ CONNECTED")
                 onSessionEstablished(session)
-                establishFileChannelAsConnector(usedHost) // B 侧：文件通道走**刚刚连通的那个**地址
+                // B 侧：文件通道走**刚刚连通的那个**地址；断了带退避自动重连。
+                startFileChannelAsConnector(usedHost)
                 Result.success(session)
             } catch (e: Exception) {
                 CardPerf.mark("[net] 建立连接失败：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}")
@@ -577,8 +598,9 @@ class P2PSessionManager @Inject constructor(
             ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
         val contactId = session.contactId.takeIf { it != UNKNOWN_CONTACT }
             ?: return@withContext Result.failure(IllegalStateException("连接尚未就绪"))
-        val channel = fileChannel
-            ?: return@withContext Result.failure(IllegalStateException("文件通道未建立，无法发送文件"))
+        // 通道缺失不再当场失败：催醒维持协程并短等一次重连（见 [ensureFileChannel]）。
+        val channel = ensureFileChannel()
+            ?: return@withContext Result.failure(IllegalStateException("文件通道正在重连，请稍后重试"))
         if (size > MAX_FILE_BYTES) {
             return@withContext Result.failure(IllegalStateException("文件超过 100MB 上限，无法发送"))
         }
@@ -594,11 +616,17 @@ class P2PSessionManager @Inject constructor(
             try {
                 fileSendMutex.withLock {
                     doSendFile(channel, session, contactId, fileName, size, mime, sourceCardPath, durationSec, openStream)
-                }.also {
+                }.also { result ->
                     CardPerf.mark(
-                        "[net] 发送文件结束：${if (it.isSuccess) "成功" else "失败（${it.exceptionOrNull()?.message}）"}" +
+                        "[net] 发送文件结束：${if (result.isSuccess) "成功" else "失败（${result.exceptionOrNull()?.message}）"}" +
                             "，耗时 ${(System.currentTimeMillis() - startedAt) / 1000}s"
                     )
+                    // 写失败 = 这条通道多半已经死了（系统断网/对端消失）：当场弃用，让维持协程立刻重建，
+                    // 免得后续每一次发送都先撞一遍同一堵墙。半开 socket 尤其如此——不主动关，本端永远不知道。
+                    if (result.exceptionOrNull() is IOException && fileChannel === channel) {
+                        CardPerf.mark("[net] 发送失败于 IO → 弃用当前文件通道，等待重建")
+                        runCatching { channel.close() }
+                    }
                 }
             } finally {
                 keepAlive.release()
@@ -928,44 +956,130 @@ class P2PSessionManager @Inject constructor(
 
     // —— 文件传输通道（M11.5.3 / `[file-transfer]`）——
 
-    /** A 侧：accept 文件通道连接（[fileServerSocket] 已在 startListening 提前绑定），起常驻接收循环。 */
-    private fun establishFileChannelAsListener() {
-        scope.launch {
-            var channel: FileTransferChannel? = null
-            try {
-                val sock = (fileServerSocket?.accept() ?: return@launch).apply { keepAlive = true }
-                channel = FileTransferChannel(sock).also { fileChannel = it }
-                CardPerf.mark("[net] 文件通道已建立（A 侧 accept）")
-                channel.receiveLoop { type, payload -> handleFileFrame(type, payload) }
-            } catch (e: Exception) {
-                // 文件通道建立/中断不影响聊天会话；仅清空，后续发文件会失败提示。
-                CardPerf.mark("[net] 文件通道结束（A 侧）：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}")
-            } finally {
-                channel?.close()
-                if (fileChannel === channel) fileChannel = null
+    /**
+     * A 侧文件通道维持：**常驻 accept 循环**（[fileServerSocket] 已在 startListening 提前绑定）。
+     *
+     * 每次 accept 到的通道都另起协程跑接收循环，accept 本身**不被它阻塞**——这正是半开 socket 的解药：
+     * 本端可能对通道已死毫无察觉（读一直阻塞、没有 RST），而对端早已判死并重连；若 accept 卡在旧通道的接收
+     * 循环后面，对端的新连接就只能烂在 backlog 里，文件帧发出去没人读、既不报错也永远到不了。故新连入一律
+     * **顶掉旧通道**（见 [adoptFileChannel]）。
+     *
+     * accept 抛异常（系统断网把监听 socket 也收了）→ 关掉重绑端口再来，退避见 [reconnectBackoffMs]。
+     *
+     * 循环的终止条件是**本协程被取消**（[teardownFileChannel]）或会话已空，刻意不拿 [_activeSession] 的实例
+     * 做同一性比较：A 侧收到对端 IDENTITY 帧时会把会话对象 `copy` 换掉，比实例会在那一刻误判为「会话没了」。
+     */
+    private fun startFileChannelAsListener() {
+        fileChannelJob?.cancel()
+        fileChannelJob = scope.launch {
+            var attempt = 0
+            while (isActive && _activeSession.value != null) {
+                try {
+                    val server = fileServerSocket
+                        ?: ServerSocket(FileTransferChannel.FILE_PORT).also { fileServerSocket = it }
+                    val sock = server.accept().apply { keepAlive = true }
+                    attempt = 0
+                    // 不 await：accept 立刻回到监听，让对端随时能用一条新连接顶掉半开的旧通道。
+                    scope.launch { adoptFileChannel(FileTransferChannel(sock), "A 侧 accept") }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    if (_activeSession.value == null) break // 会话已拆（teardown 关了监听 socket）：正常退场
+                    CardPerf.mark(
+                        "[net] 文件通道监听中断：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}"
+                    )
+                    runCatching { fileServerSocket?.close() }
+                    fileServerSocket = null // 端口可能已被系统回收 → 下一轮重新绑
+                    delay(reconnectBackoffMs(++attempt))
+                }
             }
         }
     }
 
-    /** B 侧：连接 A 的文件通道端口（[FileTransferChannel.FILE_PORT]），起常驻接收循环。 */
-    private fun establishFileChannelAsConnector(host: String) {
-        scope.launch {
-            var channel: FileTransferChannel? = null
-            try {
-                val sock = Socket().apply {
-                    keepAlive = true
-                    connect(InetSocketAddress(host, FileTransferChannel.FILE_PORT), CONNECT_TIMEOUT_MS)
+    /**
+     * B 侧文件通道维持：连接 A 的 [FileTransferChannel.FILE_PORT]，**断了就重连**（退避 +
+     * [ensureFileChannel] 可催醒）。目标地址恒为聊天 socket 实际连通的那个 [host]——它已被验证可达。
+     * 终止条件同 [startFileChannelAsListener]。
+     */
+    private fun startFileChannelAsConnector(host: String) {
+        fileChannelJob?.cancel()
+        fileChannelJob = scope.launch {
+            var attempt = 0
+            while (isActive && _activeSession.value != null) {
+                try {
+                    val sock = Socket().apply {
+                        keepAlive = true
+                        connect(InetSocketAddress(host, FileTransferChannel.FILE_PORT), CONNECT_TIMEOUT_MS)
+                    }
+                    attempt = 0
+                    // 这里**要**阻塞到通道结束：B 侧是一条一条串着来的，通道活着就不该另开一条。
+                    adoptFileChannel(FileTransferChannel(sock), "B 侧 connect")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    CardPerf.mark(
+                        "[net] 文件通道连接失败：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}"
+                    )
                 }
-                channel = FileTransferChannel(sock).also { fileChannel = it }
-                CardPerf.mark("[net] 文件通道已建立（B 侧 connect）")
-                channel.receiveLoop { type, payload -> handleFileFrame(type, payload) }
-            } catch (e: Exception) {
-                CardPerf.mark("[net] 文件通道结束（B 侧）：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}")
-            } finally {
-                channel?.close()
-                if (fileChannel === channel) fileChannel = null
+                if (_activeSession.value == null) break
+                waitBeforeReconnect(++attempt)
             }
         }
+    }
+
+    /**
+     * 接管一条新通道并跑它的接收循环，直到它结束。**先顶掉旧通道**：无论是对端新连入（A 侧）还是本端重连成功
+     * （B 侧），都意味着旧的那条已经不作数了；旧接收循环随之抛异常退场，其 finally 只在「自己仍是当前通道」
+     * 时才清空引用，故不会误伤刚接管的这条。
+     */
+    private suspend fun adoptFileChannel(channel: FileTransferChannel, how: String) {
+        fileChannel?.takeIf { it !== channel }?.let { runCatching { it.close() } }
+        fileChannel = channel
+        CardPerf.mark("[net] 文件通道已建立（$how）")
+        try {
+            channel.receiveLoop { type, payload -> handleFileFrame(type, payload) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // 文件通道中断不影响聊天会话；维持协程会重建它（见 [fileChannelJob]）。
+            CardPerf.mark(
+                "[net] 文件通道断开（$how）：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}"
+            )
+        } finally {
+            channel.close()
+            if (fileChannel === channel) fileChannel = null
+        }
+    }
+
+    /**
+     * 发送前确保文件通道可用：没有就催一把维持协程，并短等一会儿（[FILE_CHANNEL_WAIT_MS]，够走完一次
+     * [CONNECT_TIMEOUT_MS] 的重连）。等不到才让调用方报错——这比原来「一看是 null 就当场失败」强得多：
+     * 现场那类断网通常在用户从选取器回来时早已恢复，缺的只是一次重连。
+     */
+    private suspend fun ensureFileChannel(): FileTransferChannel? {
+        fileChannel?.let { return it }
+        CardPerf.mark("[net] 发送前文件通道缺失 → 催重建并等待")
+        fileReconnectSignal.tryEmit(Unit)
+        val deadline = System.currentTimeMillis() + FILE_CHANNEL_WAIT_MS
+        while (System.currentTimeMillis() < deadline) {
+            delay(FILE_CHANNEL_POLL_MS)
+            if (_activeSession.value == null) return null // 会话都没了，等下去没有意义
+            fileChannel?.let {
+                CardPerf.mark("[net] 文件通道已恢复，继续发送")
+                return it
+            }
+        }
+        CardPerf.mark("[net] 等待文件通道超时（${FILE_CHANNEL_WAIT_MS / 1000}s）")
+        return null
+    }
+
+    /** 重连退避：1s→2s→…→上限 [MAX_RECONNECT_BACKOFF_MS]。 */
+    private fun reconnectBackoffMs(attempt: Int): Long =
+        (1_000L * attempt).coerceAtMost(MAX_RECONNECT_BACKOFF_MS)
+
+    /** 退避等待，期间被 [fileReconnectSignal] 催醒就提前返回（用户点了发送）。 */
+    private suspend fun waitBeforeReconnect(attempt: Int) {
+        withTimeoutOrNull(reconnectBackoffMs(attempt)) { fileReconnectSignal.first() }
     }
 
     /**
@@ -1119,6 +1233,9 @@ class P2PSessionManager @Inject constructor(
 
     /** 关闭文件通道 + A 侧监听 socket（disconnect / 对端断开时）；中止在途接收、删半成品。 */
     private fun teardownFileChannel() {
+        // 先停维持协程，否则它会在下面刚关掉通道/监听 socket 后转头又建一条（会话已亡的空壳连接）。
+        fileChannelJob?.cancel()
+        fileChannelJob = null
         abortIncoming(MessageStatus.FAILED)
         runCatching { fileChannel?.close() }
         fileChannel = null
@@ -1408,6 +1525,18 @@ class P2PSessionManager @Inject constructor(
          * 取 10 秒——正常调度抖动远小于此，而深睡/冻结造成的偏差通常是分钟级，两者不会混。
          */
         private const val SLEEP_GRACE_MS = 10_000L
+        /**
+         * 发送前等待文件通道重建的上限（ms）。取 15s：够走完一次 [CONNECT_TIMEOUT_MS]=10s 的重连尝试再富余
+         * 一点，而不是让用户对着一个「通道未建立」干瞪眼。等得到就照常发，等不到才报错。
+         */
+        private const val FILE_CHANNEL_WAIT_MS = 15_000L
+
+        /** 等待通道时的轮询间隔（ms）。重建是另一条协程的事，这里只是盯着 [fileChannel] 何时就位。 */
+        private const val FILE_CHANNEL_POLL_MS = 200L
+
+        /** 文件通道重连退避上限（ms）：连不上时别一秒一次地空转，但也不能久到用户等不起。 */
+        private const val MAX_RECONNECT_BACKOFF_MS = 10_000L
+
         /** 出站源地址探测锚点：阿里公共 DNS 的 IPv6（国内可达）。UDP connect 不发包，仅用于让内核选源地址。 */
         private const val OUTBOUND_PROBE_V6 = "2400:3200::1"
         /** 文件分块大小（64KB，与 RealFileSystem.writeFile 分块一致）。 */
