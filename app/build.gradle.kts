@@ -6,6 +6,23 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+/**
+ * 打包时的 git 版本标识（`[diag]`，2026-08-02）。客户手上跑的是不是我们刚发的那个包，只能靠它认——
+ * versionName 从不随每次修改动，而回传的诊断日志里必须一眼看出「这份日志出自哪个 commit」。
+ *
+ * 取 `git rev-parse --short HEAD`，工作区有改动则加 `-dirty`。不在 git 仓库/取不到 → "unknown"，
+ * 不让构建因为一个诊断字段失败。
+ */
+fun git(vararg args: String): String? = runCatching {
+    providers.exec {
+        commandLine("git", *args)
+        isIgnoreExitValue = true // 不在仓库里/命令失败时给空串，别让一个诊断字段掀翻构建
+    }.standardOutput.asText.get().trim()
+}.getOrNull()
+
+val gitCommit: String = git("rev-parse", "--short", "HEAD")?.takeIf { it.isNotBlank() } ?: "unknown"
+val gitDirty: Boolean = git("status", "--porcelain")?.isNotBlank() == true
+
 android {
     namespace = "com.example.midun"
     // v4.0：AGP 8.7.x 用旧 DSL（赋值），AGP 9 的 compileSdk { release(...) } 在 8.7 不存在
@@ -19,6 +36,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // 诊断日志首行打的构建标识，见上方 gitCommit 说明。
+        buildConfigField("String", "GIT_COMMIT", "\"$gitCommit${if (gitDirty) "-dirty" else ""}\"")
 
         // M11.1：FSShell SDK 仅提供 arm64-v8a / armeabi-v7a 原生库（无 x86/x86_64），
         // 限定 ABI 避免在其他架构上缺库崩溃。

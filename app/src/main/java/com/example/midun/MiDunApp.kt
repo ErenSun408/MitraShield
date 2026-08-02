@@ -52,7 +52,10 @@ class MiDunApp : Application() {
         // 诊断日志接线要最早（[CardPerf.attach] 幂等，卡层 init 里也会调一次）：进程启动与上次退出原因是
         // 排查「会话断开」时区分「App 自己断的」与「进程被打死」的关键，见 [ProcessExitLog]。
         CardPerf.attach(this)
-        CardPerf.mark("[diag] 进程启动")
+        // 首行带构建标识：回传的日志必须能一眼看出跑的是不是我们刚发的那个包，否则排查全建在沙上。
+        CardPerf.mark(
+            "[diag] 进程启动｜版本 ${BuildConfig.VERSION_NAME}｜构建 ${BuildConfig.GIT_COMMIT}"
+        )
         ProcessExitLog.logLastExit(this)
         NetworkEventLog.start(this) // 网络丢失/切换/IP 变更 —— 断连时刻旁边有没有它，是定案的关键
         ContextCompat.registerReceiver(
