@@ -21,7 +21,9 @@ fun git(vararg args: String): String? = runCatching {
 }.getOrNull()
 
 val gitCommit: String = git("rev-parse", "--short", "HEAD")?.takeIf { it.isNotBlank() } ?: "unknown"
-val gitDirty: Boolean = git("status", "--porcelain")?.isNotBlank() == true
+// 只看 app/ 下的源码：仓库根上常年躺着构建产物（bobo_*.apk）与工具的状态文件，把它们算进来的话
+// 每个包都是 -dirty，这个标记也就没用了。
+val gitDirty: Boolean = git("status", "--porcelain", "--", "app")?.isNotBlank() == true
 
 android {
     namespace = "com.example.midun"
