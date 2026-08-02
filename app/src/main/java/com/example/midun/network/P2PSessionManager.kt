@@ -258,6 +258,12 @@ class P2PSessionManager @Inject constructor(
     private var listenerKeyPair: KeyPair? = null
 
     /**
+     * 当前邀请码的失效时刻（epoch ms）。**本机自己记的那一份**——二维码里的 `exp` 是给对端看的，扫码方
+     * 改了照样能连，判据不能取它。0 = 无有效邀请码（未出码 / 已被握手消费 / 已 [disconnect]）。
+     */
+    private var listenerExpiresAt = 0L
+
+    /**
      * 心跳保活（`[network]`，2026-06-24）：聊天 socket 上每 [HEARTBEAT_INTERVAL_MS] 发一帧 PING，对端回 PONG。
      * 目的 ①保活——周期性发包维持路由器/运营商 NAT 映射,挡住「空闲 TCP 被回收」(切到别的 App 快速切回不掉线);
      * ②探活——任何入站帧都刷新 [lastInboundAt],超 [HEARTBEAT_TIMEOUT_MS] 无入站=连接已死(含 readLine 卡在半开
@@ -369,12 +375,7 @@ class P2PSessionManager @Inject constructor(
         val contactId: String,
         val sessionKey: ByteArray,
         val reader: BufferedReader,
-        val writer: PrintWriter,
-        /**
-         * 对端是否说 [PROTO_V2] 版协议（握手双向确认 + 文件 [FileTransferChannel.FILE_ACK] 回执）。
-         * A 侧由对端公钥行的 [PROTO2_TAG] 后缀判定，B 侧由二维码的 `ver` 字段判定。见 [PROTO_V2]。
-         */
-        val peerProto2: Boolean = false
+        val writer: PrintWriter
     )
 
     /**
@@ -385,6 +386,7 @@ class P2PSessionManager @Inject constructor(
     suspend fun generateConnectionInfo(): ConnectionInfo = withContext(Dispatchers.IO) {
         val keyPair = P2PCrypto.generateEcKeyPair()
         listenerKeyPair = keyPair
+        listenerExpiresAt = System.currentTimeMillis() + INVITE_TTL_MS
         val scan = scanAddresses()
         // 全部候选，**公网 IPv6 在前**、局域网 IPv4 兜底。见 ConnectionInfo.addresses 对顺序的说明。
         val candidates = listOfNotNull(scan.globalV6, scan.wifiV4)
@@ -396,7 +398,7 @@ class P2PSessionManager @Inject constructor(
             sessionId = generateRandomHex(8),
             // 压缩公钥（33 字节，需求规格）→ Base64，替换原 X.509(SPKI ~91 字节)，二维码更小。
             tempPublicKey = Base64.encodeToString(P2PCrypto.compressPublicKey(keyPair.public), Base64.NO_WRAP),
-            expiresAt = System.currentTimeMillis() + 120_000
+            expiresAt = listenerExpiresAt
         )
     }
 
@@ -413,14 +415,14 @@ class P2PSessionManager @Inject constructor(
      * **握手失败不再让监听死掉**：原实现 accept 一次就结束，握手一抛异常整个监听就没了，而二维码还挂在屏幕上，
      * 对端再扫只会收到 ECONNREFUSED（「对方设备未在监听」）。现在改成循环 accept，失败一次接着等下一次。
      *
-     * **会话建立后也不停 accept**（`[network]` 2026-08-02 现场日志）：原实现在握手成功后 `break` 出循环，
-     * 可 [serverSocket] 并没关——8888 仍 bind 着，只是**再也没人 accept**。于是对端断线重连时，内核照样把
-     * SYN 三次握手完成、连接烂在 backlog 里，而 B 侧的握手是「只写不读」的（A 的公钥走二维码带外送达，
-     * 不需要 A 应答），于是 B **当场宣布连接成功**，随后发出去的消息/文件全部写进一条没人读的管道，两端都
-     * 不报错。现场即：B 显示「已连接」并报「发送成功」，A 侧那段时间一条接收记录都没有。
+     * **邀请码一次性**：握手一旦成功就[关掉监听 socket][closeInviteListener]并结束本循环。原实现是 `break`
+     * 出循环却**把 8888 留着 bind**，于是「没人 accept」这件事对端完全看不出来——内核照样替它把三次握手做完，
+     * 连接烂在 backlog 里；而 B 侧的握手是「只写不读」的（A 的公钥走二维码带外送达，不需要 A 应答），于是 B
+     * **当场宣布连接成功**，此后消息与文件全写进一条没人读的管道，两端都不报错。现场即 2026-08-02 日志里
+     * B 报「会话建立」「发送成功」而 A 侧同期零接收。真关掉端口，对端拿到的是 ECONNREFUSED，会如实提示
+     * 「对方设备未在监听。邀请码可能已失效，请让对方重新生成」。
      *
-     * 现在改成常驻 [listenerJob]（跑在单例 [scope]，活过邀请码页）：会话断了继续 accept，对端拿着原邀请码
-     * 重连即可接上；新连入经 [acceptOne] **顶掉**旧会话。真正收摊只由 [disconnect] 决定。
+     * 掉线后**不自动续听**：邀请码已随首次握手作废，要再连必须由用户重新出码。
      */
     suspend fun startListening(port: Int = 8888, onConnected: (P2PSession) -> Unit) {
         withContext(Dispatchers.IO) {
@@ -449,7 +451,9 @@ class P2PSessionManager @Inject constructor(
         }
 
     /**
-     * A 侧常驻 accept 循环（见 [startListening]）。终止条件只有一个：[disconnect] 取消本协程。
+     * A 侧 accept 循环（见 [startListening]）。**握手成功即收工**——邀请码是一次性的。握手失败则接着等
+     * 下一次连入（对端重扫、或前一次是半开连接），不让一次坏的尝试把还挂在屏幕上的邀请码作废。
+     *
      * accept 抛异常（系统断网把监听 socket 也收了）→ 重绑端口再来，退避见 [reconnectBackoffMs]。
      */
     private fun startAcceptLoop(port: Int, onConnected: (P2PSession) -> Unit) {
@@ -462,7 +466,7 @@ class P2PSessionManager @Inject constructor(
                         ?: bindServerSocket(port).also { serverSocket.value = it }
                     val socket = server.accept().apply { keepAlive = true }
                     attempt = 0
-                    acceptOne(socket, onConnected)
+                    if (acceptOne(socket, onConnected)) break // 邀请码已消费，不再接受任何连入
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -479,16 +483,19 @@ class P2PSessionManager @Inject constructor(
     }
 
     /**
-     * 处理一条连入：握手 → 顶掉旧会话 → 起收发。**不因失败中断 [startAcceptLoop]**。
+     * 处理一条连入：验有效期 → 握手 → 起收发。返回 true 表示**邀请码已被这次连接消费**，调用方就此收摊。
      *
-     * 顶替的安全前提是握手确认（[PROTO_V2]）：连到 8888 的人不必知道二维码里的 A 公钥也能让 A 的 ECDH
-     * 走完（A 只是拿对方公钥算一把自己独有的密钥），所以**光「握手成功」不足以证明来者持有邀请码**。
-     * 只有验过 [PROOF_FROM_CONNECTOR] 才说明对端算出了同一把会话密钥 = 确实拿着这张二维码，才允许它
-     * 顶掉一条活着的会话；老版本对端（无证明）只在本机当前空闲时接纳，免得任意一个连入就能踢掉会话。
+     * 有效期在这里再判一次，而不是只靠邀请码页那个 120 秒倒计时：倒计时只在用户停留在该页时才走，用户
+     * 一旦离开页面（或页面被系统回收），过期就没人执行了。判据取本机记的 [listenerExpiresAt]，不信二维码
+     * 里的 `exp`——那是对端递过来的数，扫码方改了照样能连。
      */
-    private suspend fun acceptOne(socket: Socket, onConnected: (P2PSession) -> Unit) {
-        // 已有活动会话时不动状态：对端重连期间 UI 不该闪一下「连接中」，前台服务/CPU 锁也不该跟着落再起。
-        if (_activeSession.value == null) _connectionState.value = ConnectionState.CONNECTING
+    private suspend fun acceptOne(socket: Socket, onConnected: (P2PSession) -> Unit): Boolean {
+        if (System.currentTimeMillis() > listenerExpiresAt) {
+            CardPerf.mark("[net] 拒绝连入：邀请码已过期")
+            runCatching { socket.close() }
+            return false
+        }
+        _connectionState.value = ConnectionState.CONNECTING
         CardPerf.mark("[net] 对端已连入，开始握手")
         val session = try {
             // 握手期间给读超时：对端连上却不发公钥（半开连接/异常退出）时不能把 accept 循环卡死。
@@ -497,39 +504,33 @@ class P2PSessionManager @Inject constructor(
         } catch (e: Exception) {
             runCatching { socket.close() }
             CardPerf.mark("[net] 握手失败：${e.javaClass.simpleName}${e.message?.let { "（$it）" }.orEmpty()}")
-            // 已有会话时不打扰用户：那是别人在敲门，本机这条连接好好的。
-            if (_activeSession.value == null) {
-                _listenerError.emit(
-                    "对方已连接，但安全握手失败。邀请码可能已过期或已被重新生成，请重新生成邀请码后再试。"
-                )
-                _connectionState.value = ConnectionState.LISTENING // 继续等下一次连入
-            }
-            return
+            _listenerError.emit(
+                "对方已连接，但安全握手失败。邀请码可能已过期或已被重新生成，请重新生成邀请码后再试。"
+            )
+            _connectionState.value = ConnectionState.LISTENING // 继续等下一次连入
+            return false
         }
-        val old = _activeSession.value
-        if (old != null && !session.peerProto2) {
-            // 验不了身的老版本对端，不给它顶掉一条活着的会话（见本函数注释）。
-            CardPerf.mark("[net] 已有活动会话，拒绝无握手确认的连入")
-            session.sessionKey.fill(0)
-            runCatching { socket.close() }
-            return
-        }
-        // 先立新会话再拆旧的：旧接收循环靠 [isSessionCurrent] 判断自己是否已被顶掉，顺序反了它会把
-        // 刚建好的这条一起归位成 DISCONNECTED。
+        // 邀请码就此作废：先关监听端口再宣布连上，中间不留任何还能被第二个人连进来的窗口。
+        closeInviteListener()
         _activeSession.value = session
         _connectionState.value = ConnectionState.CONNECTED
-        if (old != null && old.socket !== socket) {
-            CardPerf.mark("[net] 对端重连 → 顶掉旧会话")
-            discardFileChannel() // 旧通道随旧会话作废；下面 startFileChannelAsListener 会重开
-            _burnMode.value = BurnMode(enabled = false) // 焚毁模式是会话内状态，不跨会话继承
-            old.sessionKey.fill(0)
-            runCatching { old.socket.close() }
-        }
         CardPerf.mark("[net] 会话建立（本机监听方 A）→ CONNECTED")
         onConnected(session)
         // A 侧联系人在收到 B 的 IDENTITY 帧后才建（A 事先不知对端身份）。
         onSessionEstablished(session)
         startFileChannelAsListener(session) // A 侧：常驻 accept 文件通道连接（断了自愈）
+        return true
+    }
+
+    /**
+     * 关掉邀请码的监听端口并作废临时密钥。**只动 8888**：文件通道的 [fileServerSocket] 服务的是已经建立
+     * 的这条会话（B 侧断线会在同一会话内重连 8889，见 [startFileChannelAsConnector]），随会话一起收摊。
+     */
+    private fun closeInviteListener() {
+        runCatching { serverSocket.value?.close() }
+        serverSocket.value = null
+        listenerKeyPair = null
+        listenerExpiresAt = 0L
     }
 
     /**
@@ -543,7 +544,7 @@ class P2PSessionManager @Inject constructor(
             try {
                 val (socket, usedHost) = connectToFirstReachable(info, port)
                 pending = socket
-                val handshaken = performConnectorHandshake(socket, info.tempPublicKey, info.version >= PROTO_V2)
+                val handshaken = performConnectorHandshake(socket, info.tempPublicKey)
                 pending = null
                 val (contactId, _) = bindContact(info.deviceSn, remark)
                 val session = handshaken.copy(contactId = contactId)
@@ -643,77 +644,69 @@ class P2PSessionManager @Inject constructor(
         val myKeyPair = listenerKeyPair
             ?: throw IllegalStateException("握手失败：未先调用 generateConnectionInfo 生成临时密钥")
         val peerPubLine = reader.readLine() ?: throw IOException("握手失败：对端未发送公钥")
-        // proto2 的对端在公钥后附「 p2」。Base64(NO_WRAP) 不含空格，故按空格切是安全的；老版本对端只发
-        // 纯公钥，切出来就一段，peerProto2=false，后续两步一律跳过（协议对老对端逐字节不变）。
-        val parts = peerPubLine.trim().split(' ')
-        val peerProto2 = parts.size > 1 && parts[1] == PROTO2_TAG
-        val sessionKey = P2PCrypto.deriveSharedKey(myKeyPair.private, Base64.decode(parts[0], Base64.NO_WRAP))
-        if (peerProto2) {
-            try {
-                // ① 验对端证明：能加密出这一串，说明它算出了同一把会话密钥 = 确实持有二维码里的 A 公钥。
-                val proofLine = reader.readLine() ?: throw IOException("握手失败：对端未发送确认")
-                val proof = runCatching {
-                    P2PCrypto.decrypt(sessionKey, Base64.decode(proofLine.trim(), Base64.NO_WRAP))
-                }.getOrNull()
-                if (proof != PROOF_FROM_CONNECTOR) throw IOException("握手失败：对端确认无效")
-                // ② 回本端证明：让对端确认「A 真的 accept 了这条连接并读到了我」。少了这一步，一条烂在
-                //    内核 backlog 里的连接在 B 看来与真连接毫无区别（见 [startListening] 的说明）。
-                writer.println(
-                    Base64.encodeToString(P2PCrypto.encrypt(sessionKey, PROOF_FROM_LISTENER), Base64.NO_WRAP)
-                )
-                if (writer.checkError()) throw IOException("握手失败：确认写入失败")
-            } catch (e: Exception) {
-                sessionKey.fill(0) // 半途失败的密钥不留在内存里
-                throw e
-            }
+        val sessionKey = P2PCrypto.deriveSharedKey(
+            myKeyPair.private, Base64.decode(peerPubLine.trim(), Base64.NO_WRAP)
+        )
+        try {
+            // ① 验对端证明：能加密出这一串，说明它算出了同一把会话密钥 = 确实持有二维码里的 A 公钥。
+            val proofLine = reader.readLine() ?: throw IOException("握手失败：对端未发送确认")
+            val proof = runCatching {
+                P2PCrypto.decrypt(sessionKey, Base64.decode(proofLine.trim(), Base64.NO_WRAP))
+            }.getOrNull()
+            if (proof != PROOF_FROM_CONNECTOR) throw IOException("握手失败：对端确认无效")
+            // ② 回本端证明：让对端确认「A 真的 accept 了这条连接并读到了我」。少了这一步，一条烂在
+            //    内核 backlog 里的连接在 B 看来与真连接毫无区别（见 [startListening] 的说明）。
+            writer.println(
+                Base64.encodeToString(P2PCrypto.encrypt(sessionKey, PROOF_FROM_LISTENER), Base64.NO_WRAP)
+            )
+            if (writer.checkError()) throw IOException("握手失败：确认写入失败")
+        } catch (e: Exception) {
+            sessionKey.fill(0) // 半途失败的密钥不留在内存里
+            throw e
         }
-        return P2PSession(socket, UNKNOWN_CONTACT, sessionKey, reader, writer, peerProto2)
+        return P2PSession(socket, UNKNOWN_CONTACT, sessionKey, reader, writer)
     }
 
     /**
      * B 侧握手：生成临时对，把公钥经 socket 发给 A，用自己私钥 + A 的 tpk（二维码）派生。
      * [peerTempPublicKey] = 二维码里 A 的临时公钥 Base64。
      *
-     * [peerProto2]（二维码 `ver` ≥ [PROTO_V2]）时**必须等到 A 的确认才算连上**——这是「假连接」的解药：
-     * 原实现只写不读，TCP 连上（哪怕只是躺在对端内核的 backlog 里、A 根本没 accept）就宣布 CONNECTED，
-     * 此后所有消息与文件都发进一条没人读的管道，还一路报「发送成功」。老版本 A 出的二维码 `ver`=1 →
-     * 跳过确认，行为与从前完全一致，不影响向后兼容。
+     * **必须等到 A 的确认才算连上**——这是「假连接」的解药：原实现只写不读，TCP 连上（哪怕只是躺在对端
+     * 内核的 backlog 里、A 根本没 accept）就宣布 CONNECTED，此后所有消息与文件都发进一条没人读的管道，
+     * 还一路报「发送成功」。
      */
-    private fun performConnectorHandshake(
-        socket: Socket, peerTempPublicKey: String, peerProto2: Boolean
-    ): P2PSession {
+    private fun performConnectorHandshake(socket: Socket, peerTempPublicKey: String): P2PSession {
         val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
         val writer = PrintWriter(socket.getOutputStream(), true)
         val myKeyPair = P2PCrypto.generateEcKeyPair()
         // 自己的临时公钥也走压缩编码（33 字节），与二维码 tpk 一致。
-        val myPub = Base64.encodeToString(P2PCrypto.compressPublicKey(myKeyPair.public), Base64.NO_WRAP)
-        writer.println(if (peerProto2) "$myPub $PROTO2_TAG" else myPub)
+        writer.println(Base64.encodeToString(P2PCrypto.compressPublicKey(myKeyPair.public), Base64.NO_WRAP))
         val sessionKey = P2PCrypto.deriveSharedKey(myKeyPair.private, Base64.decode(peerTempPublicKey, Base64.NO_WRAP))
-        if (peerProto2) {
-            try {
-                writer.println(
-                    Base64.encodeToString(P2PCrypto.encrypt(sessionKey, PROOF_FROM_CONNECTOR), Base64.NO_WRAP)
-                )
-                if (writer.checkError()) throw HandshakeFailedException("连接已断开，请重新扫码。")
-                socket.soTimeout = HANDSHAKE_TIMEOUT_MS // 对方不应答时别无限等
-                val ackLine = reader.readLine()
-                    ?: throw HandshakeFailedException("对方未确认本次连接，邀请码可能已失效，请让对方重新生成。")
-                val ack = runCatching {
-                    P2PCrypto.decrypt(sessionKey, Base64.decode(ackLine.trim(), Base64.NO_WRAP))
-                }.getOrNull()
-                if (ack != PROOF_FROM_LISTENER) {
-                    throw HandshakeFailedException("对方的确认无效，邀请码可能已失效，请让对方重新生成。")
-                }
-                socket.soTimeout = 0
-            } catch (e: java.net.SocketTimeoutException) {
-                sessionKey.fill(0)
-                throw HandshakeFailedException("对方未在 ${HANDSHAKE_TIMEOUT_MS / 1000} 秒内确认本次连接。请确认对方仍停留在邀请码页面。")
-            } catch (e: Exception) {
-                sessionKey.fill(0)
-                throw e
+        try {
+            writer.println(
+                Base64.encodeToString(P2PCrypto.encrypt(sessionKey, PROOF_FROM_CONNECTOR), Base64.NO_WRAP)
+            )
+            if (writer.checkError()) throw HandshakeFailedException("连接已断开，请重新扫码。")
+            socket.soTimeout = HANDSHAKE_TIMEOUT_MS // 对方不应答时别无限等
+            val ackLine = reader.readLine()
+                ?: throw HandshakeFailedException("对方未确认本次连接，邀请码可能已失效，请让对方重新生成。")
+            val ack = runCatching {
+                P2PCrypto.decrypt(sessionKey, Base64.decode(ackLine.trim(), Base64.NO_WRAP))
+            }.getOrNull()
+            if (ack != PROOF_FROM_LISTENER) {
+                throw HandshakeFailedException("对方的确认无效，邀请码可能已失效，请让对方重新生成。")
             }
+            socket.soTimeout = 0
+        } catch (e: java.net.SocketTimeoutException) {
+            sessionKey.fill(0)
+            throw HandshakeFailedException(
+                "对方未在 ${HANDSHAKE_TIMEOUT_MS / 1000} 秒内确认本次连接。请确认对方仍停留在邀请码页面。"
+            )
+        } catch (e: Exception) {
+            sessionKey.fill(0)
+            throw e
         }
-        return P2PSession(socket, UNKNOWN_CONTACT, sessionKey, reader, writer, peerProto2)
+        return P2PSession(socket, UNKNOWN_CONTACT, sessionKey, reader, writer)
     }
 
     /** 握手确认阶段的失败（对端未 accept / 未应答 / 确认无效）。[message] 即给用户看的原因。 */
@@ -893,18 +886,15 @@ class P2PSessionManager @Inject constructor(
             }.toString()
             // 等对端的收妥回执再宣布成功（见 [FileTransferChannel.FILE_ACK]）。**必须先挂等待再发 END**，
             // 否则回执可能比我们开始等更早到达，永远等不到。
-            val waiter = CompletableDeferred<String>().takeIf { session.peerProto2 }
-                ?.also { pendingFileAck = msgId to it }
+            val waiter = CompletableDeferred<String>().also { pendingFileAck = msgId to it }
             sendFileFrame(channel, FileTransferChannel.FILE_END, P2PCrypto.encrypt(key, endJson))
-            if (waiter != null) {
-                val reason = withTimeoutOrNull(FILE_ACK_TIMEOUT_MS) { waiter.await() }
-                    ?: "对方未在 ${FILE_ACK_TIMEOUT_MS / 1000} 秒内确认收到"
-                if (pendingFileAck?.first == msgId) pendingFileAck = null
-                // 「校验不过」说明文件坏了，通道本身好好的——别让 [sendFile] 的 IO 收尾把一条健康的通道
-                // 拆掉重建；只有「没等到回执」才真的说明这条通道可疑。
-                if (reason.isNotEmpty()) {
-                    throw if (reason == ACK_REJECTED) IllegalStateException(reason) else IOException(reason)
-                }
+            val reason = withTimeoutOrNull(FILE_ACK_TIMEOUT_MS) { waiter.await() }
+                ?: "对方未在 ${FILE_ACK_TIMEOUT_MS / 1000} 秒内确认收到"
+            if (pendingFileAck?.first == msgId) pendingFileAck = null
+            // 「校验不过」说明文件坏了，通道本身好好的——别让 [sendFile] 的 IO 收尾把一条健康的通道
+            // 拆掉重建；只有「没等到回执」才真的说明这条通道可疑。
+            if (reason.isNotEmpty()) {
+                throw if (reason == ACK_REJECTED) IllegalStateException(reason) else IOException(reason)
             }
 
             // 副本写全 → 记 localPath（发送方此后可预览自己发的图/视频）。
@@ -1326,10 +1316,7 @@ class P2PSessionManager @Inject constructor(
         waiter.second.complete(if (json.optBoolean("ok", false)) "" else ACK_REJECTED)
     }
 
-    /**
-     * 回一帧收妥回执。发不出去不影响本端这份已经收好的文件，故只 runCatching——不让它掀翻接收循环。
-     * 老版本发送方不认识这个帧类型，收到即忽略（见 [FileTransferChannel.FILE_ACK]）。
-     */
+    /** 回一帧收妥回执。发不出去不影响本端这份已经收好的文件，故只 runCatching——不让它掀翻接收循环。 */
     private fun sendFileAck(channel: FileTransferChannel, key: ByteArray, msgId: String, ok: Boolean) {
         runCatching {
             val json = JSONObject().apply { put("msgId", msgId); put("ok", ok) }.toString()
@@ -1487,23 +1474,15 @@ class P2PSessionManager @Inject constructor(
         ((b[off].toInt() and 0xFF) shl 24) or ((b[off + 1].toInt() and 0xFF) shl 16) or
             ((b[off + 2].toInt() and 0xFF) shl 8) or (b[off + 3].toInt() and 0xFF)
 
-    /**
-     * 丢弃当前文件通道：停维持协程、中止在途收发、关通道。**保留已绑定的 [fileServerSocket]**——A 侧会话
-     * 断开后仍常驻 accept 等对端重连（见 [startListening]），端口留着比反复解绑重绑稳当。
-     */
-    private fun discardFileChannel() {
-        // 先停维持协程，否则它会在下面刚关掉通道后转头又建一条（会话已亡的空壳连接）。
+    /** 关闭文件通道 + A 侧监听 socket（disconnect / 对端断开时）；中止在途收发、删半成品。 */
+    private fun teardownFileChannel() {
+        // 先停维持协程，否则它会在下面刚关掉通道/监听 socket 后转头又建一条（会话已亡的空壳连接）。
         fileChannelJob?.cancel()
         fileChannelJob = null
         failPendingFileAck("连接已断开，未收到对方的收妥回执")
         abortIncoming(MessageStatus.FAILED)
         runCatching { fileChannel?.close() }
         fileChannel = null
-    }
-
-    /** 彻底收摊：[discardFileChannel] + 关掉 A 侧的文件监听 socket。只在 [disconnect] 用。 */
-    private fun teardownFileChannel() {
-        discardFileChannel()
         runCatching { fileServerSocket?.close() }
         fileServerSocket = null
     }
@@ -1518,7 +1497,7 @@ class P2PSessionManager @Inject constructor(
             try {
                 while (true) {
                     val line = session.reader.readLine() ?: break // null = 对端关闭
-                    // 本条会话已被新连入顶掉（见 [acceptOne]）→ 旧连接上的帧一律不作数，就地退场。
+                    // 本条已不是当前会话（被 disconnect 拆掉/换掉）→ 这条连接上的帧一律不作数，就地退场。
                     if (!isSessionCurrent(session)) break
                     lastInboundAt = System.currentTimeMillis() // 任意入站帧都视为存活（含 PING/PONG）
                     handleIncoming(line)
@@ -1615,11 +1594,10 @@ class P2PSessionManager @Inject constructor(
     /**
      * 接收循环结束（对端断开）：若非主动 disconnect，归位为 DISCONNECTED 并抹密钥。
      *
-     * [session] = 结束的是**哪一条**会话。它已被新连入顶掉（[acceptOne]）时必须原地返回：那条新会话正常
-     * 得很，状态归它自己管，这里再归位一次就会把刚建好的连接当场判死。
+     * [session] = 结束的是**哪一条**会话。它已经不是当前那条时必须原地返回（会话被 [disconnect] 拆掉后
+     * 读循环才醒来是常态）：状态早已由拆它的人归好位，这里再走一遍只会互相打架。
      *
-     * A 侧监听 socket **不关**（只 [discardFileChannel]，不 teardown）：常驻 accept 循环还等着对端拿原
-     * 邀请码重连，见 [startListening]。
+     * 掉线**不重开监听**：邀请码随首次握手作废（见 [acceptOne]），要再连必须由用户重新出码。
      */
     private fun onPeerDisconnected(session: P2PSession) {
         if (!isSessionCurrent(session)) return
@@ -1628,10 +1606,9 @@ class P2PSessionManager @Inject constructor(
             heartbeatJob?.cancel(); heartbeatJob = null
             _activeSession.value?.sessionKey?.fill(0)
             _activeSession.value = null
-            _connectionState.value =
-                if (listenerJob?.isActive == true) ConnectionState.LISTENING else ConnectionState.DISCONNECTED
+            _connectionState.value = ConnectionState.DISCONNECTED
             _burnMode.value = BurnMode(enabled = false) // 焚毁模式随会话清除
-            discardFileChannel()
+            teardownFileChannel()
         }
     }
 
@@ -1649,11 +1626,9 @@ class P2PSessionManager @Inject constructor(
             session.sessionKey.fill(0) // 抹掉内存中的会话密钥
             runCatching { session.socket.close() }
         }
-        runCatching { serverSocket.value?.close() }
+        closeInviteListener() // 关 8888 + 作废临时密钥与有效期
         teardownFileChannel()
         _activeSession.value = null
-        serverSocket.value = null
-        listenerKeyPair = null
         _connectionState.value = ConnectionState.DISCONNECTED
         _burnMode.value = BurnMode(enabled = false) // 焚毁模式随会话清除
     }
@@ -1793,23 +1768,22 @@ class P2PSessionManager @Inject constructor(
         /** 握手读超时（ms）：对端连上却不发公钥时，别把 A 的 accept 循环永久卡住。 */
         private const val HANDSHAKE_TIMEOUT_MS = 10_000
 
+        /** 邀请码有效期（ms）：与邀请码页那个 120 秒倒计时同源，UI 与判据别各写各的。 */
+        private const val INVITE_TTL_MS = 120_000L
+
         /**
-         * 协议版本 2（`[network]` 2026-08-02）。写进二维码的 `ver`，也是 B 判断 A 是否新版的唯一依据：
-         * ① 握手双向确认（[PROOF_FROM_CONNECTOR]/[PROOF_FROM_LISTENER]）；
-         * ② 文件收妥回执（[FileTransferChannel.FILE_ACK]）。
+         * 协议版本 2（`[network]` 2026-08-02）：握手双向确认（[PROOF_FROM_CONNECTOR]/[PROOF_FROM_LISTENER]）
+         * + 文件收妥回执（[FileTransferChannel.FILE_ACK]）。写进二维码的 `ver`，供日后真需要分版本时有据可依。
          *
-         * **两个方向的兼容都是完整的**：老 B 扫新 A 的码——老 B 不看 `ver`、只发纯公钥，新 A 由「公钥行没有
-         * [PROTO2_TAG] 后缀」判定为老版本，两步确认与回执等待一律跳过，线上字节与 v1 完全一致；新 B 扫老 A
-         * 的码——`ver`=1，新 B 同样退回 v1 路径。
+         * **不做旧版本兼容**：两端一律装同一个包（客户测试即如此），故代码里没有任何按 `ver` 分岔的路径。
+         * 混版本连接会在握手确认那一步失败——这是刻意的，总好过又退回「连上了却谁也不知道对端在不在」。
+         * 跑的是不是同一个包，看诊断日志首行的 `构建 <commit>`。
          */
         const val PROTO_V2 = 2
 
-        /** proto2 的对端在握手首行公钥后附的标记（空格分隔；Base64(NO_WRAP) 本身不含空格）。 */
-        private const val PROTO2_TAG = "p2"
-
         /**
          * B → A 的握手证明明文。用会话密钥加密：只有算出同一把密钥的人才产得出，而算出同一把密钥意味着
-         * 持有二维码里的 A 公钥。A 据此才敢让一条新连入**顶掉**当前会话（见 [acceptOne]）。
+         * 持有二维码里的 A 公钥——A 据此确认来者拿的确实是这张邀请码，而不只是摸到了 8888 端口。
          */
         private const val PROOF_FROM_CONNECTOR = "MIDUN-CONNECTOR-OK"
 

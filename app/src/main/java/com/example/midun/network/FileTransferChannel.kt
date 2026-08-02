@@ -73,9 +73,6 @@ class FileTransferChannel(private val socket: Socket) {
          *
          * 没有它，「发送成功」只等于「写进了本机内核缓冲区」——对端进程死了、连接烂在对端 backlog 里没人
          * 读，write 一样立刻返回成功。现场即：B 报「发送文件结束：成功，耗时 0s」，A 侧一条接收记录都没有。
-         *
-         * 老版本对端不认识本类型，落到 `handleFileFrame` 的 `else -> {}` 被忽略（发它无害）；发端只在
-         * [P2PSessionManager.PROTO_V2] 对端上**等待**它，故不影响与老版本互通。
          */
         const val FILE_ACK = 5
 
