@@ -1197,3 +1197,18 @@ v4 §9 的握手是**单向**的：A 的临时公钥经二维码带外送达 B�
 **修法**：`SessionForegroundService` 加 `@AndroidEntryPoint` 注入 `P2PSessionManager`，override `onTaskRemoved()` → `disconnect()` → `stopForeground(STOP_FOREGROUND_REMOVE)` → `stopSelf()` → `exitProcess(0)`，与息屏自动退出（`MainActivity.exitApp`）同一套语义。先 disconnect 再退是有意的：它同步 close socket，对端 `readLine` 当场返回 null 正常掉线，顺带治了「本机已退、对端还显示在线」的幽灵连接；`stopForeground(REMOVE)` 则堵掉「点通知栏那条通知免登录进主界面」这第二个入口。
 
 **为什么不用 `android:stopWithTask="true"`**：设了它系统就**不再回调** `onTaskRemoved`（`FLAG_STOP_WITH_TASK` 的语义），只是把服务停掉——认证态与 socket 仍留在进程里，等系统何时回收空进程，不确定也不可控。两者只能二选一，选能当场拆干净的这条。
+
+## 会话顶栏「断开连接」入口（v4 外增量，客户 2026-08-03）
+
+同一次反馈的另一半：「退出会话界面不会断连」。查下来这**不是 bug 而是缺口**——会话是全局态（`P2PSessionManager` 单例，socket/心跳/accept 循环/文件通道都挂在它自己的 scope 上），退出会话页只是 `popBackStack`。全项目 `disconnect()` 只有三个调用点：重新出码、离开扫码屏、本机卡离开认证态。也就是说**用户在 UI 上没有任何主动结束会话的手段**，只能靠拔卡、登出、自动锁定、对端掉线或重新出码。
+
+**做法（客户在 A/B 里选了 B）**：
+
+- **A（未采纳）**：返回键即断连。符合直觉，但从会话页退回首页看一眼文件再进来是常态操作，隐式断连会让用户每次都得重新扫码（连接不可重用，见 v4「断开需重新建链」）。
+- **B（采纳）**：顶栏状态行后面挂一条显式链接，返回键行为不变。原先只有未连接时才有「前往建立连接」，现在两种状态各有一条：`已连接 · 断开连接` / `未连接 · 前往建立连接`。
+
+点「断开连接」弹二次确认——断连不可撤：邀请码一次性、连接不可重用，再连要两个人同时在场重新扫码，误触代价不小。文案照实说明在途文件传输会中断（`disconnect()` 会 `teardownFileChannel()` → `abortIncoming(FAILED)`）、聊天记录不受影响。
+
+`ChatViewModel.disconnectSession()` 没有复用 `stopConnection()`，只为让诊断日志里那行 `[net] 主动拆会话：…` 能分清是「离开扫码屏」还是「用户手动断」。
+
+连带效果均为所需：状态离开 CONNECTED → 前台服务停、常驻通知消失、CPU/WiFi 锁释放、阅后即焚模式清回关闭（本就是会话级）、对端同步显示未连接。

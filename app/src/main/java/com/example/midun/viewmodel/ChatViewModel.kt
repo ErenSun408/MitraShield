@@ -526,4 +526,19 @@ class ChatViewModel @Inject constructor(
     fun stopConnection() {
         p2pManager.disconnect("离开扫码屏，停止监听")
     }
+
+    /**
+     * 用户在会话顶栏主动断开（`[chat]` 2026-08-03 客户要求）。
+     *
+     * 此前 App 里**没有任何**主动结束会话的入口：会话是全局态（`P2PSessionManager` 单例），退出会话页只是
+     * `popBackStack`，socket、心跳、文件通道一概照旧；用户只能靠拔卡、登出、自动锁定、对端掉线或重新出码
+     * 才能把它断掉。断连本身仍走 [P2PSessionManager.disconnect]（抹会话密钥 + close socket → 对端 `readLine`
+     * 当场返回 null，两端同步掉线），这里只是补上那个入口。
+     *
+     * 刻意**不做在返回键上**：从会话页退回首页看一眼文件再进来是常态操作，隐式断连会让用户每次都得重新扫码
+     * （连接不可重用，见 v4「断开需重新建链」）。
+     */
+    fun disconnectSession() {
+        p2pManager.disconnect("用户在会话页主动断开")
+    }
 }

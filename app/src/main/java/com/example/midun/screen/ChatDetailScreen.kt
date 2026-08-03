@@ -123,6 +123,7 @@ fun ChatDetailScreen(
     // 本地状态承载搜索词，避免经 ViewModel StateFlow 异步往返打断中文/IME 组合（见 M6.3 修复）。
     var searchQuery by remember { mutableStateOf("") }
     var showClearConfirm by remember { mutableStateOf(false) }
+    var showDisconnectConfirm by remember { mutableStateOf(false) } // 顶栏「断开连接」的二次确认
     val listState = rememberLazyListState()
 
     // —— 文件传输（M11.5.3）——
@@ -379,19 +380,20 @@ fun ChatDetailScreen(
                                     fontSize = 13.sp,
                                     color = if (connectedHere) Accent else Danger
                                 )
-                                // 点建连链接触发 onGoConnect（内层 clickable 消费事件，不冒泡到进资料页）。
-                                if (!connectedHere) {
-                                    Text(" · ", fontSize = 13.sp, color = Color.White.copy(0.7f))
-                                    Text(
-                                        "前往建立连接",
-                                        fontSize = 13.sp,
-                                        color = Color.White,
-                                        textDecoration = TextDecoration.Underline,
-                                        modifier = Modifier
-                                            .clickable { onGoConnect() }
-                                            .padding(horizontal = 2.dp, vertical = 1.dp)
-                                    )
-                                }
+                                // 状态后面那条链接：未连接=去建连，已连接=主动断开（`[chat]` 2026-08-03 客户要求，
+                                // 此前全 App 没有任何结束会话的入口）。内层 clickable 消费事件，不冒泡到进资料页。
+                                Text(" · ", fontSize = 13.sp, color = Color.White.copy(0.7f))
+                                Text(
+                                    if (connectedHere) "断开连接" else "前往建立连接",
+                                    fontSize = 13.sp,
+                                    color = Color.White,
+                                    textDecoration = TextDecoration.Underline,
+                                    modifier = Modifier
+                                        .clickable {
+                                            if (connectedHere) showDisconnectConfirm = true else onGoConnect()
+                                        }
+                                        .padding(horizontal = 2.dp, vertical = 1.dp)
+                                )
                             }
                         }
                     }
@@ -802,6 +804,31 @@ fun ChatDetailScreen(
             text = { Text("需先与对方建立加密连接后才能开启阅后即焚。", color = TextSecondary) },
             confirmButton = {
                 TextButton(onClick = { showBurnGateDialog = false }) { Text("知道了", color = Primary) }
+            }
+        )
+    }
+
+    // 主动断开确认（`[chat]` 2026-08-03）：断连不可撤——邀请码一次性、连接不可重用，再连必须重新扫码，
+    // 而重新扫码要两个人同时在场，误触的代价不小，故加这一道。
+    if (showDisconnectConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDisconnectConfirm = false },
+            icon = { Icon(Icons.Default.LinkOff, null, tint = Danger) },
+            title = { Text("断开连接") },
+            text = {
+                Text(
+                    "断开后本次会话结束，在途的文件传输会中断，需重新扫码才能再次连接。聊天记录不受影响。",
+                    color = TextSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showDisconnectConfirm = false; chatViewModel.disconnectSession() },
+                    colors = ButtonDefaults.buttonColors(containerColor = Danger)
+                ) { Text("断开") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDisconnectConfirm = false }) { Text("取消", color = TextSecondary) }
             }
         )
     }
