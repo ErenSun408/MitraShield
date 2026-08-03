@@ -1160,3 +1160,25 @@ v4 §9 的握手是**单向**的：A 的临时公钥经二维码带外送达 B�
 **心跳宽限封顶**：`SLEEP_GRACE_MS` 原本无条件重置观察窗口，而进程被系统判「已缓存(后台)」时协程是**反复**冻结的，每轮都命中宽限 → 探活等于被整个关掉（现场 A 侧挂着一条对端早已 reset 的连接 2 分半，日志里一条「心跳判死」都没有）。改为连续宽限至多 2 轮。
 
 **认下的限制**：这些都治不了病根——A 侧 diag 反复打「⚠ 本应用的网络被系统拦截 …… 本进程=已缓存(后台)、电池优化=未豁免」，即会话进行中进程仍被归到 cached 档、系统直接断网并冻结协程。豁免电池优化 / 查前台服务为何没把进程钉住是另一件事。本次改的是**别再说谎**：连不上就报连不上，没送到就标未送达。
+
+## 「允许后台活动」引导（v4 外增量，2026-08-03）
+
+真机把断连钉死在系统侧：用户一开系统文件选取器或切去别的 App，本应用的两条 socket 在同一毫秒被 `ECONNABORTED` 掐掉，而框架的 `onBlockedStatusChanged` **从未触发**——掐网的不是 AOSP 那套（Doze / 待机分组 / 数据保护），而是厂商自家的后台管控，前台服务对它无效。客户实测确认：华为「应用管理 → 耗电详情 → 允许后台活动」打开后一切正常。
+
+**深链不可行，实测记录（EMUI / P30，2026-08-03）**：华为把 systemmanager 的相关界面全用自家权限锁死，四条路只有最后一条能走——
+
+| 目标 | 结果 |
+|---|---|
+| `DetailOfSoftConsumptionActivity`（耗电详情） | ❌ 需 `huawei.android.permission.HW_SIGNATURE_OR_SYSTEM` |
+| `StartupNormalAppListActivity`（启动管理） | ❌ 需 `com.huawei.permission.external_app_settings.USE_COMPONENT` |
+| `HwPowerManagerActivity`（电池管理） | ❌ 需 `com.huawei.systemmanager.permission.ACCESS_INTERFACE` |
+| `ACTION_APPLICATION_DETAILS_SETTINGS`（标准应用详情页） | ✅ |
+
+签名级权限只授予用厂商证书签名或位于系统分区的应用，两样我们都不可能有——**这不是绕一下就能过的**。故只能送到应用详情页，剩下两步由文案指路，且**按 `Build.MANUFACTURER` 分厂商给**（华为/荣耀、小米、OPPO 系、vivo 各不相同，给错路径比不给更误导）。
+
+**不做「检测开关是否已开」**：既然连它的界面都碰不到，就更没有 API 能查它的状态。`isIgnoringBatteryOptimizations` / `isBackgroundRestricted` 都不反映它（实测）。故按客户定的口径来：
+
+- **首次插卡弹一次引导**——判据是**每进程**（`BackgroundActivityGuide.consumeAutoPrompt()`，进程级内存标志，重开 App 即复位）+ 用户没勾「不再询问」（`SettingsStore.backgroundGuideSuppressed`，落盘永久）。这个设置一关就断连，值得每次开 App 提醒一次，勾选给不想被打扰的用户一个明确出口。
+- **建联页常驻一条提示条**，措辞是「请确保系统允许应用后台活动」而非「检测到…受限」——查不到就别把猜的说成测的。
+
+**认下的限制**：这只是引导，改不了厂商行为；用户不开就是不开。真正的自愈要靠会话级重连（见 [[project_midun_session_reconnect]] 的设计，尚未实现）。

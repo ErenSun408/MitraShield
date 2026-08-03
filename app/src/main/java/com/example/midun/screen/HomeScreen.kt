@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -51,6 +52,32 @@ fun HomeScreen(
     var cleanPassword by remember { mutableStateOf("") }
     var cleanError by remember { mutableStateOf("") }
     var cleanLoading by remember { mutableStateOf(false) }
+
+    // 「允许后台活动」引导（`[network]` 2026-08-03）：**每个进程的首次插卡**进到主界面时弹一次，
+    // 除非用户勾了「不再询问」。摆在首页而非登录页，是因为登录页那会儿用户还在跟密码较劲，弹这个只会被随手划掉。
+    //
+    // 两道判据缺一不可：`consumeAutoPrompt()` 管「本进程弹过没有」（进程级内存标志，重开 App 即复位），
+    // `backgroundGuideSuppressed` 管「用户是不是明确说了别再问」（落盘，永久）。
+    val context = LocalContext.current
+    val guideSuppressed by deviceViewModel.backgroundGuideSuppressed.collectAsState()
+    var showBackgroundGuide by remember { mutableStateOf(false) }
+    LaunchedEffect(guideSuppressed) {
+        if (!guideSuppressed && BackgroundActivityGuide.consumeAutoPrompt()) showBackgroundGuide = true
+    }
+    if (showBackgroundGuide) {
+        BackgroundActivityGuideDialog(
+            showSuppressOption = true,
+            onDismiss = { suppress ->
+                showBackgroundGuide = false
+                if (suppress) deviceViewModel.setBackgroundGuideSuppressed(true)
+            },
+            onOpenSettings = { suppress ->
+                showBackgroundGuide = false
+                if (suppress) deviceViewModel.setBackgroundGuideSuppressed(true)
+                BackgroundActivityGuide.openAppSettings(context)
+            }
+        )
+    }
 
     // 进/返本屏重读单例，使其它 Tab 的增删（建文件夹、收消息等）即时反映到首页统计。
     // 三个 VM 均落在 Main 的 NavBackStackEntry scope，与各 Tab 同实例；底层 Mock 为 @Singleton。

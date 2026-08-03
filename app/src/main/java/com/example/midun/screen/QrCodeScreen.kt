@@ -120,6 +120,20 @@ fun QrCodeScreen(
     val networkHint = rememberNetworkHint()
     var showNetworkHint by remember { mutableStateOf(true) }
 
+    // 后台活动受限提示条 + 点「去设置」弹的引导框（与首次插卡那次同一个框，见 [BackgroundActivityGuide]）。
+    var showBackgroundHint by remember { mutableStateOf(true) }
+    var showBackgroundGuide by remember { mutableStateOf(false) }
+    if (showBackgroundGuide) {
+        // 用户自己点「去设置」打开的，不给「不再询问」——那是他主动要看的东西。
+        BackgroundActivityGuideDialog(
+            onDismiss = { showBackgroundGuide = false },
+            onOpenSettings = {
+                showBackgroundGuide = false
+                BackgroundActivityGuide.openAppSettings(mainContext)
+            }
+        )
+    }
+
     // 离开本屏时：若未建立连接，停止监听释放 ServerSocket；已连接则保留会话供后续聊天（M10.4）。
     DisposableEffect(Unit) {
         onDispose {
@@ -207,11 +221,24 @@ fun QrCodeScreen(
                 )
             )
         },
-        // 底部网络提示条（客户需求 2026-07-31）：当前跨网直连只在电信数据↔电信数据之间实测通过，故在建联页
-        // 提示本机接入类型与对端所需类型。**纯提示，不参与任何连接判定**；可叉掉（本次进入本页内不再显示）。
+        // 底部两条提示条，都是「建联失败最常见的原因」，都可叉掉（本次进入本页内不再显示）。
+        // 上面那条：后台活动受限（`[network]` 2026-08-03，真机定位的断连根因）——**常驻不检测**，因为厂商那个
+        //   开关既没有 API 能查、界面也被签名级权限锁死（见 [BackgroundActivityGuide]）。
+        // 下面那条：网络类型（客户需求 2026-07-31）——当前跨网直连只在电信数据↔电信数据之间实测通过。
+        // 两条都**纯提示，不参与任何连接判定**。
         bottomBar = {
-            if (showNetworkHint) {
-                NetworkHintBar(text = networkHint, onDismiss = { showNetworkHint = false })
+            Column(Modifier.navigationBarsPadding()) {
+                if (showBackgroundHint) {
+                    HintBar(
+                        text = BackgroundActivityGuide.HINT,
+                        onDismiss = { showBackgroundHint = false },
+                        actionText = "去设置",
+                        onAction = { showBackgroundGuide = true }
+                    )
+                }
+                if (showNetworkHint) {
+                    HintBar(text = networkHint, onDismiss = { showNetworkHint = false })
+                }
             }
         }
     ) { padding ->
@@ -664,46 +691,3 @@ private fun CameraPreview(
 }
 
 
-/**
- * 底部网络提示条（客户需求 2026-07-31）：一行文案 + 一个叉。
- *
- * 只讲「本端现在是什么网、对端需要是什么网」，并明确标注仅供参考——能不能通最终由实测决定，
- * 不能让这行字被当成承诺。**不参与任何连接判定**，叉掉也不影响功能。
- */
-@Composable
-private fun NetworkHintBar(text: String, onDismiss: () -> Unit) {
-    // 浅红底 + 红字（客户 2026-08-01）：原来的灰字灰底和页面背景几乎同色，用户根本注意不到「网络不对」这件事，
-    // 而它恰恰是建联失败最常见的原因。用 Danger 的浅色底把它从背景里拎出来，措辞不变。
-    Surface(color = DangerBg, tonalElevation = 2.dp) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Default.Info,
-                contentDescription = null,
-                tint = Danger,
-                modifier = Modifier.size(16.dp)
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text,
-                color = Danger,
-                fontSize = 12.sp,
-                lineHeight = 16.sp,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
-                Icon(
-                    Icons.Default.Close,
-                    contentDescription = "关闭提示",
-                    tint = Danger,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-        }
-    }
-}

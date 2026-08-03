@@ -61,7 +61,26 @@ class SettingsStore @Inject constructor(
         store.edit { it[KEY_OPERATION_LOG_ENABLED] = enabled }
     }
 
+    /**
+     * 用户是否勾了「允许后台活动」引导框里的**不再询问**（`[network]` 2026-08-03）。
+     *
+     * 只有勾了才永久不弹；没勾的话**每个进程的首次插卡都会再弹一次**（那一半的判据是进程内存标志，见
+     * [com.example.midun.screen.BackgroundActivityGuide]）——这个设置一关就断连，值得每次开 App 提醒一次，
+     * 而勾选给了不想被打扰的用户一个明确出口。建联页上那条常驻提示条不受此影响，一直都在。
+     *
+     * 落手机本地而非卡上：与自动锁定同理，这是 UI 偏好、且要在开盘前后都读得到；更重要的是它描述的是
+     * **这台手机的系统设置**，跟着卡走反而是错的（同一张卡插到另一台手机上，那台照样需要引导）。
+     */
+    val backgroundGuideSuppressed: Flow<Boolean> =
+        store.data.map { it[KEY_BACKGROUND_GUIDE_SUPPRESSED] ?: false }
+
+    suspend fun setBackgroundGuideSuppressed(suppressed: Boolean) {
+        store.edit { it[KEY_BACKGROUND_GUIDE_SUPPRESSED] = suppressed }
+    }
+
     companion object {
+        private val KEY_BACKGROUND_GUIDE_SUPPRESSED = booleanPreferencesKey("background_guide_suppressed")
+
         const val OPERATION_LOG_DEFAULT = false
         private val KEY_OPERATION_LOG_ENABLED = booleanPreferencesKey("operation_log_enabled")
 

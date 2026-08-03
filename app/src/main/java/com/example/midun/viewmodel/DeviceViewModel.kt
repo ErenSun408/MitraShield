@@ -211,6 +211,18 @@ class DeviceViewModel @Inject constructor(
         viewModelScope.launch { settingsStore.setInactivityTimeout(minutes) }
     }
 
+    /**
+     * 用户是否勾过「不再询问」（见 [com.example.midun.screen.BackgroundActivityGuide]）。
+     * **种子取 true**：读盘完成前一律当作已抑制，免得弹框在冷启动那一瞬间闪一下；读到真值再翻，
+     * 首次提醒晚半拍无所谓。
+     */
+    val backgroundGuideSuppressed: StateFlow<Boolean> = settingsStore.backgroundGuideSuppressed
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
+    fun setBackgroundGuideSuppressed(suppressed: Boolean) {
+        viewModelScope.launch { settingsStore.setBackgroundGuideSuppressed(suppressed) }
+    }
+
     // 自动登出计时转交单例：本 VM 是 Activity 作用域，按返回键 finish 后 viewModelScope 被取消，
     // 计时器会随之消失而认证态还在（→ 退出后永不登出）。见 [SecurityCardManager.onAppBackground]。
     fun onAppBackground() = cardManager.onAppBackground()
