@@ -13,3 +13,9 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# 助手的会话状态：每次会话都在变，且带本机绝对路径，对项目没有意义。
+/.omc
+
+# 打给客户的调试包（`<分支>_<日期>.apk`）：几十 MB 的构建产物，不进版本库。
+/*.apk
