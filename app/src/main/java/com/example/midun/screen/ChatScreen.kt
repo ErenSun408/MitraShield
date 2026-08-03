@@ -7,8 +7,10 @@ import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -18,10 +20,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -80,25 +85,9 @@ fun ChatListScreen(
         Spacer(Modifier.height(12.dp))
 
         if (contacts.isNotEmpty()) {
-            OutlinedTextField(
+            ContactSearchField(
                 value = searchText,
-                onValueChange = { searchText = it; chatViewModel.updateSearchQuery(it) },
-                placeholder = { Text("搜索联系人...", color = TextSecondary.copy(alpha = 0.6f)) },
-                leadingIcon = { Icon(Icons.Default.Search, null, tint = TextSecondary) },
-                trailingIcon = {
-                    if (searchText.isNotEmpty()) {
-                        IconButton(onClick = { searchText = ""; chatViewModel.updateSearchQuery("") }) {
-                            Icon(Icons.Default.Clear, null, tint = TextSecondary)
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                shape = RoundedCornerShape(24.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = Accent,
-                    unfocusedBorderColor = TextSecondary.copy(alpha = 0.3f)
-                )
+                onValueChange = { searchText = it; chatViewModel.updateSearchQuery(it) }
             )
             Spacer(Modifier.height(12.dp))
         }
@@ -141,6 +130,72 @@ fun ChatListScreen(
         )
     }
 }
+
+/**
+ * 联系人搜索框（`[ui]` 2026-08-03：客户嫌太高）。
+ *
+ * 用 [BasicTextField] + [OutlinedTextFieldDefaults.DecorationBox] 而不是直接用 `OutlinedTextField`：后者内部
+ * 写死了 56dp 的 `defaultMinSize` 和 16dp 的竖向内边距，外面套多少 `heightIn` 都压不下去（硬用 `height()`
+ * 压则会把文字裁掉）。装饰盒是官方给的口子——外观、焦点色、圆角边框全部照旧，只把内边距和最小高度换掉。
+ */
+@Composable
+private fun ContactSearchField(value: String, onValueChange: (String) -> Unit) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val colors = OutlinedTextFieldDefaults.colors(
+        focusedBorderColor = Accent,
+        unfocusedBorderColor = TextSecondary.copy(alpha = 0.3f)
+    )
+    val shape = RoundedCornerShape(24.dp)
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        singleLine = true,
+        textStyle = TextStyle(color = TextPrimary, fontSize = 14.sp),
+        cursorBrush = SolidColor(Accent),
+        interactionSource = interactionSource,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = SEARCH_FIELD_HEIGHT)
+    ) { innerTextField ->
+        OutlinedTextFieldDefaults.DecorationBox(
+            value = value,
+            innerTextField = innerTextField,
+            enabled = true,
+            singleLine = true,
+            visualTransformation = VisualTransformation.None,
+            interactionSource = interactionSource,
+            placeholder = { Text("搜索联系人...", color = TextSecondary.copy(alpha = 0.6f), fontSize = 14.sp) },
+            leadingIcon = { Icon(Icons.Default.Search, null, tint = TextSecondary, modifier = Modifier.size(18.dp)) },
+            trailingIcon = {
+                if (value.isNotEmpty()) {
+                    Icon(
+                        Icons.Default.Clear,
+                        contentDescription = "清除",
+                        tint = TextSecondary,
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable { onValueChange("") }
+                    )
+                }
+            },
+            // 竖向归零：高度改由上面的 heightIn 决定，图标与文字在装饰盒里自行居中。
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+            colors = colors,
+            container = {
+                OutlinedTextFieldDefaults.Container(
+                    enabled = true,
+                    isError = false,
+                    interactionSource = interactionSource,
+                    colors = colors,
+                    shape = shape
+                )
+            }
+        )
+    }
+}
+
+/** 搜索框外高：原生 OutlinedTextField 是 56dp，压到 42dp 后列表能多露出小半条联系人。 */
+private val SEARCH_FIELD_HEIGHT = 42.dp
 
 @Composable
 private fun NoSearchResultState(query: String) {
