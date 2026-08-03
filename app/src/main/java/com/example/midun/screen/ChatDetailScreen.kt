@@ -211,6 +211,7 @@ fun ChatDetailScreen(
     // 点空白处/切语音时收起一切，回到「刚进会话」的输入栏贴底态。
     val collapseAll = {
         showPlusPanel = false
+        showSourceMenu = false // 面板没了菜单也得走，否则下次开面板它会自己冒出来
         focusManager.clearFocus()
         keyboardController?.hide()
     }
@@ -456,6 +457,7 @@ fun ChatDetailScreen(
                     // 微信式布局：最左语音/键盘切换 → 中间输入框/按住说话 → 最右文件(空)/发送(有内容,渐变)。
                     IconButton(onClick = {
                         showPlusPanel = false                      // 切语音：功能面板一并收起（微信同款）
+                        showSourceMenu = false                     // 面板都收了，挂在它上面的来源菜单也别留着
                         if (voiceMode) pendingKeyboardFocus = true // 语音→键盘：切换后自动弹起键盘
                         voiceMode = !voiceMode
                         if (voiceMode) { voicePlayer.stop(); focusManager.clearFocus(); keyboardController?.hide() }
@@ -597,27 +599,6 @@ fun ChatDetailScreen(
                                 }
                             }
                         }
-                        // 「文件」子来源菜单（手机 / 文件夹），由工具栏「文件」格触发。
-                        DropdownMenu(
-                            expanded = showSourceMenu,
-                            onDismissRequest = { showSourceMenu = false },
-                            properties = PopupProperties(focusable = false)
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("从手机存储") },
-                                leadingIcon = { Icon(Icons.Default.PhoneAndroid, null, tint = Primary) },
-                                onClick = { showSourceMenu = false; pickFileLauncher.launch("*/*") }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("从文件夹") },
-                                leadingIcon = { Icon(Icons.Default.Folder, null, tint = Primary) },
-                                onClick = {
-                                    showSourceMenu = false
-                                    showPickDialog = true
-                                    chatViewModel.loadSaveFolders()
-                                }
-                            )
-                        }
                     }
                 }
                 // 输入栏下方的共享空间：键盘、+ 工具栏、系统导航栏三者取最大高度占位。
@@ -634,8 +615,19 @@ fun ChatDetailScreen(
                     if (panelHeight > 0.dp) {
                         PlusToolPanel(
                             modifier = Modifier.graphicsLayer { alpha = panelAlpha },
-                            onFile = { showPlusPanel = false; showSourceMenu = true },
-                            onCamera = { showPlusPanel = false; showCamera = true }
+                            // 点「文件」**不再收面板**（客户 2026-08-03）：原来先把面板塌到底、再在最右边那颗 ⊕
+                            // 上弹菜单，用户的视线要从左下角跳到右下角，中间还夹一段面板塌陷动画。现在面板留在原处，
+                            // 菜单直接挂在「文件」这一格上（贴底所以自动朝上弹）。
+                            onFile = { showSourceMenu = true },
+                            onCamera = { showPlusPanel = false; showCamera = true },
+                            sourceMenuExpanded = showSourceMenu,
+                            onDismissSourceMenu = { showSourceMenu = false },
+                            onPickFromPhone = { showSourceMenu = false; pickFileLauncher.launch("*/*") },
+                            onPickFromFolder = {
+                                showSourceMenu = false
+                                showPickDialog = true
+                                chatViewModel.loadSaveFolders()
+                            }
                         )
                     }
                 }
@@ -999,7 +991,11 @@ fun ChatDetailScreen(
 private fun PlusToolPanel(
     modifier: Modifier = Modifier,
     onFile: () -> Unit,
-    onCamera: () -> Unit
+    onCamera: () -> Unit,
+    sourceMenuExpanded: Boolean,
+    onDismissSourceMenu: () -> Unit,
+    onPickFromPhone: () -> Unit,
+    onPickFromFolder: () -> Unit
 ) {
     Row(
         modifier = modifier
@@ -1009,7 +1005,27 @@ private fun PlusToolPanel(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Spacer(Modifier.width(8.dp))
-        PlusTool(Icons.Default.InsertDriveFile, "文件", onFile)
+        // 来源菜单挂在「文件」这一格上：面板贴屏幕底，下方没有空间，Compose 的 DropdownMenu 会自动朝上弹，
+        // 正好落在这一格的正上方——点哪儿、菜单从哪儿出来，视线不用跑。
+        Box {
+            PlusTool(Icons.Default.InsertDriveFile, "文件", onFile)
+            DropdownMenu(
+                expanded = sourceMenuExpanded,
+                onDismissRequest = onDismissSourceMenu,
+                properties = PopupProperties(focusable = false)
+            ) {
+                DropdownMenuItem(
+                    text = { Text("从手机存储") },
+                    leadingIcon = { Icon(Icons.Default.PhoneAndroid, null, tint = Primary) },
+                    onClick = onPickFromPhone
+                )
+                DropdownMenuItem(
+                    text = { Text("从文件夹") },
+                    leadingIcon = { Icon(Icons.Default.Folder, null, tint = Primary) },
+                    onClick = onPickFromFolder
+                )
+            }
+        }
         PlusTool(Icons.Default.PhotoCamera, "拍摄", onCamera)
     }
 }
@@ -1355,7 +1371,13 @@ private fun SaveToFolderDialog(
                     )
                 } else {
                     if (folders.isEmpty()) {
-                        Text("暂无文件夹，请新建一个。", fontSize = 12.sp, color = TextSecondary)
+                        Text(
+                            "暂无文件夹，请新建一个。",
+                            fontSize = 12.sp,
+                            color = TextSecondary,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     } else {
                         Column(modifier = Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
                             folders.forEach { folder ->
@@ -1372,23 +1394,20 @@ private fun SaveToFolderDialog(
                             }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    TextButton(onClick = { creating = true }) {
-                        Icon(Icons.Default.CreateNewFolder, null, tint = Primary, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("新建文件夹", color = Primary)
-                    }
                 }
             }
         },
+        // 「新建文件夹」从正文里挪到按钮行、取消右侧（客户 2026-08-03）：它和「创建并保存」本来就是同一条
+        // 动作线上的两步，挤在正文里既弱化了它、又让空文件夹时那句提示旁边杵着个孤零零的按钮。
         confirmButton = {
-            if (creating) {
-                Button(
-                    onClick = { if (newName.isNotBlank()) onCreateFolder(newName.trim()) },
-                    enabled = newName.isNotBlank(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
-                ) { Text("创建并保存") }
-            }
+            Button(
+                onClick = {
+                    if (creating) { if (newName.isNotBlank()) onCreateFolder(newName.trim()) }
+                    else creating = true
+                },
+                enabled = !creating || newName.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = Primary)
+            ) { Text(if (creating) "创建并保存" else "新建文件夹") }
         },
         dismissButton = {
             TextButton(onClick = { if (creating) creating = false else onDismiss() }) {
