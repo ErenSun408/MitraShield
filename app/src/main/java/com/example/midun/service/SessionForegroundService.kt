@@ -13,6 +13,10 @@ import androidx.core.app.NotificationCompat
 import com.example.midun.MainActivity
 import com.example.midun.R
 import com.example.midun.data.real.CardPerf
+import com.example.midun.network.P2PSessionManager
+import dagger.hilt.android.AndroidEntryPoint
+import javax.inject.Inject
+import kotlin.system.exitProcess
 
 /**
  * 会话期间的前台服务（`[network]` 2026-08-01 客户故障「发图片/文件时断连」定案后新增）。
@@ -36,7 +40,11 @@ import com.example.midun.data.real.CardPerf
  * 并设 `VISIBILITY_SECRET`，锁屏上连应用名都不出现。绝不可把对端备注或消息内容放进去，那等于在锁屏上广播
  * 「你此刻在和谁聊天」。
  */
+@AndroidEntryPoint
 class SessionForegroundService : Service() {
+
+    /** 上划清理时要亲手拆掉的那条会话，见 [onTaskRemoved]。 */
+    @Inject lateinit var sessionManager: P2PSessionManager
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -45,6 +53,36 @@ class SessionForegroundService : Service() {
         // 进程被杀后不要自动重启：会话是内存态，重启起来也只是个空壳通知。
         if (!enterForeground()) stopSelf()
         return START_NOT_STICKY
+    }
+
+    /**
+     * 上划清理任务栈 = 用户明确表示「我要退了」，这里把进程整个带走（`[security]` 2026-08-03 客户故障）。
+     *
+     * **本服务自己就是那个 bug 的成因**：会话连着时它把进程钉在
+     * [android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE]，于是上划只销毁
+     * Activity、进程照活 —— 而认证态、DEK、已开的盘句柄、聊天 socket 与会话密钥全挂在 `@Singleton` 上随
+     * 进程存活。再点桌面图标（或点通知栏这条常驻通知）→ `MainActivity.onCreate` → `revalidatePresence()`
+     * 卡还插着 → `SplashScreen` 读到 AUTHENTICATED → **直接进主界面，一次登录都不用**；对端也一直看到
+     * 「已连接」。加前台服务之前上划会连进程一起被系统收走，这个洞一直被「进程死了」天然堵着。
+     *
+     * 兜底的「后台 5 分钟无操作自动登出」在这里指望不上：用户几十秒内点回来，`onAppForeground()` 就把
+     * 计时取消了。
+     *
+     * **为什么不用 `android:stopWithTask="true"`**：设了它系统就不再回调本方法（见
+     * [android.content.pm.ServiceInfo.FLAG_STOP_WITH_TASK] 的说明），只是把服务停掉——认证态与 socket 仍
+     * 留在进程里，等系统何时回收空进程，不确定也不可控。要的是当场拆干净，所以走这条路。
+     *
+     * 先 [P2PSessionManager.disconnect] 再退：它同步 close socket，对端 `readLine` 当场返回 null → 正常掉线，
+     * 顺带治了「本机已退、对端还显示在线」的幽灵连接。`disconnect` 全程只做 cancel/close，不阻塞主线程。
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        // CardPerf 是同步刷盘的，这一行在 exitProcess 之前一定落到「下载」目录，回传日志里能看见。
+        CardPerf.mark("[security] 任务栈被移除（上划清理）→ 拆会话、退进程")
+        runCatching { sessionManager.disconnect("上划清理任务栈") }
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) } // 常驻通知一并消失，不留「点进去免登录」的入口
+        stopSelf()
+        exitProcess(0)
     }
 
     /** 起前台。返回 false 表示系统拒绝了（必须 [stopSelf]，否则会因未调用 startForeground 被判 ANR）。 */

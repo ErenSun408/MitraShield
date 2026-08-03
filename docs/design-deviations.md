@@ -1182,3 +1182,18 @@ v4 §9 的握手是**单向**的：A 的临时公钥经二维码带外送达 B�
 - **建联页常驻一条提示条**，措辞是「请确保系统允许应用后台活动」而非「检测到…受限」——查不到就别把猜的说成测的。
 
 **认下的限制**：这只是引导，改不了厂商行为；用户不开就是不开。真正的自愈要靠会话级重连（见 [[project_midun_session_reconnect]] 的设计，尚未实现）。
+
+## 上划清理不退出登录（前台服务引入的回归，客户 2026-08-03）
+
+客户报「上划清理进程后，再点开 App 不用登录就直接进去了，会话连接也还在」。**进程根本没死**，成因就是 2026-08-01 为治「开选取器被系统断网」而加的那个前台服务：
+
+1. 会话进 CONNECTED 即起 `SessionForegroundService`，进程被钉在 `IMPORTANCE_FOREGROUND_SERVICE`；
+2. 该服务**既没 override `onTaskRemoved()`**，manifest 也**没 `android:stopWithTask="true"`**（默认 false）→ 上划只移除任务栈、销毁 Activity，服务照跑（`onStartCommand` 里的 `START_NOT_STICKY` 只管「被杀后要不要重启」，管不了「现在要不要停」）；
+3. 进程活着 = 所有 `@Singleton` 原封不动：认证态、DEK、已开的盘句柄、聊天 socket 与会话密钥；
+4. 再点桌面图标（或点通知栏那条常驻通知的 `contentIntent`）→ `MainActivity.onCreate` → `revalidatePresence()` 卡还插着 → `SplashScreen` 读到 AUTHENTICATED → **直进主界面，一次登录都不用**。
+
+加前台服务之前，任务栈被移除且进程内无常驻组件，系统会连进程一起收走——这个洞一直被「进程死了」天然堵着。兜底的「后台 5 分钟无操作自动登出」在这里指望不上：用户几十秒内点回来，`onAppForeground()` 就把计时取消了，窗口 = 自动锁定时长。
+
+**修法**：`SessionForegroundService` 加 `@AndroidEntryPoint` 注入 `P2PSessionManager`，override `onTaskRemoved()` → `disconnect()` → `stopForeground(STOP_FOREGROUND_REMOVE)` → `stopSelf()` → `exitProcess(0)`，与息屏自动退出（`MainActivity.exitApp`）同一套语义。先 disconnect 再退是有意的：它同步 close socket，对端 `readLine` 当场返回 null 正常掉线，顺带治了「本机已退、对端还显示在线」的幽灵连接；`stopForeground(REMOVE)` 则堵掉「点通知栏那条通知免登录进主界面」这第二个入口。
+
+**为什么不用 `android:stopWithTask="true"`**：设了它系统就**不再回调** `onTaskRemoved`（`FLAG_STOP_WITH_TASK` 的语义），只是把服务停掉——认证态与 socket 仍留在进程里，等系统何时回收空进程，不确定也不可控。两者只能二选一，选能当场拆干净的这条。
