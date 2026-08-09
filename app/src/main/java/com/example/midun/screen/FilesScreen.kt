@@ -841,9 +841,11 @@ private fun ExportPassphraseDialog(isFolder: Boolean, onConfirm: (String) -> Uni
             }
         },
         confirmButton = {
-            TextButton(onClick = { if (canConfirm) onConfirm(pass) }, enabled = canConfirm) {
-                Text("导出", color = if (canConfirm) Primary else TextSecondary)
-            }
+            Button(
+                onClick = { if (canConfirm) onConfirm(pass) },
+                enabled = canConfirm,
+                colors = ButtonDefaults.buttonColors(containerColor = Primary)
+            ) { Text("导出") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } }
     )
@@ -882,9 +884,11 @@ private fun ImportPassphraseDialog(fileName: String, onConfirm: (String) -> Unit
             }
         },
         confirmButton = {
-            TextButton(onClick = { if (pass.isNotEmpty()) onConfirm(pass) }, enabled = pass.isNotEmpty()) {
-                Text("解密导入", color = if (pass.isNotEmpty()) Primary else TextSecondary)
-            }
+            Button(
+                onClick = { if (pass.isNotEmpty()) onConfirm(pass) },
+                enabled = pass.isNotEmpty(),
+                colors = ButtonDefaults.buttonColors(containerColor = Primary)
+            ) { Text("解密导入") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } }
     )
@@ -1291,7 +1295,10 @@ fun CreateFolderScreen(
             title = { Text("创建成功") },
             text = { Text("文件夹「$folderName」已在设备中创建") },
             confirmButton = {
-                TextButton(onClick = { showSuccess = false; onBack() }) { Text("确定") }
+                Button(
+                    onClick = { showSuccess = false; onBack() },
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                ) { Text("确定") }
             }
         )
     }

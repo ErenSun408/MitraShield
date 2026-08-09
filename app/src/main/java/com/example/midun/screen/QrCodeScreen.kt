@@ -184,6 +184,21 @@ private fun copyInviteLink(context: Context, link: String) {
     }
 }
 
+/**
+ * 读剪贴板里的纯文本，空则返回 null。供识别页的粘贴框用（见 [ScanTab]）。
+ *
+ * `coerceToText` 而非 `text`：从微信复制来的可能是带样式的富文本项，取 `text` 会拿到 null。
+ * Android 12+ 读剪贴板时系统会自己弹一句「已粘贴」，属预期行为，不必再补 Toast。
+ */
+private fun readClipboardText(context: Context): String? = runCatching {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.primaryClip
+        ?.takeIf { it.itemCount > 0 }
+        ?.getItemAt(0)
+        ?.coerceToText(context)
+        ?.toString()
+}.getOrNull()?.takeIf { it.isNotBlank() }
+
 /** 把邀请链接交给系统分享（text/plain），与 [shareQrImage] 同路数、只是载荷是文本。 */
 private fun shareInviteLink(context: Context, link: String) {
     runCatching {
@@ -652,7 +667,10 @@ fun QrCodeScreen(
             title = { Text("连接失败") },
             text = { Text(msg, color = TextSecondary, fontSize = 12.sp) },
             confirmButton = {
-                TextButton(onClick = dismiss) { Text("知道了", color = Primary) }
+                Button(
+                    onClick = dismiss,
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                ) { Text("知道了") }
             }
         )
     }
@@ -792,7 +810,7 @@ private fun ScanTab(
         Text("从手机相册选择邀请码图片")
     }
 
-    Spacer(Modifier.height(16.dp))
+    Spacer(Modifier.height(8.dp))
 
     // 说明卡收在扫码这一半的末尾（客户 2026-08-07）：它讲的是「识别之后会发生什么」，
     // 归属上属于上面的扫码/相册，不该夹在下面的链接区里。
@@ -814,7 +832,7 @@ private fun ScanTab(
         }
     }
 
-    Spacer(Modifier.height(20.dp))
+    Spacer(Modifier.height(12.dp))
 
     // 链接入口（客户需求 2026-08-07）：粘贴对方转发来的邀请链接，走与扫码**同一条** onQrDetected 路径
     // ——ConnectionInfo.parse 同时吃 JSON 与链接，故连接/失败/备注弹窗等后续行为完全一致。
@@ -829,16 +847,38 @@ private fun ScanTab(
 
     Spacer(Modifier.height(8.dp))
 
-    // 压到 48dp：M3 默认 56dp，在这个已经很长的页面里太占地方。无 label、单行，压矮不会截字。
-    OutlinedTextField(
-        value = linkInput,
-        onValueChange = onLinkInputChange,
-        placeholder = { Text("粘贴邀请链接", fontSize = 13.sp, color = TextSecondary) },
-        textStyle = LocalTextStyle.current.copy(fontSize = 13.sp),
-        singleLine = true,
-        shape = RoundedCornerShape(10.dp),
-        modifier = Modifier.fillMaxWidth().height(48.dp)
-    )
+    // 点一下即粘贴，**不做成输入框**（客户 2026-08-09）。两个理由：
+    // ① 这里的链接只可能是从微信复制来的，没有手打的场景，而点输入框必然唤起软键盘、挡掉半屏；
+    // ② 原先那个 OutlinedTextField 被压到 48dp（M3 默认 56dp），在部分机型/字号下会把提示文字
+    //    切掉下半截——M3 的内边距是按 56dp 排的，强行压矮就是截字，不是"压矮不会截字"。
+    // 整条框就是按钮，右侧不再另配粘贴图标（客户 2026-08-09）：出码页那两个图标是因为「复制」和
+    // 「转发」是两件事，这里只有粘贴一个动作，图标纯属重复。
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(FieldBg)
+            .clickable {
+                val text = readClipboardText(context)
+                if (text != null) {
+                    onLinkInputChange(text)
+                } else {
+                    Toast.makeText(context, "剪贴板是空的，请先复制对方发来的邀请链接", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        // 链接约 400 字符，只给一行 + 省略号：粘进来是为了点「确认连接」，不是给人读的。
+        Text(
+            linkInput.ifBlank { "点击粘贴邀请链接" },
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontSize = 13.sp,
+            color = if (linkInput.isBlank()) TextSecondary else TextPrimary
+        )
+    }
 
     Spacer(Modifier.height(10.dp))
 

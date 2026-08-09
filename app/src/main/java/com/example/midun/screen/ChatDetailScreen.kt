@@ -803,7 +803,10 @@ fun ChatDetailScreen(
             title = { Text("阅后即焚") },
             text = { Text("需先与对方建立加密连接后才能开启阅后即焚。", color = TextSecondary) },
             confirmButton = {
-                TextButton(onClick = { showBurnGateDialog = false }) { Text("知道了", color = Primary) }
+                Button(
+                    onClick = { showBurnGateDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                ) { Text("知道了") }
             }
         )
     }
@@ -1106,7 +1109,10 @@ private fun BurnTextDialog(content: String, onDismiss: () -> Unit) {
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("我知道了", color = Primary) }
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = Primary)
+            ) { Text("我知道了") }
         }
     )
 }
@@ -1139,7 +1145,10 @@ private fun BurnDocDialog(
             TextButton(onClick = onSave) { Text("保存到文件夹", color = Primary) }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("我知道了", color = Primary) }
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = Primary)
+            ) { Text("我知道了") }
         }
     )
 }

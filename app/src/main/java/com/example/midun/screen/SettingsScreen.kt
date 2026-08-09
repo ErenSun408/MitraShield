@@ -841,7 +841,10 @@ fun SettingsScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showAboutDialog = false }) { Text("确定") }
+                Button(
+                    onClick = { showAboutDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                ) { Text("确定") }
             }
         )
     }
