@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.widget.Toast
@@ -56,6 +57,7 @@ import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
 import com.example.midun.util.rememberNetworkHint
 import com.example.midun.viewmodel.ChatViewModel
+import com.google.mlkit.vision.barcode.BarcodeScanner
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -65,19 +67,94 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import qrcode.QRCode
 
-/** 从相册图片 [uri] 解码邀请码，识别到调 [onResult]，否则调 [onNone]。MLKit 静态图扫码。 */
-private fun decodeQrFromImage(context: Context, uri: Uri, onResult: (String) -> Unit, onNone: () -> Unit) {
-    runCatching {
-        val image = InputImage.fromFilePath(context, uri)
-        BarcodeScanning.getClient(
-            BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
-        ).process(image)
+/**
+ * 全进程共用的二维码识别器（`[qr]` 2026-08-09 客户故障：相册里同一张码，第一次识别得了，之后就识别不到，
+ * 退出 App 重开又能识别）。
+ *
+ * **绝不 close，也不要再在别处 getClient**。病根是原先相机预览在 `onDispose` 里 close 掉自己那个 client，
+ * 而相机与相册两处取的 options 完全相同（都只开 [Barcode.FORMAT_QR_CODE]）——ML Kit 按 options 复用同一个
+ * 底层原生 detector，于是「切一次 Tab」就把整个进程的识别能力关掉了：此后无论新建多少个 client，拿到的
+ * 还是那个已关闭的实例，相机与相册一起失灵，只有杀进程才恢复。客户归因到「第二次保存到相册」是巧合，
+ * 真正的变量是中间离开过识别页。
+ *
+ * 常驻一个 detector 的开销可以忽略，随进程回收即可。
+ */
+/**
+ * 二维码四周留白的像素数 = 4 模块 × 每模块 10 px（渲染时的 `withSize(10)`）——QR 规范要求的静区宽度。
+ * 两者必须同改：模块尺寸变了这里也得跟着变，否则静区不足 4 模块，静态图解码又会时灵时不灵。
+ */
+private const val QR_QUIET_ZONE_PX = 40
+
+private val qrScanner: BarcodeScanner by lazy {
+    BarcodeScanning.getClient(
+        BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+    )
+}
+
+/** 二次识别前把图缩到的最大边长。ML Kit 的检测模型内部本就会缩放，喂过大的图只是白费解码时间。 */
+private const val DECODE_MAX_EDGE = 1440
+
+/**
+ * 从相册图片 [uri] 解码邀请码，识别到调 [onResult]，否则调 [onNone] 并**带上具体原因**。
+ *
+ * **两次尝试**（`[qr]` 2026-08-09 客户故障：相册选图识别不出，相机扫同一张码却正常）：
+ * 1. 原图直接喂 ML Kit；
+ * 2. 没找到码就[缩放 + 四周补白][paddedForDecode]再试一次。这一步同时兜住两个已知成因——分享出去的
+ *    PNG 四周没有静区（quiet zone），以及整张图几乎被二维码占满时 ML Kit 那个 SSD 检测模型定位不到码。
+ *    相机那条路两样都不占：取景框里连带拍进了周围界面，码本身也只占画面一部分——这正是「相机行、
+ *    相册不行」的由来。
+ *
+ * **失败原因分三种报**，不再一律「未识别到」：读不出图、ML Kit 调用失败、图里确实没有码，排障时是
+ * 完全不同的方向。原先合并成一句，现场回报等于没有信息。
+ */
+private fun decodeQrFromImage(
+    context: Context,
+    uri: Uri,
+    onResult: (String) -> Unit,
+    onNone: (reason: String) -> Unit
+) {
+    val source = runCatching {
+        context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) }
+    }.getOrNull() ?: run {
+        onNone("无法读取这张图片，请换一张再试")
+        return
+    }
+    val size = "${source.width}×${source.height}"
+
+    // 第二次尝试：缩放 + 补白后重来。两次都没找到才算真没有。
+    fun retryPadded() {
+        val padded = runCatching { paddedForDecode(source) }.getOrNull()
+            ?: return onNone("图中未找到二维码（图片 $size）")
+        qrScanner.process(InputImage.fromBitmap(padded, 0))
             .addOnSuccessListener { barcodes ->
                 val raw = barcodes.firstOrNull()?.rawValue
-                if (raw != null) onResult(raw) else onNone()
+                if (raw != null) onResult(raw) else onNone("图中未找到二维码（图片 $size，已补白重试）")
             }
-            .addOnFailureListener { onNone() }
-    }.onFailure { onNone() }
+            .addOnFailureListener { e ->
+                onNone("识别失败：${e.javaClass.simpleName}（图片 $size）")
+            }
+    }
+
+    qrScanner.process(InputImage.fromBitmap(source, 0))
+        .addOnSuccessListener { barcodes ->
+            val raw = barcodes.firstOrNull()?.rawValue
+            if (raw != null) onResult(raw) else retryPadded()
+        }
+        .addOnFailureListener { retryPadded() }
+}
+
+/** 缩到 [DECODE_MAX_EDGE] 以内并四周补一圈白边（短边的 8%，至少 16px），供二次识别用。 */
+private fun paddedForDecode(src: Bitmap): Bitmap {
+    val scale = minOf(1f, DECODE_MAX_EDGE.toFloat() / maxOf(src.width, src.height))
+    val w = (src.width * scale).toInt().coerceAtLeast(1)
+    val h = (src.height * scale).toInt().coerceAtLeast(1)
+    val pad = (minOf(w, h) * 0.08f).toInt().coerceAtLeast(16)
+    val out = Bitmap.createBitmap(w + pad * 2, h + pad * 2, Bitmap.Config.ARGB_8888)
+    Canvas(out).apply {
+        drawColor(android.graphics.Color.WHITE)
+        drawBitmap(src, null, Rect(pad, pad, pad + w, pad + h), null)
+    }
+    return out
 }
 
 /** 把邀请码 [bitmap] 写入 cache 经 FileProvider 内容 URI，调系统分享（image/png）。 */
@@ -223,10 +300,26 @@ fun QrCodeScreen(
                     val decoded = BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.size)
                     // 压到不透明白底上：render() 产出的 PNG 带透明背景，分享到部分机型会被填成黑色。
                     // flatten 后屏显与分享的 PNG 均为白底二维码。
-                    val flattened = Bitmap.createBitmap(decoded.width, decoded.height, Bitmap.Config.ARGB_8888)
+                    //
+                    // **四周必须留静区**（`[qr]` 2026-08-09 客户故障：相册选图报「未在图片中识别到邀请码」，
+                    // 而相机直接扫同一张码却正常）。QR 规范要求码四周有 4 个模块宽的空白（quiet zone），
+                    // 而 qrcode-kotlin 的 `margin` 默认是 0、我们也没设过 → 渲出来的位图是**边到边**的。
+                    // 相机那条路侥幸能用：取景框里连带拍进了卡片白底与页面背景，静区是屏幕 UI 白送的；
+                    // 分享出去的 PNG 没这个便宜可占，ML Kit 静态解码就此失败——与微信压缩无关，那张图
+                    // 本来就缺白边。
+                    //
+                    // 不走库的 `withMargin()`：它在 build() 里执行 `resize(canvasSize + margin * 2)`，而
+                    // canvasSize 默认 0（= 让库按数据自动算），于是会把一张几百像素的码 resize 成 80px 见方，
+                    // 直接毁掉。自己在这一步加，尺寸完全可控。
+                    val quietZone = QR_QUIET_ZONE_PX
+                    val flattened = Bitmap.createBitmap(
+                        decoded.width + quietZone * 2,
+                        decoded.height + quietZone * 2,
+                        Bitmap.Config.ARGB_8888
+                    )
                     Canvas(flattened).apply {
                         drawColor(android.graphics.Color.WHITE)
-                        drawBitmap(decoded, 0f, 0f, null)
+                        drawBitmap(decoded, quietZone.toFloat(), quietZone.toFloat(), null)
                     }
                     decoded.recycle()
                     flattened
@@ -642,8 +735,9 @@ private fun ScanTab(
     // 相册选图扫码：选一张图 → MLKit 解码二维码 → 走与相机扫码同一条 onQrDetected 路径。
     val albumLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
-            decodeQrFromImage(context, it, onQrDetected) {
-                Toast.makeText(context, "未在图片中识别到邀请码", Toast.LENGTH_SHORT).show()
+            decodeQrFromImage(context, it, onQrDetected) { reason ->
+                // 带原因、给长时——现场回报「识别不到」时，这句话就是唯一的线索。
+                Toast.makeText(context, reason, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -773,21 +867,15 @@ private fun CameraPreview(
     val scannedState = rememberUpdatedState(scanned)
     val onQrDetectedState = rememberUpdatedState(onQrDetected)
 
-    val barcodeScanner = remember {
-        BarcodeScanning.getClient(
-            BarcodeScannerOptions.Builder()
-                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                .build()
-        )
-    }
-
-    // 离开识别 Tab / 屏幕销毁时显式 unbind 相机并关闭 scanner。
+    // 离开识别 Tab / 屏幕销毁时显式 unbind 相机。
     // CameraX 虽绑定到 Activity lifecycle，但 Tab 切回生成后 AndroidView 离场，
     // 相机会继续占用传感器、analyzer 持续解码——主动释放避免泄漏。
+    //
+    // **不关 [qrScanner]**：它是全进程共用的，在这里关掉会把相册识别一并废掉（见其说明）。
+    // 要释放的是相机，不是识别器；识别器随进程回收。
     DisposableEffect(Unit) {
         onDispose {
             runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }
-            runCatching { barcodeScanner.close() }
         }
     }
 
@@ -815,7 +903,7 @@ private fun CameraPreview(
                                     mediaImage,
                                     imageProxy.imageInfo.rotationDegrees
                                 )
-                                barcodeScanner.process(image)
+                                qrScanner.process(image)
                                     .addOnSuccessListener { barcodes ->
                                         barcodes.firstOrNull()?.rawValue?.let { raw ->
                                             if (!scannedState.value) {
