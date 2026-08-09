@@ -1,6 +1,8 @@
 package com.example.midun.screen
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -8,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.net.Uri
+import android.os.Build
 import android.widget.Toast
 import androidx.core.content.FileProvider
 import java.io.File
@@ -22,6 +25,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,16 +39,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.midun.network.ConnectionInfo
 import com.example.midun.network.P2PSessionManager.ConnectionState
 import com.example.midun.ui.theme.*
 import com.example.midun.util.rememberNetworkHint
@@ -89,6 +96,28 @@ private fun shareQrImage(context: Context, bitmap: Bitmap) {
     }
 }
 
+/** 复制邀请链接到剪贴板。Android 13+ 系统自带「已复制」浮层，再弹 Toast 就重复了。 */
+private fun copyInviteLink(context: Context, link: String) {
+    runCatching {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("波波邀请链接", link))
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            Toast.makeText(context, "邀请链接已复制", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+/** 把邀请链接交给系统分享（text/plain），与 [shareQrImage] 同路数、只是载荷是文本。 */
+private fun shareInviteLink(context: Context, link: String) {
+    runCatching {
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, link)
+        }
+        context.startActivity(Intent.createChooser(intent, "转发邀请链接"))
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QrCodeScreen(
@@ -103,10 +132,14 @@ fun QrCodeScreen(
     var countdown by remember { mutableIntStateOf(120) }
     var qrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var qrError by remember { mutableStateOf<String?>(null) }
+    // 邀请链接：与 qrBitmap 同生同灭（同一次 prepareConnection 的产物），见 [ConnectionInfo.toLink]。
+    var inviteLink by remember { mutableStateOf<String?>(null) }
 
     // 扫码状态（patch §M6 改动4）
     var scanned by remember { mutableStateOf(false) }
     var scannedContent by remember { mutableStateOf("") }
+    // 识别页的链接输入框内容（在这儿 remember 才能跨 Tab 切换保留，见 [ScanTab]）。
+    var linkInput by remember { mutableStateOf("") }
     // 新流程：扫到码即连接（占位备注），连上后才弹备注框。
     var connecting by remember { mutableStateOf(false) }            // 连接进行中（扫码后立即连接）
     var connectError by remember { mutableStateOf<String?>(null) }  // 连接失败提示（可重扫）
@@ -163,9 +196,11 @@ fun QrCodeScreen(
                 countdown--
             }
             // 过期：清状态与图像，回到 pre-gen，下次需重新点按钮渲染。未连上则一并停监听。
+            // 链接同码一起作废——它俩本就是同一份连接信息的两种载体。
             qrGenerated = false
             countdown = 120
             qrBitmap = null
+            inviteLink = null
             if (chatViewModel.connectionState.value != ConnectionState.CONNECTED) {
                 chatViewModel.stopConnection()
             }
@@ -199,6 +234,7 @@ fun QrCodeScreen(
             }.getOrNull()
             if (bitmap != null) {
                 qrBitmap = bitmap
+                inviteLink = ConnectionInfo.linkOf(content) // 同一份 content，只换个载体
                 countdown = 120
                 qrGenerated = true
             } else {
@@ -299,7 +335,7 @@ fun QrCodeScreen(
                         } else {
                             Icon(Icons.Default.QrCode, null)
                             Spacer(Modifier.width(8.dp))
-                            Text("生成邀请码")
+                            Text("生成邀请码与链接")
                         }
                     }
 
@@ -370,35 +406,41 @@ fun QrCodeScreen(
 
                     Spacer(Modifier.height(20.dp))
 
-                    OutlinedButton(
-                        onClick = { qrBitmap?.let { shareQrImage(mainContext, it) } },
-                        enabled = qrBitmap != null,
-                        modifier = Modifier.fillMaxWidth()
+                    // 邀请码本身的两个动作同行：左「重新生成」、右「分享邀请码」，宽度 1:2。
+                    // 摆在链接区上面——它俩管的是上面那张码，链接区是另一件事，别混在一起。
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.Share, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("分享")
-                    }
+                        // 原地刷新：触发顶层渲染 LaunchedEffect 重渲一张并重置倒计时，不退回 pre-gen 卡片。
+                        OutlinedButton(
+                            onClick = {
+                                qrError = null
+                                isGenerating = true
+                            },
+                            enabled = !isGenerating,
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            if (isGenerating) {
+                                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(16.dp))
+                            } else {
+                                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("重新生成", fontSize = 13.sp, maxLines = 1)
+                            }
+                        }
 
-                    Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.width(10.dp))
 
-                    // 原地刷新：触发顶层渲染 LaunchedEffect 重渲一张并重置倒计时，不退回 pre-gen 卡片。
-                    TextButton(
-                        onClick = {
-                            qrError = null
-                            isGenerating = true
-                        },
-                        enabled = !isGenerating
-                    ) {
-                        if (isGenerating) {
-                            CircularProgressIndicator(
-                                strokeWidth = 2.dp,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text("刷新中…")
-                        } else {
-                            Text("重新生成")
+                        OutlinedButton(
+                            onClick = { qrBitmap?.let { shareQrImage(mainContext, it) } },
+                            enabled = qrBitmap != null,
+                            modifier = Modifier.weight(2f)
+                        ) {
+                            Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("分享邀请码", fontSize = 13.sp, maxLines = 1)
                         }
                     }
 
@@ -406,10 +448,61 @@ fun QrCodeScreen(
                         Spacer(Modifier.height(8.dp))
                         Text(it, color = Danger, fontSize = 13.sp, textAlign = TextAlign.Center)
                     }
+
+                    // 邀请链接区（客户需求 2026-08-07）：**二维码的副产品**，供对方相机故障 / 不便扫码时改用。
+                    // 内容、有效期、监听端口都与上面那张码同源，不是第二条独立通道。
+                    inviteLink?.let { link ->
+                        Spacer(Modifier.height(24.dp))
+
+                        Text(
+                            "通过邀请链接建立会话",
+                            modifier = Modifier.fillMaxWidth(),
+                            textAlign = TextAlign.Start,
+                            fontSize = 13.sp,
+                            color = TextPrimary,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        Spacer(Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 链接很长（约 400 字符），只给一行 + 省略号；要用它的人走复制/转发，不靠肉眼读。
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(44.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(FieldBg)
+                                    .padding(horizontal = 12.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Text(
+                                    link,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontSize = 12.sp,
+                                    color = TextSecondary
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            LinkActionButton(Icons.Default.ContentCopy, "复制邀请链接") {
+                                copyInviteLink(mainContext, link)
+                            }
+                            Spacer(Modifier.width(8.dp))
+                            LinkActionButton(Icons.Default.Share, "转发邀请链接") {
+                                shareInviteLink(mainContext, link)
+                            }
+                        }
+                    }
                 }
             } else {
                 ScanTab(
                     scanned = scanned,
+                    linkInput = linkInput,
+                    onLinkInputChange = { linkInput = it },
                     onQrDetected = { value ->
                         // 新流程：先连接（空备注→默认「新建联系人N」），成功后再弹备注；已是好友则直接进会话。
                         scanned = true
@@ -510,9 +603,28 @@ fun QrCodeScreen(
     }
 }
 
+/** 邀请链接右侧的圆角方形图标按钮（复制 / 转发）。只用 icon，尺寸与左侧链接框等高。 */
+@Composable
+private fun LinkActionButton(icon: ImageVector, contentDescription: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(44.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(FieldBg)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription, tint = Primary, modifier = Modifier.size(20.dp))
+    }
+}
+
 @Composable
 private fun ScanTab(
     scanned: Boolean,
+    // 链接输入提到 QrCodeScreen：切到「生成」Tab 再切回来时 ScanTab 会离场，
+    // 状态留在这儿会被清掉，用户粘了一半的链接就没了。
+    linkInput: String,
+    onLinkInputChange: (String) -> Unit,
     onQrDetected: (String) -> Unit
 ) {
     val context = LocalContext.current
@@ -588,6 +700,8 @@ private fun ScanTab(
 
     Spacer(Modifier.height(16.dp))
 
+    // 说明卡收在扫码这一半的末尾（客户 2026-08-07）：它讲的是「识别之后会发生什么」，
+    // 归属上属于上面的扫码/相册，不该夹在下面的链接区里。
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -604,6 +718,47 @@ private fun ScanTab(
                 color = TextSecondary
             )
         }
+    }
+
+    Spacer(Modifier.height(20.dp))
+
+    // 链接入口（客户需求 2026-08-07）：粘贴对方转发来的邀请链接，走与扫码**同一条** onQrDetected 路径
+    // ——ConnectionInfo.parse 同时吃 JSON 与链接，故连接/失败/备注弹窗等后续行为完全一致。
+    Text(
+        "通过邀请链接加入会话",
+        modifier = Modifier.fillMaxWidth(),
+        textAlign = TextAlign.Start,
+        fontSize = 13.sp,
+        color = TextPrimary,
+        fontWeight = FontWeight.Medium
+    )
+
+    Spacer(Modifier.height(8.dp))
+
+    // 压到 48dp：M3 默认 56dp，在这个已经很长的页面里太占地方。无 label、单行，压矮不会截字。
+    OutlinedTextField(
+        value = linkInput,
+        onValueChange = onLinkInputChange,
+        placeholder = { Text("粘贴邀请链接", fontSize = 13.sp, color = TextSecondary) },
+        textStyle = LocalTextStyle.current.copy(fontSize = 13.sp),
+        singleLine = true,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier.fillMaxWidth().height(48.dp)
+    )
+
+    Spacer(Modifier.height(10.dp))
+
+    Button(
+        // 与相机同一把 scanned 锁：一次连接在飞时，别让人再从这儿点第二次。
+        onClick = { onQrDetected(linkInput.trim()) },
+        enabled = linkInput.isNotBlank() && !scanned,
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = Primary)
+    ) {
+        Icon(Icons.Default.Link, null)
+        Spacer(Modifier.width(8.dp))
+        Text("确认连接")
     }
 }
 

@@ -429,9 +429,12 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * B（扫码方）：解析二维码 → 真实 TCP connectTo + ECDH 握手 → **成功才**建链。
-     * 联系人由 P2PSessionManager.connectTo 在握手成功后创建（用此处备注 + 二维码 deviceSn），
+     * B（加入方）：解析邀请码 → 真实 TCP connectTo + ECDH 握手 → **成功才**建链。
+     * 联系人由 P2PSessionManager.connectTo 在握手成功后创建（用此处备注 + 邀请码里的 deviceSn），
      * 并启动收发/身份交换；失败经 onError 反馈、不创建联系人。
+     *
+     * [qrContent] 可以是扫码/相册解出的二维码原文，也可以是用户粘贴的邀请链接——
+     * [ConnectionInfo.parse] 归一，两条入口之后的流程完全一致。
      */
     fun connectToContact(
         qrContent: String,
@@ -439,9 +442,9 @@ class ChatViewModel @Inject constructor(
         onConnected: (contactId: String, isNew: Boolean) -> Unit,
         onError: (String) -> Unit
     ) {
-        val info = runCatching { ConnectionInfo.fromJson(qrContent) }.getOrNull()
+        val info = ConnectionInfo.parse(qrContent)
         if (info == null) {
-            onError("邀请码格式无效，请确认扫描的是波波邀请码")
+            onError("邀请码格式无效，请确认扫描的是波波邀请码、或粘贴的是完整的波波邀请链接")
             return
         }
         viewModelScope.launch {

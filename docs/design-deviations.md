@@ -1212,3 +1212,14 @@ v4 §9 的握手是**单向**的：A 的临时公钥经二维码带外送达 B�
 `ChatViewModel.disconnectSession()` 没有复用 `stopConnection()`，只为让诊断日志里那行 `[net] 主动拆会话：…` 能分清是「离开扫码屏」还是「用户手动断」。
 
 连带效果均为所需：状态离开 CONNECTED → 前台服务停、常驻通知消失、CPU/WiFi 锁释放、阅后即焚模式清回关闭（本就是会话级）、对端同步显示未连接。
+
+## 邀请链接：二维码之外的第二种载体（v4 外增量，客户 2026-08-07）
+
+客户要求「对方拍照设备故障时能靠链接连上」。做法是把邀请链接定位成**二维码的副产品**而非独立通道：
+
+- 出码方 `ConnectionInfo.toLink()` = `midun://invite?d=` + 同一份 `toJson()` 的 base64url。**同一次 `generateConnectionInfo()` 的产物**——同一个临时 ECDH 私钥、同一个监听端口、同一个 120 秒 `exp`，UI 上也与 `qrBitmap` 同生同灭（过期一起清）。不存在「链接单独有效期更长」这回事。
+- 加入方 `ConnectionInfo.parse()` 同时吃二维码原文（JSON）与链接，归一后交给既有的 `connectToContact()`，连接/失败弹窗/备注框等后续行为与扫码**完全同路**。链接用正则从粘贴内容里抠，不用 `startsWith`：从微信复制往往带前后文。
+
+**scheme 没在 Manifest 注册**，点链接不会唤起 App，对端必须在「识别邀请码」页粘贴。这是刻意取舍：微信本就不放行第三方 scheme（要做「可点」得有域名 + App Links，还要过备案），而注册 deep link 得把 `MainActivity` 改成 `singleTask` + `onNewIntent`，否则会拉起第二个 Activity 实例去抢 `@Singleton` 的 `P2PSessionManager`；还要处理「链接在未插卡/未登录时到达」的暂存消费。三件事都超出本次范围。
+
+**安全上不引入新的风险等级**：出码页原本就有「分享」按钮把二维码图片发出去，链接与图片走同一个带外通道、同一套信任假设（二维码承担的是「A 的临时公钥带外送达」，见 `P2PSessionManager` 握手模型注释）。差别只在链接是明文可读的，公网 IPv6 与设备 SN 对 IM 服务商更易被日志化——程度差异，非性质差异。

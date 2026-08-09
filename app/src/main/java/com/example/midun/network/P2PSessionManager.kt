@@ -1873,6 +1873,15 @@ data class ConnectionInfo(
     /** 可尝试的对端地址表（新版取 [addresses]，旧版二维码回退到单个 [ipv6]）。 */
     fun candidates(): List<String> = addresses.ifEmpty { listOf(ipv6) }
 
+    /**
+     * 邀请链接（客户需求 2026-08-07）：**二维码的副产品**，装的就是 [toJson] 那同一份内容，
+     * 只是 base64url 编码后挂在 [INVITE_SCHEME] 后面，给「对方相机故障 / 不便扫码」的场合用。
+     *
+     * 没有任何独立生命周期——有效期、监听端口、临时密钥全部与二维码共用同一次
+     * [P2PSessionManager.generateConnectionInfo] 的产物，链接同样 120 秒后作废。
+     */
+    fun toLink(): String = linkOf(toJson())
+
     fun toJson(): String = JSONObject().apply {
         put("ver", version)
         put("sn", deviceSn)
@@ -1884,6 +1893,40 @@ data class ConnectionInfo(
     }.toString()
 
     companion object {
+        /**
+         * 邀请链接前缀。**只是个可复制的文本载体**——scheme 没在 Manifest 注册，点它不会唤起 App，
+         * 对端要走「识别邀请码」页里的链接输入框粘贴进来。这是刻意的：微信本就不放行第三方 scheme，
+         * 而注册 deep link 要连带改 MainActivity 的 launchMode（现有 USB 唤起那条路径会受影响），
+         * 不在本次范围内。
+         */
+        private const val INVITE_SCHEME = "midun://invite?d="
+
+        /** 链接里 base64url 载荷的取值范围，用于从「带前后文的粘贴内容」里把链接抠出来。 */
+        private val LINK_REGEX = Regex("""midun://invite\?d=([A-Za-z0-9_-]+)""")
+
+        /** 把二维码内容（JSON）包成邀请链接。 */
+        fun linkOf(json: String): String = INVITE_SCHEME + Base64.encodeToString(
+            json.toByteArray(Charsets.UTF_8),
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
+        )
+
+        /**
+         * 解析邀请码：**二维码原文（JSON）与邀请链接走同一个入口**，解出来的 [ConnectionInfo] 一模一样，
+         * 后续连接流程（[P2PSessionManager.connectTo]）因此完全不区分对端是扫来的还是粘来的。
+         *
+         * 链接用正则抠而不是 `startsWith`：从微信复制往往会带上前后文（「我的邀请链接：… 快连」），
+         * 让用户先手工修剪一遍纯属添堵。解不出返回 null，由调用方报「邀请码格式无效」。
+         */
+        fun parse(text: String): ConnectionInfo? {
+            val raw = text.trim()
+            val json = LINK_REGEX.find(raw)?.let { match ->
+                runCatching {
+                    String(Base64.decode(match.groupValues[1], Base64.URL_SAFE), Charsets.UTF_8)
+                }.getOrNull() ?: return null
+            } ?: raw
+            return runCatching { fromJson(json) }.getOrNull()
+        }
+
         fun fromJson(text: String): ConnectionInfo = JSONObject(text).run {
             ConnectionInfo(
                 version = getInt("ver"),

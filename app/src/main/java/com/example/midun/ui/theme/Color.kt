@@ -10,6 +10,11 @@ val Accent = Color(0xFF00C9A7)
 val AccentLight = Color(0xFF4DDBBD)
 val Surface = Color(0xFFF5F7FA)
 val CardBg = Color(0xFFFFFFFF)
+/**
+ * 只读文本框/图标按钮的灰底（如邀请码页的邀请链接框）。比 [Surface] 深一档——页面背景就是 [Surface]，
+ * 拿它当填充会跟底色糊成一片。
+ */
+val FieldBg = Color(0xFFE8ECF1)
 val TextPrimary = Color(0xFF1A1A2E)
 val TextSecondary = Color(0xFF6B7280)
 val Danger = Color(0xFFEF4444)
