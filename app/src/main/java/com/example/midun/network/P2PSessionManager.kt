@@ -379,21 +379,26 @@ class P2PSessionManager @Inject constructor(
     )
 
     /**
-     * 生成本机连接信息（写入二维码）。M10.2：ipv6/sessionId 真实，`tempPublicKey` 为真实 ECDH
-     * 临时公钥的 Base64（替换 v4 的 `MOCK_TEMP_PK_...`）；私钥暂存供 startListening 握手。
-     * deviceSn 仍占位（真 SN 来自安全卡 = M11）。
+     * 生成本机连接信息（写入二维码）。地址/sessionId 真实，`tempPublicKey` 为真实 ECDH
+     * 临时公钥的 Base64；私钥暂存供 startListening 握手。
+     *
+     * **一个可用地址都扫不到就直接抛** [NoLocalAddressException]（`[network]` 2026-08-11）。原先会塞一个
+     * 占位 `::1` 进去照常出码，而那张码必然连不上——要等对方扫完、`canReach` 判死才暴露，用户看到的还是
+     * 一句「对端设备未获取到 IPv6」，锅扣在了没问题的那一端。有没有地址是出码的前提，缺了就在这一步说清。
      */
     suspend fun generateConnectionInfo(): ConnectionInfo = withContext(Dispatchers.IO) {
-        val keyPair = P2PCrypto.generateEcKeyPair()
-        listenerKeyPair = keyPair
-        listenerExpiresAt = System.currentTimeMillis() + INVITE_TTL_MS
         val scan = scanAddresses()
         // 全部候选，**公网 IPv6 在前**、局域网 IPv4 兜底。见 ConnectionInfo.addresses 对顺序的说明。
         val candidates = listOfNotNull(scan.globalV6, scan.wifiV4)
+        if (candidates.isEmpty()) {
+            throw NoLocalAddressException("本机未获取到可用网络地址，请连接 Wi-Fi 或开启移动数据后重试")
+        }
+        val keyPair = P2PCrypto.generateEcKeyPair()
+        listenerKeyPair = keyPair
+        listenerExpiresAt = System.currentTimeMillis() + INVITE_TTL_MS
         ConnectionInfo(
             version = PROTO_V2,
             deviceSn = currentDeviceSn(),
-            ipv6 = candidates.firstOrNull() ?: "::1", // 首选地址；旧版客户端只认这个字段
             addresses = candidates,
             sessionId = generateRandomHex(8),
             // 压缩公钥（33 字节，需求规格）→ Base64，替换原 X.509(SPKI ~91 字节)，二维码更小。
@@ -578,7 +583,7 @@ class P2PSessionManager @Inject constructor(
      */
     private fun connectToFirstReachable(info: ConnectionInfo, port: Int): Pair<Socket, String> {
         val local = scanAddresses()
-        val peers = info.candidates()
+        val peers = info.addresses
         val reachable = peers.filter { canReach(it, local) }
         if (reachable.isEmpty()) throw NoRoutableAddressException(unreachableReason(peers, local))
 
@@ -631,6 +636,9 @@ class P2PSessionManager @Inject constructor(
 
     /** 对端候选地址全都不可达（连 SYN 都不必发）。消息即给用户看的原因，见 [unreachableReason]。 */
     class NoRoutableAddressException(message: String) : IOException(message)
+
+    /** 本机一个可用地址都没有，出不了码。消息即给用户看的原因，见 [generateConnectionInfo]。 */
+    class NoLocalAddressException(message: String) : IOException(message)
 
     /**
      * A 侧握手：用暂存的临时私钥 + 对端经 socket 发来的公钥派生会话密钥。
@@ -1850,29 +1858,26 @@ class P2PSessionManager @Inject constructor(
 data class ConnectionInfo(
     val version: Int,
     val deviceSn: String,
-    val ipv6: String,
     val sessionId: String,
     val tempPublicKey: String,
     val expiresAt: Long,
     /**
-     * 出码方的**全部**候选地址，按优先级排：**公网 IPv6 在前，局域网私网 IPv4 兜底**。
+     * 出码方的**全部**候选地址，按优先级排：**公网 IPv6 在前，局域网私网 IPv4 兜底**。**不得为空**——
+     * 出码端 [P2PSessionManager.generateConnectionInfo] 与解析端 [fromJson] 各自把住一道。
      *
      * 顺序是这么定的（`[network]` 2026-07-31）：产品的主场景是**两人各在自己家的 Wi-Fi 下跨网通信**，
      * 那种情况下私网 IPv4 不但没用，还有害——两家路由器几乎必然都用 `192.168.1.x`，扫码方拿着对端的
      * `192.168.1.5` 会在**自己家的网里** ARP，要么无人应答（现场即 `EHOSTUNREACH`），要么问到自家某台
      * 不相干的设备身上。故公网 IPv6 优先；IPv4 只在两台确实同处一个局域网、且该网络没有 IPv6 时才用得上，
-     * 留作兜底。
+     * 留作兜底。扫码端按本序**过滤后逐个试**，见 [P2PSessionManager.connectToFirstReachable]。
      *
-     * 原先只带一个地址（[ipv6] 字段，实际可能是 IPv4），两端网络一旦不同，这唯一的地址必然踩空，而另一条
-     * 本可走通的路连试都没试过。带全部候选，由扫码方挑能走的那条。
-     *
-     * 兼容：旧版二维码没有本字段 → 解析出空表，[candidates] 回退到 [ipv6] 单地址，行为同旧版。
+     * 曾经还并排放着一个单地址字段 `ipv6`，内容恒等于 `addresses[0]`，只为兼容「只认单地址」的旧版
+     * 客户端（`[qr]` 2026-08-11 删除）。删它有两个理由：一是名实不符——它装的可能是 IPv4 字面量，误导后
+     * 来人；二是二维码载荷白占约 40 字节，而纠错等级从 L 提到 M 之后码本来就大了一档，删掉正好抵消回来。
+     * 旧版二维码没有 `addrs` 字段，解析即报「邀请码格式无效」，按「两端强制装最新包」的约定处理。
      */
-    val addresses: List<String> = emptyList()
+    val addresses: List<String>
 ) {
-    /** 可尝试的对端地址表（新版取 [addresses]，旧版二维码回退到单个 [ipv6]）。 */
-    fun candidates(): List<String> = addresses.ifEmpty { listOf(ipv6) }
-
     /**
      * 邀请链接（客户需求 2026-08-07）：**二维码的副产品**，装的就是 [toJson] 那同一份内容，
      * 只是 base64url 编码后挂在 [INVITE_SCHEME] 后面，给「对方相机故障 / 不便扫码」的场合用。
@@ -1885,11 +1890,10 @@ data class ConnectionInfo(
     fun toJson(): String = JSONObject().apply {
         put("ver", version)
         put("sn", deviceSn)
-        put("ipv6", ipv6)
         put("sid", sessionId)
         put("tpk", tempPublicKey)
         put("exp", expiresAt)
-        if (addresses.isNotEmpty()) put("addrs", JSONArray(addresses))
+        put("addrs", JSONArray(addresses))
     }.toString()
 
     companion object {
@@ -1927,17 +1931,26 @@ data class ConnectionInfo(
             return runCatching { fromJson(json) }.getOrNull()
         }
 
+        /**
+         * 反序列化。**`addrs` 是必需字段，且不许为空**——缺了就抛，由 [parse] 转成 null、UI 报
+         * 「邀请码格式无效」。
+         *
+         * 这一道同时是旧版二维码的拦截线：8 月 11 日之前的码没有 `addrs`（地址装在已删除的 `ipv6`
+         * 字段里），到这里解出空表即判无效，用户拿到的是「请对方重新生成邀请码」这句可行动的提示，
+         * 而不是一个候选地址为空的 ConnectionInfo 揣着去连接、到握手阶段才莫名其妙地失败。
+         */
         fun fromJson(text: String): ConnectionInfo = JSONObject(text).run {
+            val addrs = optJSONArray("addrs")?.let { arr ->
+                (0 until arr.length()).mapNotNull { arr.optString(it).takeIf(String::isNotBlank) }
+            }.orEmpty()
+            require(addrs.isNotEmpty()) { "邀请码缺少地址（addrs）" }
             ConnectionInfo(
                 version = getInt("ver"),
                 deviceSn = getString("sn"),
-                ipv6 = getString("ipv6"),
                 sessionId = getString("sid"),
                 tempPublicKey = getString("tpk"),
                 expiresAt = getLong("exp"),
-                addresses = optJSONArray("addrs")?.let { arr ->
-                    (0 until arr.length()).mapNotNull { arr.optString(it).takeIf(String::isNotBlank) }
-                }.orEmpty()
+                addresses = addrs
             )
         }
     }

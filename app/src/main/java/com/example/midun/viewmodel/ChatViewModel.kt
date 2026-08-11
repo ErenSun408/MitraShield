@@ -408,8 +408,11 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * A（出码方）：准备连接——关旧会话 → 生成真实 ConnectionInfo（含本机 IPv6 + 临时 ECDH 公钥）
+     * A（出码方）：准备连接——关旧会话 → 生成真实 ConnectionInfo（本机候选地址 + 临时 ECDH 公钥）
      * → 后台开始监听对端连入。返回 JSON 供渲染二维码。每次重新出码都会重置会话。
+     *
+     * 本机一个可用地址都没有时 [P2PSessionManager.generateConnectionInfo] 会抛
+     * [P2PSessionManager.NoLocalAddressException]，调用方须自行接住（见 QrCodeScreen 的渲染 LaunchedEffect）。
      */
     suspend fun prepareConnection(): String {
         p2pManager.disconnect("重新出码：关旧 ServerSocket/会话") // 避免端口占用与状态残留
