@@ -762,7 +762,7 @@ class P2PSessionManager @Inject constructor(
      */
     suspend fun sendFile(
         fileName: String, size: Long, mime: String, sourceCardPath: String? = null,
-        durationSec: Int = 0, openStream: () -> InputStream
+        durationSec: Int = 0, isVoice: Boolean = false, openStream: () -> InputStream
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val session = _activeSession.value
             ?: return@withContext Result.failure(IllegalStateException("无活动连接"))
@@ -792,7 +792,7 @@ class P2PSessionManager @Inject constructor(
             CardPerf.mark("[net] 开始发送文件（$mime，${size / 1024}KB）")
             try {
                 fileSendMutex.withLock {
-                    doSendFile(channel, session, contactId, fileName, size, mime, sourceCardPath, durationSec, openStream)
+                    doSendFile(channel, session, contactId, fileName, size, mime, sourceCardPath, durationSec, isVoice, openStream)
                 }.also { result ->
                     CardPerf.mark(
                         "[net] 发送文件结束：${if (result.isSuccess) "成功" else "失败（${result.exceptionOrNull()?.message}）"}" +
@@ -817,9 +817,16 @@ class P2PSessionManager @Inject constructor(
         markFileActivity()
     }
 
-    /** 音频 mime（语音消息）→ AUDIO 气泡（即收即播、不进选文件夹保存）；其余 → FILE。 */
-    private fun fileMessageType(mime: String): MessageType =
-        if (mime.startsWith("audio/")) MessageType.AUDIO else MessageType.FILE
+    /**
+     * 按住说话录出来的那条 → AUDIO 气泡（即收即播、不进选文件夹保存）；其余一切 → FILE。
+     *
+     * **判据是「从哪个入口发的」，不是 mime**（`[chat]` 2026-08-11 客户报：从手机选一个 mp3 发出去，
+     * 显示成语音条）。原先按 `mime.startsWith("audio/")` 认，而选取器给的 mp3 正是 `audio/mpeg` ——
+     * 于是一个用户想当文件发的歌，被渲染成一条没有时长、点了就播、还存不进隐私文件夹的语音条。
+     * mime 描述的是「这是什么格式」，与「用户是不是在录语音」无关，本就不该拿来当这个判据。
+     */
+    private fun fileMessageType(isVoice: Boolean): MessageType =
+        if (isVoice) MessageType.AUDIO else MessageType.FILE
 
     /**
      * @param sourceCardPath 隐私文件夹来源=源文件卡内路径（已在卡上、发送方直接据此预览，不另留副本）；
@@ -828,7 +835,7 @@ class P2PSessionManager @Inject constructor(
     private suspend fun doSendFile(
         channel: FileTransferChannel, session: P2PSession, contactId: String,
         fileName: String, size: Long, mime: String, sourceCardPath: String?, durationSec: Int,
-        openStream: () -> InputStream
+        isVoice: Boolean, openStream: () -> InputStream
     ): Result<Unit> {
         val key = session.sessionKey
         val msgId = generateMessageId()
@@ -837,7 +844,7 @@ class P2PSessionManager @Inject constructor(
         // 阅后即焚：开启态下所有文件（语音/图片/视频/文档）均焚。接收端 handleFileBegin 通用解析 burn/ttl、
         // ChatDetailScreen 对图/视频走一次性预览、文档走只读卡片；这类一律 ttl=0（听完/关闭预览即刻焚）。
         val burning = _burnMode.value.enabled
-        val burnTtl = if (burning) burnTtlFor(fileMessageType(mime)) else 0
+        val burnTtl = if (burning) burnTtlFor(fileMessageType(isVoice)) else 0
 
         // 发送方预览副本：手机来源在真卡模式下边发边落 `.sent_<msgId>`；落不成则不留（localPath 保持 null）。
         val sentCopyPath = if (sourceCardPath == null) FileCachePaths.sent(msgId) else null
@@ -846,7 +853,7 @@ class P2PSessionManager @Inject constructor(
         // 隐私文件夹来源即刻可预览（文件已在卡上）→ 起始就带 localPath；手机来源成功后再补。
         chatRepo.addFileMessage(
             contactId, msgId, isMine = true, fileName, size, MessageStatus.SENDING, localPath = sourceCardPath,
-            type = fileMessageType(mime), audioDurationSec = durationSec,
+            type = fileMessageType(isVoice), audioDurationSec = durationSec,
             burnAfterRead = burning, burnTtl = burnTtl
         )
         setProgress(msgId, 0f)
@@ -860,7 +867,8 @@ class P2PSessionManager @Inject constructor(
                 put("mime", mime)
                 put("nonce", Base64.encodeToString(fileNonce, Base64.NO_WRAP))
                 put("chunks", totalChunks)
-                if (durationSec > 0) put("durationSec", durationSec) // 语音消息时长（接收端建 AUDIO 气泡用）
+                // 是不是语音由发送端说了算，接收端不再从 mime 猜（见 [fileMessageType]）。
+                if (isVoice) { put("voice", true); put("durationSec", durationSec) }
                 if (burning) { put("burn", true); put("ttl", burnTtl) } // 阅后即焚标记 + 时长
             }.toString()
             sendFileFrame(channel, FileTransferChannel.FILE_BEGIN, P2PCrypto.encrypt(key, beginJson))
@@ -948,7 +956,8 @@ class P2PSessionManager @Inject constructor(
      */
     suspend fun sendFileOffline(
         contactId: String, fileName: String, size: Long, mime: String,
-        sourceCardPath: String? = null, durationSec: Int = 0, openStream: () -> InputStream
+        sourceCardPath: String? = null, durationSec: Int = 0, isVoice: Boolean = false,
+        openStream: () -> InputStream
     ): Result<Unit> = withContext(Dispatchers.IO) {
         if (size > MAX_FILE_BYTES) {
             return@withContext Result.failure(IllegalStateException("文件超过 100MB 上限，无法发送"))
@@ -962,8 +971,8 @@ class P2PSessionManager @Inject constructor(
         val burning = _burnMode.value.enabled
         chatRepo.addFileMessage(
             contactId, msgId, isMine = true, fileName, size, initialStatus, localPath = sourceCardPath,
-            type = fileMessageType(mime), audioDurationSec = durationSec,
-            burnAfterRead = burning, burnTtl = if (burning) burnTtlFor(fileMessageType(mime)) else 0
+            type = fileMessageType(isVoice), audioDurationSec = durationSec,
+            burnAfterRead = burning, burnTtl = if (burning) burnTtlFor(fileMessageType(isVoice)) else 0
         )
         _incomingMessages.emit(contactId)
         if (sentCopyPath == null) return@withContext Result.success(Unit)
@@ -1350,7 +1359,7 @@ class P2PSessionManager @Inject constructor(
         val fileSize = json.getLong("fileSize")
         val fileNonce = Base64.decode(json.getString("nonce"), Base64.NO_WRAP)
         val totalChunks = json.getInt("chunks")
-        val msgType = fileMessageType(json.optString("mime"))
+        val msgType = fileMessageType(json.optBoolean("voice", false))
         val durationSec = json.optInt("durationSec")
         val burning = json.optBoolean("burn", false) // 阅后即焚标记 + 时长（语音计时在「听完」时才起，图/视频/文档在退出预览后起）
         val burnTtl = json.optInt("ttl", 0)

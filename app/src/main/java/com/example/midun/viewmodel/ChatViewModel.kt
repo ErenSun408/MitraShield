@@ -205,10 +205,13 @@ class ChatViewModel @Inject constructor(
     /**
      * 发送文件（来源无关）：[openStream] 打开输入流（手机选取器 URI 流 / 隐私文件夹卡内读流）。
      * 转发 P2PSessionManager.sendFile（分块加密走文件通道 + 本地 FILE 气泡 SENDING→SENT/FAILED）。
+     *
+     * [isVoice] 只有[按住说话][sendVoice]那条路才置真——它决定气泡长成语音条还是文件卡片，
+     * **与文件是不是音频格式无关**（见 `P2PSessionManager.fileMessageType`）。
      */
     fun sendFile(
         fileName: String, size: Long, mime: String, openStream: () -> InputStream,
-        sourceCardPath: String? = null, durationSec: Int = 0,
+        sourceCardPath: String? = null, durationSec: Int = 0, isVoice: Boolean = false,
         onError: (String) -> Unit = {}, onComplete: () -> Unit = {}
     ) {
         val contactId = _currentContactId.value ?: return
@@ -217,10 +220,12 @@ class ChatViewModel @Inject constructor(
             val online = session != null && session.contactId == contactId
             val result = if (online) {
                 // 有活动会话：走文件通道分块加密真发送。
-                p2pManager.sendFile(fileName, size, mime, sourceCardPath, durationSec, openStream)
+                p2pManager.sendFile(fileName, size, mime, sourceCardPath, durationSec, isVoice, openStream)
             } else {
                 // 无连接：与文字离线发送对称——本地标「未送达」+ 留发送方预览副本，对方收不到。
-                p2pManager.sendFileOffline(contactId, fileName, size, mime, sourceCardPath, durationSec, openStream)
+                p2pManager.sendFileOffline(
+                    contactId, fileName, size, mime, sourceCardPath, durationSec, isVoice, openStream
+                )
             }
             // 离线发送同样插一条「去建立连接」提示（与文字一致；文件重发暂不支持）。
             if (!online) chatRepo.addConnectPromptIfNeeded(contactId)
@@ -238,7 +243,7 @@ class ChatViewModel @Inject constructor(
         sendFile(
             fileName = file.name, size = file.length(), mime = "audio/mp4",
             openStream = { file.inputStream() },
-            durationSec = durationSec,
+            durationSec = durationSec, isVoice = true, // 全项目唯一置真处：这才是「按住说话」录的那条
             onError = onError,
             onComplete = { file.delete() }
         )
