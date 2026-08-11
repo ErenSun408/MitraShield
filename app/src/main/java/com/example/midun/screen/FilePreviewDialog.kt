@@ -44,6 +44,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -122,11 +124,20 @@ fun FilePreviewDialog(
             ) {
                 Icon(Icons.Default.Close, "关闭", tint = Color.White)
             }
+            // 左右各让开 56dp 再截断：右上角有关闭按钮、左上角（图集态）有「n / 总数」，
+            // 长文件名原先会一路铺过去压在关闭按钮上（客户反馈 2026-08-12）。
             Text(
                 titleName,
                 color = Color.White,
                 fontSize = 14.sp,
-                modifier = Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 14.dp)
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(horizontal = 56.dp)
+                    .padding(top = 14.dp)
             )
             onSave?.let { save ->
                 Button(

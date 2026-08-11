@@ -10,8 +10,14 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.StartOffset
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -258,7 +264,10 @@ fun ChatDetailScreen(
     var recording by remember { mutableStateOf(false) }              // 正在录音
     var cancelArmed by remember { mutableStateOf(false) }            // 上滑进入取消区（松手则取消）
     var recordSeconds by remember { mutableIntStateOf(0) }           // 录音时长（按钮内实时显示）
-    var playingVoiceId by remember { mutableStateOf<String?>(null) } // 正在播放的语音消息 id
+    var playingVoiceId by remember { mutableStateOf<String?>(null) } // 正在出声的语音消息 id
+    // 暂停中的语音消息 id（播放器仍持着这一段与它的播放位置，再点即续播）。与 [playingVoiceId] 互斥：
+    // 同一时刻至多一段语音处于「播放中」或「暂停」。
+    var pausedVoiceId by remember { mutableStateOf<String?>(null) }
     // 阅后即焚语音：已点开（揭示+播放）但**计时尚未起**的消息 id。焚毁计时改在「听完」(播放完成) 才启动，
     // 故「已揭示」要和「计时器已起(burnTimers)」解耦——这个本地集合承载「已揭示、播放中、还没听完」这段。
     var openedBurnVoice by remember { mutableStateOf(setOf<String>()) }
@@ -275,6 +284,34 @@ fun ChatDetailScreen(
     }
     // 离开会话页：停播放、弃在录的音（避免泄漏 MediaRecorder/Player 与临时文件）。
     DisposableEffect(Unit) { onDispose { voicePlayer.stop(); voiceRecorder.cancel() } }
+
+    // 从头播一段语音：读卡内字节 → 落 App cache 临时文件 → 播。气泡点击（首次）与「重新播放」按钮共用。
+    // 焚毁语音在这里揭示遮罩（[openedBurnVoice]），但**计时不在此刻起**——听完才起，见 play 的完成回调。
+    val startVoiceFromBeginning: (ChatMessage) -> Unit = { msg ->
+        scope.launch {
+            val bytes = chatViewModel.readVoiceBytes(msg)
+            if (bytes == null) {
+                snackbarHostState.showSnackbar("语音不可用，可能已过期")
+            } else {
+                val burnRecv = msg.burnAfterRead && !msg.isMine
+                if (burnRecv) openedBurnVoice = openedBurnVoice + msg.id
+                val tmp = File(context.cacheDir, "voice_play.m4a")
+                tmp.writeBytes(bytes)
+                pausedVoiceId = null
+                playingVoiceId = msg.id
+                // 播放完成回调：普通语音仅复位；焚毁语音**听完即焚**（ttl=0，两端一并删）。
+                val started = voicePlayer.play(tmp) {
+                    playingVoiceId = null
+                    pausedVoiceId = null
+                    if (burnRecv) chatViewModel.revealBurnMessage(msg.id, contactId, msg.type)
+                }
+                if (!started) {
+                    playingVoiceId = null
+                    snackbarHostState.showSnackbar("语音播放失败")
+                }
+            }
+        }
+    }
 
     // 搜索词非空时按内容/文件名过滤；空时用原始消息流。messages 变化时重算。
     val displayMessages = remember(messages, searchQuery) {
@@ -680,33 +717,26 @@ fun ChatDetailScreen(
                         },
                         onResend = { resendTarget = msg },
                         audioPlaying = playingVoiceId == msg.id,
+                        audioPaused = pausedVoiceId == msg.id,
                         audioBurnOpened = msg.id in openedBurnVoice,
+                        // 点气泡三态：播放中→暂停、暂停中→续播、其余→从头播。
+                        // 续播失败（播放器已被别的语音顶掉）退回从头播，别让用户点了没反应。
                         onAudioTap = {
-                            if (playingVoiceId == msg.id) {
-                                voicePlayer.stop(); playingVoiceId = null
-                            } else scope.launch {
-                                val bytes = chatViewModel.readVoiceBytes(msg)
-                                if (bytes == null) {
-                                    snackbarHostState.showSnackbar("语音不可用，可能已过期")
-                                    return@launch
-                                }
-                                // 焚毁语音：首次点开记入 openedBurnVoice（揭示遮罩）；计时**不在此刻起**。
-                                val burnRecv = msg.burnAfterRead && !msg.isMine
-                                if (burnRecv) openedBurnVoice = openedBurnVoice + msg.id
-                                val tmp = File(context.cacheDir, "voice_play.m4a")
-                                tmp.writeBytes(bytes)
-                                playingVoiceId = msg.id
-                                // 播放完成回调：普通语音仅复位；焚毁语音**听完即焚**（ttl=0，两端一并删）。
-                                val started = voicePlayer.play(tmp) {
-                                    playingVoiceId = null
-                                    if (burnRecv) chatViewModel.revealBurnMessage(msg.id, contactId, msg.type)
-                                }
-                                if (!started) {
-                                    playingVoiceId = null
-                                    snackbarHostState.showSnackbar("语音播放失败")
-                                }
+                            when (msg.id) {
+                                playingVoiceId ->
+                                    if (voicePlayer.pause()) {
+                                        playingVoiceId = null
+                                        pausedVoiceId = msg.id
+                                    }
+                                pausedVoiceId ->
+                                    if (voicePlayer.resume()) {
+                                        pausedVoiceId = null
+                                        playingVoiceId = msg.id
+                                    } else startVoiceFromBeginning(msg)
+                                else -> startVoiceFromBeginning(msg)
                             }
                         },
+                        onAudioReplay = { startVoiceFromBeginning(msg) },
                         onFileTap = {
                             val transferring = transferProgress[msg.id] != null
                             val ft = fileTypeOf(msg.fileName ?: "")
@@ -1514,6 +1544,50 @@ private fun ConnectPromptLine(text: String, onGoConnect: () -> Unit) {
 }
 
 /**
+ * 语音气泡里的波形装饰：**播放时逐根跳动，静止时是一排固定高度的短竖条**（客户 2026-08-12）。
+ *
+ * 取代原先那个 `Icons.Default.GraphicEq` 静态图标——形状差不多，但能动，「这条正在放」一眼看得出来。
+ * 尺寸也照着那个图标定（约 18dp 见方），气泡排版不受影响。
+ *
+ * **不播时不挂动画**：`animateFloat` 只在 [playing] 为真的分支里调用，静止的气泡不会申请每帧重组——
+ * 会话里几十条语音同时挂着无限动画是实打实的电量与掉帧问题。
+ */
+@Composable
+private fun VoiceWaveform(playing: Boolean, color: Color) {
+    // 静止时的形状：高低错落，像一小段波形，不是整齐的栅栏。
+    val resting = listOf(0.45f, 0.85f, 0.6f, 1f, 0.5f)
+    val transition = rememberInfiniteTransition(label = "voice-wave")
+    Row(
+        modifier = Modifier.height(18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        resting.forEachIndexed { index, rest ->
+            val fraction = if (playing) {
+                // 每根错开 110ms 起跳 → 波是「流动」的而不是整排一起呼吸。
+                transition.animateFloat(
+                    initialValue = 0.3f,
+                    targetValue = 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 460, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse,
+                        initialStartOffset = StartOffset(index * 110)
+                    ),
+                    label = "bar$index"
+                ).value
+            } else rest
+            Box(
+                modifier = Modifier
+                    .width(2.5.dp)
+                    .fillMaxHeight(fraction)
+                    .clip(RoundedCornerShape(1.5.dp))
+                    .background(color)
+            )
+        }
+    }
+}
+
+/**
  * 焚毁消息的状态标签（B 阶段）：只标「这是阅后即焚消息」，不再显示「xx秒后焚毁」倒计时
  * （客户 2026-07-27：时长定死后倒计时是噪音）。发送方那份补一句「对方读后焚毁」。
  */
@@ -1543,7 +1617,9 @@ private fun ChatBubble(
     onResend: () -> Unit = {},
     onFileTap: () -> Unit = {},
     onAudioTap: () -> Unit = {},
+    onAudioReplay: () -> Unit = {},
     audioPlaying: Boolean = false,
+    audioPaused: Boolean = false,
     audioBurnOpened: Boolean = false
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -1580,6 +1656,26 @@ private fun ChatBubble(
             modifier = Modifier.weight(1f, fill = false),
             horizontalAlignment = if (msg.isMine) Alignment.End else Alignment.Start
         ) {
+            // 语音暂停时挂在气泡**外侧靠中间那一边**的「从头播放」按钮（客户需求 2026-08-12）：
+            // 本端消息靠右、按钮在气泡左边；对端消息靠左、按钮在气泡右边。点它从头播，点气泡本身是续播
+            // ——两个动作各有一个入口，不必靠长按或猜。
+            //
+            // **与气泡同一层**（而不是挂在最外层那个 Row 上）：外层 Row 里还有气泡下方的时间行，按它居中
+            // 会掉到语音条与时间之间，看着像浮在两行中间。放进这一层，`CenterVertically` 对齐的就正好是语音条。
+            val replayButton: @Composable () -> Unit = {
+                if (audioPaused) {
+                    // 36dp 而非 IconButton 默认的 48dp：默认尺寸会在气泡旁边撑出一道明显的空当。
+                    IconButton(onClick = onAudioReplay, modifier = Modifier.size(36.dp)) {
+                        Icon(
+                            Icons.Default.Replay, "从头播放",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+            if (msg.isMine) replayButton()
             Box {
                 Card(
                     shape = RoundedCornerShape(
@@ -1641,7 +1737,7 @@ private fun ChatBubble(
                                 Text(msg.content, color = contentColor, fontSize = 14.sp)
                             }
                             isAudio -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                // 播放/暂停图标 + 时长；气泡宽度随时长递增（微信式），点击播放（onAudioTap）。
+                                // 播放/暂停图标 + 波形 + 时长；气泡宽度随时长递增（微信式），点击播放（onAudioTap）。
                                 Icon(
                                     if (audioPlaying) Icons.Default.PauseCircle else Icons.Default.PlayCircle,
                                     "播放语音",
@@ -1649,8 +1745,10 @@ private fun ChatBubble(
                                     modifier = Modifier.size(22.dp)
                                 )
                                 Spacer(Modifier.width(8.dp))
-                                Icon(Icons.Default.GraphicEq, null, tint = contentColor.copy(alpha = 0.8f),
-                                    modifier = Modifier.size(18.dp))
+                                VoiceWaveform(
+                                    playing = audioPlaying,
+                                    color = contentColor.copy(alpha = 0.8f)
+                                )
                                 Spacer(Modifier.width(8.dp))
                                 Text(
                                     "${msg.audioDurationSec.coerceAtLeast(1)}″",
@@ -1684,6 +1782,8 @@ private fun ChatBubble(
                     )
                 }
             }
+            if (!msg.isMine) replayButton()
+            } // ← 气泡 + 从头播放按钮这一行到此为止；下面是气泡下方的状态/时间行
             Spacer(Modifier.height(2.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // 自己发的且未送达：红色调小药丸（红底+红字），示意可点 → 点击重发（文字/文件均可，微信式）。
