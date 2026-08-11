@@ -166,11 +166,10 @@ private sealed interface AlbumDecode {
  * 解码），没有定位模型这一段，满幅纯码本就是它的标准输入。相机那条路留给 ML Kit：取景框里码只占画面
  * 一部分，且模糊/暗光/斜角的宽容度是 ML Kit 更强。
  *
- * **三轮尝试**，一轮不行换一种看法，都不行才算真没有：
- * 1. [HybridBinarizer]：ZXing 的默认二值化，对光照不均的翻拍照最稳；
- * 2. [GlobalHistogramBinarizer]：全局阈值，对「纯净的截图/分享件」反而更利落，也能兜住 Hybrid 偶尔的翻车；
- * 3. [paddedForDecode] 补白后把 1、2 再走一遍：救 8 月 9 日之前那版**边到边、没有静区**的存量码——那种图
- *    还躺在用户相册里，ZXing 同样需要一点静区才找得到定位图形。
+ * **两轮尝试**，每轮内部又有四种看法（见 [readQrCode]：纯码/场景 × 两种二值化），都不行才算真没有：
+ * 1. 原图直接读；
+ * 2. [paddedForDecode] 补白后重来：救 8 月 9 日之前那版**边到边、没有静区**的存量码——那种图还躺在
+ *    用户相册里，ZXing 同样需要一点静区才找得到定位图形。
  *
  * **失败原因分开报**：读不出图 / 图里确实没有码，排障时是完全不同的方向。
  */
@@ -210,23 +209,48 @@ private fun loadForDecode(context: Context, uri: Uri): Bitmap? = runCatching {
 }.getOrNull()
 
 /**
- * 用 ZXing 读一张位图里的二维码，两种二值化各试一次，都读不出返回 null。
+ * 「整张图就是一张码」——[DecodeHintType.PURE_BARCODE] 让 ZXing 走 `extractPureBits`：取黑色外接框、按
+ * 定位图形的游程算模块尺寸、直接按网格采样，**完全跳过那套找三个定位图形 + 猜维数 + 透视校正的启发式**。
+ *
+ * 这是 2026-08-11 客户第二轮实测（20 张坏 1 张）定位到的病根的对症药。那张 650×650 的失败图，
+ * 用几何硬采样解出来 `errorsCorrected=0`（一个比特错都没有），而 ZXing 的 `Detector` 认成了这样：
+ * 左上定位 (75,75) ✓、右上定位 (575,75) ✓、**左下定位 (75,320) ✗**——它把左边中部一块数据当成了
+ * 左下角的定位图形（`FinderPatternFinder` 按 1:1:3:1:1 的游程比例扫行，数据区偶尔就是会长出这个比例），
+ * 于是把一张 57×57 的码按 45×45 采样，采出来自然是乱码，报的是 FormatException（找到了但解不开）而不是
+ * NotFoundException。**与图片质量无关，与内容有关**——所以是「20 张里偏偏那一张」。
+ */
+private val PURE_HINTS = mapOf(DecodeHintType.PURE_BARCODE to true, DecodeHintType.TRY_HARDER to true)
+
+/** 翻拍/截屏等「码只占画面一部分」的图，只能靠 ZXing 那套启发式定位。 */
+private val SCENE_HINTS = mapOf(DecodeHintType.TRY_HARDER to true)
+
+/**
+ * 用 ZXing 读一张位图里的二维码：两套提示 × 两种二值化，共四次，全不中才返回 null。
+ *
+ * **[PURE_HINTS] 必须排在前面**：相册里选的绝大多数就是我们自己生成的那张纯码图，这条路又快又不吃
+ * 启发式的亏；[SCENE_HINTS] 留给「拍屏幕/截图里连带别的内容」的情形，那种图黑色外接框套不住码，
+ * PURE 路会当场 NotFoundException 落到下一轮，代价可以忽略。
+ *
+ * 顺序内的两种二值化：[HybridBinarizer] 对光照不均的翻拍最稳，[GlobalHistogramBinarizer] 对纯净的
+ * 截图/分享件更利落，也兜得住 Hybrid 偶尔的翻车。
  *
  * [QRCodeReader] **每次新建**：它内部有状态、不是线程安全的，而复用一个实例正是我们在 ML Kit 上栽过的
- * 那种坑。新建一个的开销可以忽略。
+ * 那种坑。新建一个的开销可以忽略；反过来两个 [BinaryBitmap] **要复用**，二值化结果缓存在里面，
+ * 换提示重解不必重算一遍。
  */
 private fun readQrCode(bitmap: Bitmap): String? {
     val pixels = IntArray(bitmap.width * bitmap.height)
     bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
     val source = RGBLuminanceSource(bitmap.width, bitmap.height, pixels)
-    val hints = mapOf(DecodeHintType.TRY_HARDER to true)
     val candidates = listOf(BinaryBitmap(HybridBinarizer(source)), BinaryBitmap(GlobalHistogramBinarizer(source)))
-    for (candidate in candidates) {
-        // 读不出来抛 NotFoundException 是常态，不是异常路径。
-        runCatching { QRCodeReader().decode(candidate, hints).text }
-            .getOrNull()
-            ?.takeIf { it.isNotBlank() }
-            ?.let { return it }
+    for (hints in listOf(PURE_HINTS, SCENE_HINTS)) {
+        for (candidate in candidates) {
+            // 读不出来抛 NotFoundException / FormatException 是常态，不是异常路径。
+            runCatching { QRCodeReader().decode(candidate, hints).text }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+        }
     }
     return null
 }
