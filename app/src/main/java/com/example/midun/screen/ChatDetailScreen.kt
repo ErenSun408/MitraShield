@@ -710,7 +710,9 @@ fun ChatDetailScreen(
                         onFileTap = {
                             val transferring = transferProgress[msg.id] != null
                             val ft = fileTypeOf(msg.fileName ?: "")
-                            val isMedia = ft == FileType.IMAGE || ft == FileType.VIDEO
+                            // 音频与图/视频同列（客户需求 2026-08-12）：点开走 FilePreviewDialog 的播放器。
+                            // 与「按住说话」那条语音消息无关——那是 MessageType.AUDIO，走的是另一条点击回调。
+                            val isMedia = ft == FileType.IMAGE || ft == FileType.VIDEO || ft == FileType.AUDIO
                             // 接收方焚毁文件（[chat-voice] 之外的图/视频/文档焚毁）：一次性预览，退出预览即焚。
                             val burnRecv = msg.burnAfterRead && !msg.isMine && msg.type == MessageType.FILE
                             when {
@@ -1355,7 +1357,9 @@ private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, conten
                 color = contentColor.copy(alpha = 0.7f), fontSize = 10.sp
             )
         } else {
-            val isMedia = ft == FileType.IMAGE || ft == FileType.VIDEO
+            val isMedia = ft == FileType.IMAGE || ft == FileType.VIDEO || ft == FileType.AUDIO
+            // 音频点开是「播放」不是「预览」，提示语跟着分开说。
+            val openVerb = if (ft == FileType.AUDIO) "播放" else "预览"
             val (hint, hintColor) = when {
                 msg.status == MessageStatus.FAILED && !msg.isMine -> "接收失败" to Danger
                 // 焚毁文件（接收方）：不显「点击预览/保存」提示——焚毁文件不可保存、且看过一次即不可再看，
@@ -1364,9 +1368,9 @@ private fun FileBubbleContent(msg: ChatMessage, transferFraction: Float?, conten
                 // 发送方自己发的图/视频可点击预览（功能保留），但不再显文字提示。
                 msg.isMine -> null to contentColor
                 !msg.isMine && msg.savedFolderId == null ->
-                    (if (isMedia) "点击预览 · 可保存" else "📥 点击保存到文件夹") to Accent
+                    (if (isMedia) "点击$openVerb · 可保存" else "📥 点击保存到文件夹") to Accent
                 msg.savedFolderId != null ->
-                    (if (isMedia) "✓ 已保存 · 点击预览" else "✓ 已保存到文件夹") to
+                    (if (isMedia) "✓ 已保存 · 点击$openVerb" else "✓ 已保存到文件夹") to
                         contentColor.copy(alpha = 0.7f)
                 else -> null to contentColor
             }

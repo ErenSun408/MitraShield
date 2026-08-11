@@ -906,7 +906,9 @@ private fun FileItemCard(
     onPreview: () -> Unit,
     loadThumbnail: (suspend (FileItem) -> ImageBitmap?)? = null
 ) {
-    val previewable = file.type == FileType.IMAGE || file.type == FileType.VIDEO
+    // 音频加入可点开之列（客户需求 2026-08-12）：点开进 FilePreviewDialog 的播放器。
+    // 缩略图仍只有图/视频有——音频没有画面可缩，列表里保持 AudioFile 图标（见下方 loadThumbnail 的判断）。
+    val previewable = file.type == FileType.IMAGE || file.type == FileType.VIDEO || file.type == FileType.AUDIO
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var showMoveDialog by remember { mutableStateOf(false) }

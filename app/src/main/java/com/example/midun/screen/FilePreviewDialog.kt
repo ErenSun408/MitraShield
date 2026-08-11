@@ -14,17 +14,26 @@ import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -44,6 +53,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -53,6 +63,7 @@ import com.example.midun.data.model.FileType
 import com.example.midun.media.CardFileDataSource
 import com.example.midun.viewmodel.PreviewViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import kotlinx.coroutines.withContext
 
@@ -101,6 +112,7 @@ fun FilePreviewDialog(
                 when (file.type) {
                     FileType.IMAGE -> ImagePreview(file, vm)
                     FileType.VIDEO -> VideoPreview(file, vm)
+                    FileType.AUDIO -> AudioPreview(file, vm, bottomInset = onSave != null)
                     else -> CenterMessage("该文件类型暂不支持预览")
                 }
             }
@@ -237,6 +249,191 @@ private fun VideoPreview(file: FileItem, vm: PreviewViewModel) {
         factory = { ctx -> PlayerView(ctx).apply { this.player = player; useController = true } },
         modifier = Modifier.fillMaxSize()
     )
+}
+
+/** 快进/快退步长。10 秒是播放器的通行档位，图标（[Icons.Default.Replay10]/[Icons.Default.Forward10]）也刚好对得上。 */
+private const val AUDIO_SEEK_STEP_MS = 10_000L
+
+/**
+ * 音频播放（客户需求 2026-08-12：从手机发来的 mp3 点开要能听）。
+ *
+ * **与视频预览同一条数据通路**：ExoPlayer + [PreviewViewModel.videoFactory] 那个卡内流式 DataSource
+ * （边解密边喂、整文件从不落盘），只是音频没有画面，于是不挂 `PlayerView` 而自绘一套控制条。
+ * 名字里的 "video" 只是历史叫法，它对任何媒体都通用。
+ *
+ * **不用 ExoPlayer 自带的控制条**：那套控件是为视频排的（叠在画面上、自动隐藏），一张纯黑底上没有画面
+ * 可叠、隐藏了就什么都不剩。自绘还能把「进度条 + 前后 10 秒 + 播放/暂停」按客户要的样子摆开。
+ *
+ * @param bottomInset 底部是否要给「保存到文件夹」按钮让位（免保存预览场景），避免控制条与它叠在一起。
+ */
+// ExperimentalMaterial3Api：只为带 thumb/track 的 Slider 重载（自绘滑块与轨道，见下方说明）。
+@OptIn(UnstableApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun AudioPreview(file: FileItem, vm: PreviewViewModel, bottomInset: Boolean) {
+    val context = LocalContext.current
+    var failed by remember(file.id) { mutableStateOf(false) }
+
+    val player = remember(file.id) {
+        val source = ProgressiveMediaSource.Factory(vm.videoFactory(file.id))
+            .createMediaSource(MediaItem.fromUri(vm.videoUri(file.id)))
+        ExoPlayer.Builder(context).build().apply {
+            setMediaSource(source)
+            prepare()
+            playWhenReady = true // 点开即播，省一次点击
+        }
+    }
+    DisposableEffect(file.id) {
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) { failed = true }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener); player.release() }
+    }
+
+    // 播放器状态是命令式的，只能轮询取——250ms 一次，进度条走起来是连续的，开销可忽略。
+    // 拖动进度条期间不回写位置，否则手指还没松开就被播放头拽回去。
+    var position by remember(file.id) { mutableLongStateOf(0L) }
+    var duration by remember(file.id) { mutableLongStateOf(0L) }
+    var playing by remember(file.id) { mutableStateOf(false) }
+    var dragging by remember(file.id) { mutableStateOf(false) }
+    var dragFraction by remember(file.id) { mutableFloatStateOf(0f) }
+    LaunchedEffect(player) {
+        while (true) {
+            if (!dragging) position = player.currentPosition
+            duration = player.duration.takeIf { it > 0 } ?: 0L // 未就绪时是 TIME_UNSET（负数）
+            playing = player.isPlaying
+            delay(250)
+        }
+    }
+
+    if (failed) {
+        CenterMessage("音频无法播放，文件可能已损坏")
+        return
+    }
+
+    val fraction = when {
+        dragging -> dragFraction
+        duration > 0 -> (position.toFloat() / duration).coerceIn(0f, 1f)
+        else -> 0f
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 32.dp)
+            .padding(top = 72.dp, bottom = if (bottomInset) 120.dp else 48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(168.dp)
+                .clip(CircleShape)
+                .background(Color.White.copy(alpha = 0.08f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.MusicNote, null,
+                tint = Color.White.copy(alpha = 0.85f),
+                modifier = Modifier.size(88.dp)
+            )
+        }
+
+        Spacer(Modifier.height(48.dp))
+
+        // 滑杆的**滑块与轨道都自绘**：Material3 新版默认滑块是根竖条，两侧还给轨道留了缺口、末端点了个
+        // 停靠圆点，滑块本身又带一层投影——在纯黑底上这些叠起来就是滑块周围一圈发黑的轮廓。这里换成
+        // 最朴素的白圆点 + 两段式细轨道，没有投影、没有缺口、没有停靠点。
+        Slider(
+            value = fraction,
+            onValueChange = { dragging = true; dragFraction = it },
+            onValueChangeFinished = {
+                if (duration > 0) {
+                    val target = (dragFraction * duration).toLong()
+                    player.seekTo(target)
+                    // **必须同时把本地 position 推到目标**：进度条松手后就改看 position 了，而它还是上一次
+                    // 轮询（最多 250ms 前）留下的旧值——不写这一行，松手瞬间进度条会先弹回原处，等下一次
+                    // 轮询才跳到目标，看起来就是「到位 → 闪回 → 再闪过去」。
+                    position = target
+                }
+                dragging = false
+            },
+            thumb = {
+                Box(Modifier.size(14.dp).clip(CircleShape).background(Color.White))
+            },
+            track = {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(3.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.25f))
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(fraction)
+                            .height(3.dp)
+                            .clip(CircleShape)
+                            .background(Color.White)
+                    )
+                }
+            }
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            // 拖动时显示的是手指所在处的时刻，不是播放头——松手才跳过去。
+            Text(formatClock(if (dragging) (dragFraction * duration).toLong() else position),
+                color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+            Text(formatClock(duration), color = Color.White.copy(alpha = 0.7f), fontSize = 12.sp)
+        }
+
+        Spacer(Modifier.height(28.dp))
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(32.dp)
+        ) {
+            IconButton(
+                onClick = { player.seekTo((player.currentPosition - AUDIO_SEEK_STEP_MS).coerceAtLeast(0L)) }
+            ) {
+                Icon(Icons.Default.Replay10, "后退 10 秒", tint = Color.White, modifier = Modifier.size(36.dp))
+            }
+            IconButton(
+                onClick = {
+                    // 放完了再点 → 从头再放一遍（ExoPlayer 停在末尾，直接 play 不会有动静）。
+                    if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+                    if (player.isPlaying) player.pause() else player.play()
+                },
+                modifier = Modifier
+                    .size(72.dp)
+                    .clip(CircleShape)
+                    .background(Color.White.copy(alpha = 0.12f))
+            ) {
+                Icon(
+                    if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    if (playing) "暂停" else "播放",
+                    tint = Color.White, modifier = Modifier.size(44.dp)
+                )
+            }
+            IconButton(
+                onClick = {
+                    val limit = if (duration > 0) duration else player.currentPosition
+                    player.seekTo((player.currentPosition + AUDIO_SEEK_STEP_MS).coerceAtMost(limit))
+                }
+            ) {
+                Icon(Icons.Default.Forward10, "前进 10 秒", tint = Color.White, modifier = Modifier.size(36.dp))
+            }
+        }
+    }
+}
+
+/** 毫秒 → `m:ss`（超过一小时给 `h:mm:ss`）。时长未知（0）时显示 `--:--`。 */
+private fun formatClock(ms: Long): String {
+    if (ms <= 0L) return "--:--"
+    val total = ms / 1000
+    val h = total / 3600
+    val m = (total % 3600) / 60
+    val s = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
 private fun Context.findActivity(): Activity? {
