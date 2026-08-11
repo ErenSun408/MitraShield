@@ -120,9 +120,8 @@ dependencies {
     ksp(libs.hilt.android.compiler)
     implementation(libs.androidx.hilt.navigation.compose)
 
-    // 二维码生成
+    // 二维码生成（ZXing）+ 相册静图识别（ZXing，相机走 MLKit）
     implementation(libs.zxing.core)
-    implementation(libs.qrcode.kotlin)
 
     // CameraX + MLKit 扫码
     implementation(libs.androidx.camera.camera2)

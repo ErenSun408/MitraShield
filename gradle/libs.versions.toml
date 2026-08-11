@@ -19,7 +19,6 @@ datastore = "1.1.2"
 documentfile = "1.0.1"
 media3 = "1.4.1"
 zxing = "3.5.3"
-qrcodeKotlin = "4.5.0"
 cameraX = "1.3.1"
 mlkitBarcode = "17.2.0"
 
@@ -51,8 +50,6 @@ hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref
 hilt-android-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
 androidx-hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
-# v4.0：改用 Android 专用 artifact，避免引入 JVM 多余依赖
-qrcode-kotlin = { group = "io.github.g0dkar", name = "qrcode-kotlin-android", version.ref = "qrcodeKotlin" }
 androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "cameraX" }
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "cameraX" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "cameraX" }

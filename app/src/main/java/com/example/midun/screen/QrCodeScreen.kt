@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
@@ -62,97 +63,181 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.DecodeHintType
+import com.google.zxing.EncodeHintType
+import com.google.zxing.RGBLuminanceSource
+import com.google.zxing.common.GlobalHistogramBinarizer
+import com.google.zxing.common.HybridBinarizer
+import com.google.zxing.qrcode.QRCodeReader
+import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
+import com.google.zxing.qrcode.encoder.Encoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import qrcode.QRCode
 
 /**
- * 全进程共用的二维码识别器（`[qr]` 2026-08-09 客户故障：相册里同一张码，第一次识别得了，之后就识别不到，
+ * 相机预览专用的二维码识别器（`[qr]` 2026-08-09 客户故障：相册里同一张码，第一次识别得了，之后就识别不到，
  * 退出 App 重开又能识别）。
  *
- * **绝不 close，也不要再在别处 getClient**。病根是原先相机预览在 `onDispose` 里 close 掉自己那个 client，
- * 而相机与相册两处取的 options 完全相同（都只开 [Barcode.FORMAT_QR_CODE]）——ML Kit 按 options 复用同一个
- * 底层原生 detector，于是「切一次 Tab」就把整个进程的识别能力关掉了：此后无论新建多少个 client，拿到的
- * 还是那个已关闭的实例，相机与相册一起失灵，只有杀进程才恢复。客户归因到「第二次保存到相册」是巧合，
- * 真正的变量是中间离开过识别页。
+ * **绝不 close，也不要再在别处 getClient**。病根是原先相机预览在 `onDispose` 里 close 掉自己那个 client——
+ * ML Kit 按 options 复用同一个底层原生 detector，于是「切一次 Tab」就把整个进程的识别能力关掉了：此后
+ * 无论新建多少个 client，拿到的还是那个已关闭的实例，只有杀进程才恢复。
  *
- * 常驻一个 detector 的开销可以忽略，随进程回收即可。
+ * 相册那条路已改用 ZXing（见 [readQrCode]），不再碰这个 detector，所以这个坑现在最多波及相机自己——
+ * 规矩不变：不关。常驻一个 detector 的开销可以忽略，随进程回收即可。
  */
-/**
- * 二维码四周留白的像素数 = 4 模块 × 每模块 10 px（渲染时的 `withSize(10)`）——QR 规范要求的静区宽度。
- * 两者必须同改：模块尺寸变了这里也得跟着变，否则静区不足 4 模块，静态图解码又会时灵时不灵。
- */
-private const val QR_QUIET_ZONE_PX = 40
-
 private val qrScanner: BarcodeScanner by lazy {
     BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
     )
 }
 
-/** 二次识别前把图缩到的最大边长。ML Kit 的检测模型内部本就会缩放，喂过大的图只是白费解码时间。 */
+/** 每个模块（二维码最小方格）渲染成多少像素。 */
+private const val QR_MODULE_PX = 10
+
+/**
+ * 静区（quiet zone）宽度，单位是**模块**——QR 规范要求码四周留 4 个模块的空白。
+ * 按模块记而不是按像素记，[QR_MODULE_PX] 再怎么改都不会失配。
+ */
+private const val QR_QUIET_ZONE_MODULES = 4
+
+/** 相册图片解码前缩到的最大边长。再大对识别没有增益，只是白白多占内存、多花时间。 */
 private const val DECODE_MAX_EDGE = 1440
 
 /**
- * 从相册图片 [uri] 解码邀请码，识别到调 [onResult]，否则调 [onNone] 并**带上具体原因**。
+ * 把邀请码内容 [content] 渲染成带静区的白底二维码位图。
  *
- * **两次尝试**（`[qr]` 2026-08-09 客户故障：相册选图识别不出，相机扫同一张码却正常）：
- * 1. 原图直接喂 ML Kit；
- * 2. 没找到码就[缩放 + 四周补白][paddedForDecode]再试一次。这一步同时兜住两个已知成因——分享出去的
- *    PNG 四周没有静区（quiet zone），以及整张图几乎被二维码占满时 ML Kit 那个 SSD 检测模型定位不到码。
- *    相机那条路两样都不占：取景框里连带拍进了周围界面，码本身也只占画面一部分——这正是「相机行、
- *    相册不行」的由来。
+ * **用 ZXing 而不是 qrcode-kotlin**（`[qr]` 2026-08-11 客户故障：邀请码识别 15 次坏 2 次）。反编译
+ * qrcode-kotlin 4.5.0 看到两个我们从没设过的默认值，凑在一起正好是「偶发认不出」的配方：
+ * - `errorCorrectionLevel` 默认 **LOW**（只有 7% 纠错余量，四档最低）；
+ * - `maskPattern` 默认写死 **PATTERN000**，且全库没有任何掩码惩罚评分逻辑（`QRUtil` 只有 `getMask`，
+ *   没有 lostPoint / bestMask）。
  *
- * **失败原因分三种报**，不再一律「未识别到」：读不出图、ML Kit 调用失败、图里确实没有码，排障时是
- * 完全不同的方向。原先合并成一句，现场回报等于没有信息。
+ * 而规范要求编码时把 8 种掩码逐一评分（大块同色、冒充定位图形的 1:1:3:1:1 行列、黑白失衡），取最优的
+ * 那个——掩码存在的意义就是打散这些坏图样。我们每张邀请码内容都是全新随机数据（临时 ECDH 公钥、随机
+ * sid、变化的 exp），固定掩码下每隔若干张就会撞出一张模块排布很差的码，解码器定位不到；7% 的纠错余量
+ * 又吃不下微信转发那一手 JPEG 压缩的噪声。ZXing 的 [Encoder] 严格按规范做掩码评分，这一整类问题消失。
+ *
+ * 纠错提到 **M（15%）**：码会大一档，换来的是转发、翻拍、压缩之后仍读得出。
+ *
+ * 字符集显式给 UTF-8：ZXing 不给提示时按 ISO-8859-1 编码，安全卡真实 SN 万一带非 ASCII 字符就会乱码。
  */
-private fun decodeQrFromImage(
-    context: Context,
-    uri: Uri,
-    onResult: (String) -> Unit,
-    onNone: (reason: String) -> Unit
-) {
-    val source = runCatching {
-        context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) }
-    }.getOrNull() ?: run {
-        onNone("无法读取这张图片，请换一张再试")
-        return
-    }
-    val size = "${source.width}×${source.height}"
+private fun renderQrBitmap(content: String): Bitmap {
+    val matrix = Encoder.encode(
+        content,
+        ErrorCorrectionLevel.M,
+        mapOf(EncodeHintType.CHARACTER_SET to "UTF-8")
+    ).matrix ?: error("QR encode returned no matrix")
 
-    // 第二次尝试：缩放 + 补白后重来。两次都没找到才算真没有。
-    fun retryPadded() {
-        val padded = runCatching { paddedForDecode(source) }.getOrNull()
-            ?: return onNone("图中未找到二维码（图片 $size）")
-        qrScanner.process(InputImage.fromBitmap(padded, 0))
-            .addOnSuccessListener { barcodes ->
-                val raw = barcodes.firstOrNull()?.rawValue
-                if (raw != null) onResult(raw) else onNone("图中未找到二维码（图片 $size，已补白重试）")
+    val quiet = QR_QUIET_ZONE_MODULES * QR_MODULE_PX
+    val side = matrix.width * QR_MODULE_PX + quiet * 2
+    val bitmap = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bitmap)
+    // 白底不透明：透明背景的 PNG 分享到部分机型会被填成黑色，屏显与分享件必须都是白底。
+    canvas.drawColor(android.graphics.Color.WHITE)
+    val paint = Paint().apply { color = android.graphics.Color.BLACK }
+    for (y in 0 until matrix.height) {
+        for (x in 0 until matrix.width) {
+            if (matrix.get(x, y).toInt() == 1) {
+                val left = (quiet + x * QR_MODULE_PX).toFloat()
+                val top = (quiet + y * QR_MODULE_PX).toFloat()
+                canvas.drawRect(left, top, left + QR_MODULE_PX, top + QR_MODULE_PX, paint)
             }
-            .addOnFailureListener { e ->
-                onNone("识别失败：${e.javaClass.simpleName}（图片 $size）")
-            }
-    }
-
-    qrScanner.process(InputImage.fromBitmap(source, 0))
-        .addOnSuccessListener { barcodes ->
-            val raw = barcodes.firstOrNull()?.rawValue
-            if (raw != null) onResult(raw) else retryPadded()
         }
-        .addOnFailureListener { retryPadded() }
+    }
+    return bitmap
 }
 
-/** 缩到 [DECODE_MAX_EDGE] 以内并四周补一圈白边（短边的 8%，至少 16px），供二次识别用。 */
+/** [decodeQrFromImage] 的结果：认出来了，或者没认出来并附**具体原因**。 */
+private sealed interface AlbumDecode {
+    data class Found(val raw: String) : AlbumDecode
+    data class None(val reason: String) : AlbumDecode
+}
+
+/**
+ * 从相册图片 [uri] 解码邀请码。ZXing 是同步解码（几十到几百毫秒），**绝不能在主线程跑**，故整个函数
+ * 挂在 [Dispatchers.Default] 上，调用方拿到结果时已回到自己的线程。
+ *
+ * **用 ZXing 而不是 ML Kit**（`[qr]` 2026-08-11）。ML Kit 是两段式：先用 SSD 检测模型把码在画面里框出来，
+ * 再解码。而分享出去的邀请码 PNG 整张图有 87% 都是码本身，「一张除了码什么都没有」正是那个检测模型最不
+ * 擅长的输入——码占满画面时它反而定位不到。ZXing 走经典路子（扫描行找三个定位图形 → 透视采样 → 纠错
+ * 解码），没有定位模型这一段，满幅纯码本就是它的标准输入。相机那条路留给 ML Kit：取景框里码只占画面
+ * 一部分，且模糊/暗光/斜角的宽容度是 ML Kit 更强。
+ *
+ * **三轮尝试**，一轮不行换一种看法，都不行才算真没有：
+ * 1. [HybridBinarizer]：ZXing 的默认二值化，对光照不均的翻拍照最稳；
+ * 2. [GlobalHistogramBinarizer]：全局阈值，对「纯净的截图/分享件」反而更利落，也能兜住 Hybrid 偶尔的翻车；
+ * 3. [paddedForDecode] 补白后把 1、2 再走一遍：救 8 月 9 日之前那版**边到边、没有静区**的存量码——那种图
+ *    还躺在用户相册里，ZXing 同样需要一点静区才找得到定位图形。
+ *
+ * **失败原因分开报**：读不出图 / 图里确实没有码，排障时是完全不同的方向。
+ */
+private suspend fun decodeQrFromImage(context: Context, uri: Uri): AlbumDecode =
+    withContext(Dispatchers.Default) {
+        val source = loadForDecode(context, uri)
+            ?: return@withContext AlbumDecode.None("无法读取这张图片，请换一张再试")
+        val size = "${source.width}×${source.height}"
+
+        readQrCode(source)?.let { return@withContext AlbumDecode.Found(it) }
+
+        val padded = runCatching { paddedForDecode(source) }.getOrNull()
+            ?: return@withContext AlbumDecode.None("图中未找到二维码（图片 $size）")
+        readQrCode(padded)?.let { return@withContext AlbumDecode.Found(it) }
+
+        AlbumDecode.None("图中未找到二维码（图片 $size，已补白重试）")
+    }
+
+/**
+ * 读图并缩到 [DECODE_MAX_EDGE] 以内。
+ *
+ * **必须先量尺寸再采样解码**：相册里随手一张原相机照片是 4000×3000，整张读进来光位图就 48MB，
+ * 而 [readQrCode] 还要再复制一份等大的像素数组——直接 OOM。`inSampleSize` 只能取 2 的幂，故最终最大边
+ * 落在 [DECODE_MAX_EDGE] 的一半到一倍之间，对二维码识别绰绰有余。
+ */
+private fun loadForDecode(context: Context, uri: Uri): Bitmap? = runCatching {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    var sample = 1
+    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > DECODE_MAX_EDGE) sample *= 2
+    val opts = BitmapFactory.Options().apply {
+        inSampleSize = sample
+        inPreferredConfig = Bitmap.Config.ARGB_8888 // getPixels 要求非 HARDWARE 配置
+    }
+    context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, opts) }
+}.getOrNull()
+
+/**
+ * 用 ZXing 读一张位图里的二维码，两种二值化各试一次，都读不出返回 null。
+ *
+ * [QRCodeReader] **每次新建**：它内部有状态、不是线程安全的，而复用一个实例正是我们在 ML Kit 上栽过的
+ * 那种坑。新建一个的开销可以忽略。
+ */
+private fun readQrCode(bitmap: Bitmap): String? {
+    val pixels = IntArray(bitmap.width * bitmap.height)
+    bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+    val source = RGBLuminanceSource(bitmap.width, bitmap.height, pixels)
+    val hints = mapOf(DecodeHintType.TRY_HARDER to true)
+    val candidates = listOf(BinaryBitmap(HybridBinarizer(source)), BinaryBitmap(GlobalHistogramBinarizer(source)))
+    for (candidate in candidates) {
+        // 读不出来抛 NotFoundException 是常态，不是异常路径。
+        runCatching { QRCodeReader().decode(candidate, hints).text }
+            .getOrNull()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { return it }
+    }
+    return null
+}
+
+/** 四周补一圈白边（短边的 8%，至少 16px），给没有静区的存量码用。 */
 private fun paddedForDecode(src: Bitmap): Bitmap {
-    val scale = minOf(1f, DECODE_MAX_EDGE.toFloat() / maxOf(src.width, src.height))
-    val w = (src.width * scale).toInt().coerceAtLeast(1)
-    val h = (src.height * scale).toInt().coerceAtLeast(1)
-    val pad = (minOf(w, h) * 0.08f).toInt().coerceAtLeast(16)
-    val out = Bitmap.createBitmap(w + pad * 2, h + pad * 2, Bitmap.Config.ARGB_8888)
+    val pad = (minOf(src.width, src.height) * 0.08f).toInt().coerceAtLeast(16)
+    val out = Bitmap.createBitmap(src.width + pad * 2, src.height + pad * 2, Bitmap.Config.ARGB_8888)
     Canvas(out).apply {
         drawColor(android.graphics.Color.WHITE)
-        drawBitmap(src, null, Rect(pad, pad, pad + w, pad + h), null)
+        drawBitmap(src, null, Rect(pad, pad, pad + src.width, pad + src.height), null)
     }
     return out
 }
@@ -303,50 +388,22 @@ fun QrCodeScreen(
     // 也能复用同一渲染路径——原地刷新 bitmap/content + 重置倒计时，不退回 pre-gen 卡片。
     LaunchedEffect(isGenerating) {
         if (isGenerating) {
-            // M10.3：生成真实 ConnectionInfo（含本机 IPv6 + 临时 ECDH 公钥）并后台开始监听对端连入。
-            val content = chatViewModel.prepareConnection()
-            val bitmap = runCatching {
-                withContext(Dispatchers.Default) {
-                    val pngBytes = QRCode.ofSquares()
-                        .withSize(10)
-                        .build(content)
-                        .render()
-                        .getBytes()
-                    val decoded = BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.size)
-                    // 压到不透明白底上：render() 产出的 PNG 带透明背景，分享到部分机型会被填成黑色。
-                    // flatten 后屏显与分享的 PNG 均为白底二维码。
-                    //
-                    // **四周必须留静区**（`[qr]` 2026-08-09 客户故障：相册选图报「未在图片中识别到邀请码」，
-                    // 而相机直接扫同一张码却正常）。QR 规范要求码四周有 4 个模块宽的空白（quiet zone），
-                    // 而 qrcode-kotlin 的 `margin` 默认是 0、我们也没设过 → 渲出来的位图是**边到边**的。
-                    // 相机那条路侥幸能用：取景框里连带拍进了卡片白底与页面背景，静区是屏幕 UI 白送的；
-                    // 分享出去的 PNG 没这个便宜可占，ML Kit 静态解码就此失败——与微信压缩无关，那张图
-                    // 本来就缺白边。
-                    //
-                    // 不走库的 `withMargin()`：它在 build() 里执行 `resize(canvasSize + margin * 2)`，而
-                    // canvasSize 默认 0（= 让库按数据自动算），于是会把一张几百像素的码 resize 成 80px 见方，
-                    // 直接毁掉。自己在这一步加，尺寸完全可控。
-                    val quietZone = QR_QUIET_ZONE_PX
-                    val flattened = Bitmap.createBitmap(
-                        decoded.width + quietZone * 2,
-                        decoded.height + quietZone * 2,
-                        Bitmap.Config.ARGB_8888
-                    )
-                    Canvas(flattened).apply {
-                        drawColor(android.graphics.Color.WHITE)
-                        drawBitmap(decoded, quietZone.toFloat(), quietZone.toFloat(), null)
-                    }
-                    decoded.recycle()
-                    flattened
-                }
-            }.getOrNull()
-            if (bitmap != null) {
+            // M10.3：生成真实 ConnectionInfo（本机候选地址 + 临时 ECDH 公钥）并后台开始监听对端连入。
+            //
+            // **prepareConnection 必须一起纳入 runCatching**：本机一个可用地址都扫不到时它会抛
+            // NoLocalAddressException（`[network]` 2026-08-11），而 LaunchedEffect 里漏出去的异常
+            // 直接就是崩溃。抛出来的话都是写给用户看的，原样显示比「邀请码生成失败」有用。
+            val result = runCatching {
+                val content = chatViewModel.prepareConnection()
+                content to withContext(Dispatchers.Default) { renderQrBitmap(content) }
+            }
+            result.onSuccess { (content, bitmap) ->
                 qrBitmap = bitmap
                 inviteLink = ConnectionInfo.linkOf(content) // 同一份 content，只换个载体
                 countdown = 120
                 qrGenerated = true
-            } else {
-                qrError = "邀请码生成失败，请重试"
+            }.onFailure { e ->
+                qrError = e.message?.takeIf { it.isNotBlank() } ?: "邀请码生成失败，请重试"
             }
             isGenerating = false
         }
@@ -750,12 +807,19 @@ private fun ScanTab(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted -> hasCameraPermission = granted }
 
-    // 相册选图扫码：选一张图 → MLKit 解码二维码 → 走与相机扫码同一条 onQrDetected 路径。
+    // 相册选图扫码：选一张图 → ZXing 解码 → 走与相机扫码同一条 onQrDetected 路径。
+    // 解码是同步的（ZXing 没有回调式 API），故整段丢进协程；[decodeQrFromImage] 内部已切到后台调度器，
+    // 回到这里时又在主线程上，弹 Toast / 走导航都安全。
+    val scope = rememberCoroutineScope()
     val albumLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
-            decodeQrFromImage(context, it, onQrDetected) { reason ->
-                // 带原因、给长时——现场回报「识别不到」时，这句话就是唯一的线索。
-                Toast.makeText(context, reason, Toast.LENGTH_LONG).show()
+            scope.launch {
+                when (val result = decodeQrFromImage(context, it)) {
+                    is AlbumDecode.Found -> onQrDetected(result.raw)
+                    // 带原因、给长时——现场回报「识别不到」时，这句话就是唯一的线索。
+                    is AlbumDecode.None ->
+                        Toast.makeText(context, result.reason, Toast.LENGTH_LONG).show()
+                }
             }
         }
     }
