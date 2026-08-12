@@ -455,6 +455,13 @@ class ChatViewModel @Inject constructor(
             onError("邀请码格式无效，请确认扫描的是波波邀请码、或粘贴的是完整的波波邀请链接")
             return
         }
+        // 过期先在本地拦掉，别发 SYN（`[network]` 2026-08-12）：出码端那道判据只在包能到达对方时才生效，
+        // 而过期码多半连不通（对方已换网 / v6 临时地址已轮换），用户等 6 秒等来的是一句「对方所在网络可能
+        // 拦截了入站连接」——把码过期报成对方网络故障。判据与宽限见 [ConnectionInfo.hasExpired]。
+        if (info.hasExpired()) {
+            onError("邀请码已过期，请让对方重新生成后再扫。")
+            return
+        }
         viewModelScope.launch {
             // 连接前先判断该设备是否已是联系人 → 决定连上后弹备注（新建）还是直接进会话（重连）。
             val existedBefore = chatRepo.findContactByDevice(info.deviceSn) != null

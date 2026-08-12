@@ -282,16 +282,19 @@ private fun shareQrImage(context: Context, bitmap: Bitmap) {
     }
 }
 
-/** 复制邀请链接到剪贴板。Android 13+ 系统自带「已复制」浮层，再弹 Toast 就重复了。 */
-private fun copyInviteLink(context: Context, link: String) {
+/** 复制纯文本到剪贴板。Android 13+ 系统自带「已复制」浮层，再弹 Toast 就重复了。 */
+private fun copyToClipboard(context: Context, label: String, text: String, toast: String) {
     runCatching {
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("波波邀请链接", link))
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            Toast.makeText(context, "邀请链接已复制", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, toast, Toast.LENGTH_SHORT).show()
         }
     }
 }
+
+private fun copyInviteLink(context: Context, link: String) =
+    copyToClipboard(context, "波波邀请链接", link, "邀请链接已复制")
 
 /**
  * 读剪贴板里的纯文本，空则返回 null。供识别页的粘贴框用（见 [ScanTab]）。
@@ -752,6 +755,13 @@ fun QrCodeScreen(
                     onClick = dismiss,
                     colors = ButtonDefaults.buttonColors(containerColor = Primary)
                 ) { Text("知道了") }
+            },
+            // 复制原因给客服/研发（客户 2026-08-12）：这段文案是排障的第一手线索，而弹窗里的文字选不中、
+            // 用户只能靠截图或转述。**点了不关弹窗**——复制完往往还要再读一遍原文，关掉反而得重扫一次。
+            dismissButton = {
+                TextButton(
+                    onClick = { copyToClipboard(mainContext, "波波连接失败原因", msg, "已复制") }
+                ) { Text("复制") }
             }
         )
     }

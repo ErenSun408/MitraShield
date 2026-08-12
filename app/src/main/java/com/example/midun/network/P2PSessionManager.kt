@@ -1896,6 +1896,20 @@ data class ConnectionInfo(
      */
     fun toLink(): String = linkOf(toJson())
 
+    /**
+     * 这张码是否**已明显过期**——扫码端在连接前自查用（`ChatViewModel.connectToContact`）。
+     *
+     * 出码端 [P2PSessionManager.acceptOne] 那道判据是权威的（取本机记的 `listenerExpiresAt`，不信码里的
+     * `exp`），但它只有在**包能到达出码方**时才起作用。过期码的常态恰恰相反：码放了两分钟，出码方多半已
+     * 换网 / v6 临时地址轮换 / 息屏离网，SYN 根本没人回，扫码方白等一个 [ATTEMPT_TIMEOUT_MS] 再收到一句
+     * 「对方所在网络可能拦截了入站连接」——把「码过期了」说成「对方网络有问题」，用户照着这句什么也做不了。
+     *
+     * 留 [CLOCK_SKEW_GRACE_MS] 的宽限，因为 [expiresAt] 是**出码方时钟**上的时刻，两台手机差多少不可控。
+     * 宁可放过几张刚过期的码（照连即是，出码端有权威判据兜底），也不能判死一张好码——判死了用户完全连不上，
+     * 且没有任何自救手段。
+     */
+    fun hasExpired(now: Long = System.currentTimeMillis()): Boolean = now > expiresAt + CLOCK_SKEW_GRACE_MS
+
     fun toJson(): String = JSONObject().apply {
         put("ver", version)
         put("sn", deviceSn)
@@ -1913,6 +1927,12 @@ data class ConnectionInfo(
          * 不在本次范围内。
          */
         private const val INVITE_SCHEME = "midun://invite?d="
+
+        /**
+         * [hasExpired] 判过期时给出码方时钟留的宽限（ms）。两台手机都自动对时的话偏差在秒级，10 秒足够；
+         * 真差得更多也无妨——落到宽限外的只是「连不上时报的原因换了一句」，连接行为本身不受影响。
+         */
+        private const val CLOCK_SKEW_GRACE_MS = 10_000L
 
         /** 链接里 base64url 载荷的取值范围，用于从「带前后文的粘贴内容」里把链接抠出来。 */
         private val LINK_REGEX = Regex("""midun://invite\?d=([A-Za-z0-9_-]+)""")
