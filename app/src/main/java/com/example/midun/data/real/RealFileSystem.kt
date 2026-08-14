@@ -61,7 +61,7 @@ class RealFileSystem @Inject constructor(
                 id = path,
                 name = name,
                 type = FileType.FOLDER,
-                createdAt = dirCreateTime(path),
+                createdAt = if (READ_FOLDER_TIME) dirCreateTime(path) else 0L,
                 copyPolicy = policies[path] ?: CopyPolicy.NO_COPY
             )
         }
@@ -934,6 +934,23 @@ class RealFileSystem @Inject constructor(
     private fun fsError(msg: String, code: Int) = IllegalStateException("$msg，错误码=$code")
 
     private companion object {
+        /**
+         * 是否读卡上的目录创建时间（走 [dirCreateTime] 的 `SFOpenAsDir`）。**2026-08-15 暂时关掉，做对照。**
+         *
+         * 客户装上带它的那版之后报「**文件和文件夹的创建时间都成了 `--`**」。文件的时间走的是另一条路
+         * （`SFOpen` + `SFGetTime`，见 [fileMeta]），本次改动一个字都没动过它，所以只有两种可能：
+         * ① 这张卡本来就给不出时间，文件一直是 `--`，只是从前文件夹顶着个假的「今天」，没人往这想；
+         * ② `SFOpenAsDir` 返回的不是真句柄，而我们又拿它去 `SFClose`，把原生层的句柄状态弄坏了，
+         *    连累文件那条路的 `SFGetTime` 一起失败——症状恰好是「大小、图标都正常，唯独日期没了」。
+         *
+         * 关掉它打一版对照包：**文件的日期若回来，就坐实是 ②**，这张卡上 `SFOpenAsDir` 不能碰，功能整体撤掉；
+         * 若仍是 `--`，那就是 ①，与本次改动无关，要谈的是「卡给不出时间时这一栏还留不留」。
+         *
+         * 关着的时候文件夹的 `createdAt` 取 0 → UI 按既有规矩显示 `--`，**不回到从前那个假「今天」**：
+         * 那个日期看着正常却是每次刷新列表的此刻，比 `--` 更误导人。
+         */
+        const val READ_FOLDER_TIME = false
+
         const val ROOT = "0:/"
         const val META_PATH = "0:/.midun_meta.json"
         const val KEYSTORE_PATH = "0:/.midun_keystore" // App 层 DEK/KEK 密钥库（raw，永不 DEK 加密）

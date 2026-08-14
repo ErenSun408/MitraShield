@@ -38,7 +38,9 @@ data class FileSort(val field: SortField, val descending: Boolean) {
          *
          * 默认仍是名称递增：文件夹是导航结构，名字不变顺序就不变，用户「我那个夹子在第二个」的位置记忆才成立。
          */
-        val FOLDER_FIELDS = listOf(SortField.TIME, SortField.NAME)
+        // 2026-08-15 暂时收回 TIME：`RealFileSystem.READ_FOLDER_TIME` 关着时文件夹没有时间可排，
+        // 留着这个选项等于骗人（排出来实为名称兜底排）。那个开关一旦验证可用，把 TIME 加回来即可。
+        val FOLDER_FIELDS = listOf(SortField.NAME)
         val FOLDER_DEFAULT = FileSort(SortField.NAME, descending = false)
 
         /**
