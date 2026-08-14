@@ -403,9 +403,19 @@ class ChatViewModel @Inject constructor(
      * 删除联系人（连同消息）。接 M1.4 的 deleteContact，由联系人资料页调用。
      * onComplete 在删除落定后回调导航：否则资料页立即 popBackStack 销毁本 VM scope 会打断
      * repo.deleteContact 的 delay → 删除半途中断（同 M3.5 忘记密码 / clearAllMessages 坑）。
+     *
+     * **删人即断链**（`[chat]` 2026-08-14 客户故障）：会话是全局态（P2PSessionManager 单例），删联系人此前
+     * 只动仓库、不碰会话，于是 A 删完 B 看到「暂无联系人」，两端 socket 却照旧——B 那边仍显示「已连接」、
+     * 还能继续发消息，而这些消息落在一个**已经不存在的 contactId** 上，A 收得到却显示不出来。
+     *
+     * 断在删之前：先 close socket，对端 `readLine` 当场返回 null 同步掉线，也堵住「删到一半又收到一条消息、
+     * 把刚删掉的会话写回来」的窗口。判据只认「当前活动会话正是这个人」——删别人不该影响正在进行的会话。
      */
     fun deleteContact(contactId: String, onComplete: () -> Unit = {}) {
         viewModelScope.launch {
+            if (p2pManager.activeSession.value?.contactId == contactId) {
+                p2pManager.disconnect("删除联系人：一并断开与其的会话")
+            }
             chatRepo.deleteContact(contactId)
             _contacts.value = chatRepo.getContacts()
             onComplete()

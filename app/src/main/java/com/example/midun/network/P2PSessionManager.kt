@@ -1545,6 +1545,14 @@ class P2PSessionManager @Inject constructor(
 
     private suspend fun handleIncoming(line: String) {
         val session = _activeSession.value ?: return
+        // 会话绑的联系人已被删掉 → 这条会话就此作废（`[chat]` 2026-08-14）。删人时已经会主动断链
+        // （见 `ChatViewModel.deleteContact`），这里是兜底：删除与「一帧已经读进来了」之间还有一线之隔，
+        // 而落到已删 contactId 上的消息**用户永远看不到、却会跟着侧车写回卡上**——安全产品不该在「删干净了」
+        // 之后还留着对方发来的内容。就地拆会话，对端同步掉线。
+        if (session.contactId != UNKNOWN_CONTACT && chatRepo.getContacts().none { it.id == session.contactId }) {
+            disconnect("会话绑定的联系人已删除")
+            return
+        }
         val frame = runCatching { MessageFrame.fromJson(line) }.getOrNull() ?: return
         val plaintext = runCatching { decryptMessage(session, frame.payload) }.getOrNull() ?: return
         when (frame.type) {
