@@ -98,9 +98,19 @@ fun NavGraph(navController: NavHostController) {
             QrCodeScreen(
                 onBack = { navController.popBackStack() },
                 onOpenChat = { contactId ->
-                    // 连接建立（+备注）后进会话，并把 QR 屏弹出栈：从会话返回回到上一层而非二维码页。
+                    // 连接建立（+备注）后进会话：**弹到 Main 为止**，保证栈里恒为 Main → 会话页一层。
+                    //
+                    // 原先只弹二维码页（popUpTo(QrCode)），弹不掉它下面的东西。而二维码页有两个入口：
+                    // 会话列表的连接按钮（栈=Main→QR，弹完正好一层）、以及会话页顶栏的「前往建立连接」/
+                    // 气泡里的「去建立连接」（栈=Main→Chat→QR，弹完剩 Main→Chat→Chat）。后者建联后栈里
+                    // 压着两个**同一个联系人**的会话页，第一次返回弹掉上面那个、露出下面一模一样的一个，
+                    // 用户看到的就是「返回没反应，要按两次」（2026-08-14 客户反馈；两端都从会话页进的
+                    // 建连入口，故双方都中招）。
+                    //
+                    // launchSingleTop 再兜一层：万一同一次建联触发了两次回调，也不会叠出第二个会话页。
                     navController.navigate(Screen.ChatDetail.createRoute(contactId)) {
-                        popUpTo(Screen.QrCode.route) { inclusive = true }
+                        popUpTo(Screen.Main.route) { inclusive = false }
+                        launchSingleTop = true
                     }
                 }
             )
