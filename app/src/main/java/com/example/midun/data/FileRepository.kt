@@ -1,6 +1,7 @@
 package com.example.midun.data
 
 import com.example.midun.data.model.CopyPolicy
+import com.example.midun.data.model.FileType
 import com.example.midun.data.real.RealFileSystem
 import com.example.midun.data.staging.StagingStore
 import java.io.InputStream
@@ -20,6 +21,8 @@ class FileRepository @Inject constructor(
     private val cardManager: SecurityCardManager,
     private val stagingStore: StagingStore
 ) : FileSystemOps {
+
+    override suspend fun setFileType(fileId: String, type: FileType) = real.setFileType(fileId, type)
 
     override suspend fun getFolders() = real.getFolders()
     override suspend fun getFilesInFolder(folderId: String) = real.getFilesInFolder(folderId)

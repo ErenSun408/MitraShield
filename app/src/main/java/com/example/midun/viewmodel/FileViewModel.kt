@@ -443,7 +443,15 @@ class FileViewModel @Inject constructor(
         }
     }
 
-    fun renameFile(fileId: String, newName: String, folderId: String) {
+    /**
+     * 重命名文件。[newType] 非空表示用户在弹框里**确认过**「后缀与实际类型不匹配，仍要改」，此时顺带把
+     * 文件头里的类型码改成按新后缀判出来的那个，图标才跟得上（见 `FileSystemOps.setFileType`）。
+     *
+     * 改类型排在改名**之后**：改名一步就是 `SFRename`，几乎不会失败；类型改写要开文件、写头、再读回来核对，
+     * 失败面大得多。反过来先改类型的话，一旦改名失败，用户就得到一个「名字没变、图标却变了」的四不像。
+     * 类型改写失败也不回滚改名——名字是用户明确要的，类型只是跟着走的那一半，如实提示即可。
+     */
+    fun renameFile(fileId: String, newName: String, folderId: String, newType: FileType? = null) {
         val oldName = _uiState.value.currentFiles.find { it.id == fileId }?.name
         viewModelScope.launch {
             val trimmedName = newName.trim()
@@ -454,12 +462,25 @@ class FileViewModel @Inject constructor(
 
             fileSystem.renameFile(fileId, trimmedName)
                 .onSuccess {
+                    // 改名后路径变了，类型要写到**新**路径上。
+                    val typeError = newType?.let { t ->
+                        // 改名后路径变了，类型写到新路径上。
+                        fileSystem.setFileType(fileId.substringBeforeLast('/') + "/" + trimmedName, t)
+                            .exceptionOrNull()
+                    }
                     loadFiles(folderId)
                     operationLog.record(
                         OperationType.FILE_RENAME,
                         if (oldName != null) "重命名文件「$oldName」→「$trimmedName」" else "重命名文件为「$trimmedName」"
                     )
-                    _operationResult.emit(OperationResult.Success("文件已重命名"))
+                    // 一次操作只报一句：类型没跟上时报那句更重要的，别叠两条 Snackbar。
+                    _operationResult.emit(
+                        if (typeError == null) {
+                            OperationResult.Success("文件已重命名")
+                        } else {
+                            OperationResult.Error("已重命名，但文件类型未能更新：${typeError.message ?: "未知原因"}")
+                        }
+                    )
                 }
                 .onFailure {
                     _operationResult.emit(OperationResult.Error(it.message ?: "重命名失败"))

@@ -22,13 +22,18 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.crypto.FileContainer
+import com.example.midun.data.FileTypes
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
 import com.example.midun.data.model.FileSort
@@ -737,7 +742,9 @@ fun FileDetailScreen(
                         file = file,
                         copyPolicy = effectiveCopyPolicy,
                         moveTargets = uiState.folders.filter { it.id != folderId },
-                        onRename = { newName -> fileViewModel.renameFile(file.id, newName, folderId) },
+                        onRename = { newName, newType ->
+                            fileViewModel.renameFile(file.id, newName, folderId, newType)
+                        },
                         onMove = { target -> fileViewModel.moveFile(file.id, file.name, folderId, target.id) },
                         onExportFile = { exportTargetFile = file },
                         onDelete = { fileToDelete = file },
@@ -1018,7 +1025,8 @@ private fun FileItemCard(
     file: FileItem,
     copyPolicy: CopyPolicy,
     moveTargets: List<FileItem>,
-    onRename: (String) -> Unit,
+    /** [newType] 非空 = 用户确认过「按新后缀纠正类型」，见 [FileRenameDialog]。 */
+    onRename: (newName: String, newType: FileType?) -> Unit,
     onMove: (FileItem) -> Unit,
     onExportFile: () -> Unit,
     onDelete: () -> Unit,
@@ -1156,13 +1164,12 @@ private fun FileItemCard(
     }
 
     if (showRenameDialog) {
-        RenameDialog(
-            title = "重命名文件",
-            value = renameText,
-            onValueChange = { renameText = it },
+        FileRenameDialog(
+            fileName = file.name,
+            actualType = file.type,
             onDismiss = { showRenameDialog = false },
-            onConfirm = {
-                onRename(renameText)
+            onConfirm = { newName, newType ->
+                onRename(newName, newType)
                 showRenameDialog = false
             }
         )
@@ -1237,6 +1244,157 @@ private fun MoveToFolderDialog(
             TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) }
         }
     )
+}
+
+/**
+ * 文件重命名弹框（客户 2026-08-14）。与文件夹共用的 [RenameDialog] 分开，因为多了「后缀」这件事。
+ *
+ * **后缀单独一格、置灰、默认改不动**，可编辑的只有左边的文件名，且进来就整段选中——绝大多数重命名只想换
+ * 名字，后缀是顺带被误删的那部分。用户点那一格才弹一次警告，确认后它才变成输入框。
+ *
+ * **保存时若新后缀与文件的实际类型对不上，再确认一次**，确认了就按新后缀把类型改掉（图标随之变）。
+ * 需要说清楚的是：类型本来是导入时按**文件内容**判的（见 `FileTypes.fromContent`），比后缀准；这里是
+ * 客户明确要求「以后缀为准」时才让位——所以要用户自己点头两次，而不是我们默默改。
+ */
+@Composable
+private fun FileRenameDialog(
+    fileName: String,
+    actualType: FileType,
+    onDismiss: () -> Unit,
+    onConfirm: (newName: String, newType: FileType?) -> Unit
+) {
+    // 拆名：最后一个点之后是后缀。点在首位（`.gitignore`）不算后缀——那是整个名字。
+    val dot = fileName.lastIndexOf('.')
+    val hasExt = dot > 0 && dot < fileName.length - 1
+    val initialBase = if (hasExt) fileName.substring(0, dot) else fileName
+    val initialExt = if (hasExt) fileName.substring(dot + 1) else ""
+
+    // 进来即全选：光标停在末尾的话，用户要先长按选中才能整段替换，多一步。
+    var base by remember {
+        mutableStateOf(TextFieldValue(initialBase, selection = TextRange(0, initialBase.length)))
+    }
+    var ext by remember { mutableStateOf(initialExt) }
+    var extEditable by remember { mutableStateOf(false) }
+    var showExtWarning by remember { mutableStateOf(false) }
+    // 非空 = 已确认改名、但检测到后缀与实际类型不符，正在问第二道。
+    var mismatch by remember { mutableStateOf<Pair<String, FileType>?>(null) }
+
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
+
+    val newName = base.text.trim() + if (ext.isBlank()) "" else ".${ext.trim()}"
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Edit, null, tint = Primary) },
+        title = { Text("重命名文件") },
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = base,
+                    onValueChange = { base = it },
+                    label = { Text("文件名") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f).focusRequester(focusRequester)
+                )
+                if (hasExt) {
+                    Spacer(Modifier.width(8.dp))
+                    if (extEditable) {
+                        OutlinedTextField(
+                            value = ext,
+                            onValueChange = { ext = it },
+                            label = { Text("后缀") },
+                            singleLine = true,
+                            modifier = Modifier.width(104.dp)
+                        )
+                    } else {
+                        // 高度对齐左边的输入框（M3 默认 56dp），否则两格错位很难看。
+                        Box(
+                            modifier = Modifier
+                                .height(56.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(FieldBg)
+                                .clickable { showExtWarning = true }
+                                .padding(horizontal = 14.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(".$ext", color = TextSecondary, fontSize = 14.sp, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    // 判据取**最终名字的后缀**，而不是右边那一格：无后缀的文件压根没有那一格，用户只能在
+                    // 左边直接敲出个 `.jpg` 来，那同样是改了后缀，一样得问。大小写不算改动（.JPG→.jpg）。
+                    val suffixNow = newName.substringAfterLast('.', "")
+                    val suffixChanged = !suffixNow.equals(initialExt, ignoreCase = true)
+                    val byExt = FileTypes.fromExtension(newName)
+                    // 后缀没动就不必查——没动的后缀本来什么样就什么样，不该借这次改名去纠正历史。
+                    if (suffixChanged && byExt != actualType) {
+                        mismatch = newName to byExt
+                    } else {
+                        onConfirm(newName, null)
+                    }
+                },
+                enabled = base.text.isNotBlank(),
+                colors = ButtonDefaults.buttonColors(containerColor = Primary)
+            ) { Text("确认") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) }
+        }
+    )
+
+    if (showExtWarning) {
+        AlertDialog(
+            onDismissRequest = { showExtWarning = false },
+            icon = { Icon(Icons.Default.WarningAmber, null, tint = Danger) },
+            title = { Text("修改文件后缀") },
+            text = { Text("修改文件后缀可能导致类型误判或识别错误，确定要修改吗？", fontSize = 13.sp, color = TextSecondary) },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showExtWarning = false
+                        extEditable = true
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showExtWarning = false }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
+
+    mismatch?.let { (name, byExt) ->
+        AlertDialog(
+            onDismissRequest = { mismatch = null },
+            icon = { Icon(Icons.Default.WarningAmber, null, tint = Danger) },
+            title = { Text("后缀与文件类型不匹配") },
+            text = {
+                Text(
+                    "检测到当前文件后缀与实际类型不匹配，确定要修改吗？",
+                    fontSize = 13.sp,
+                    color = TextSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        mismatch = null
+                        onConfirm(name, byExt) // 确认了就按后缀改类型，列表图标随之变
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary)
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { mismatch = null }) { Text("取消", color = TextSecondary) }
+            }
+        )
+    }
 }
 
 @Composable

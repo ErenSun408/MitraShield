@@ -358,6 +358,51 @@ class RealFileSystem @Inject constructor(
             else Result.failure(IllegalStateException("重命名文件失败"))
         }
 
+    /**
+     * 就地改写文件头第 [FileHeader.TYPE_OFFSET] 字节的类型码。**全项目唯一一处「往已有文件中间写」**，
+     * 故整套动作都按最保守的来：
+     *
+     * 1. 先把头读出来 `parse` 一遍——没有 MDF1 头（旧的未加密文件）就直接拒绝，绝不对着不认识的字节动手；
+     * 2. seek 到那 1 个字节，写 1 个字节，不碰任何密文块（头是明文，改它不影响解密）；
+     * 3. **写完再读回来核对**：类型码要变成新值、`parse` 仍要通得过、密文总大小要一个字节都没变。
+     *    第三条是防「SFWrite 在中间位置会截断文件」这种可能——真是那样的话文件就毁了，宁可当场发现并如实报错，
+     *    也不能让用户以为只是换了个图标。
+     */
+    override suspend fun setFileType(fileId: String, type: FileType): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            synchronized(fsShell) {
+                val handle = LibJniFSShell.SFOpen(fileId)
+                if (handle <= 0) {
+                    return@withContext Result.failure(fsError("打开文件失败", handle))
+                }
+                try {
+                    val sizeBefore = LibJniFSShell.SFGetSize(handle)
+                    val head = ByteArray(FileHeader.BYTES)
+                    if (!readFullyFromCard(handle, head) || FileHeader.parse(head) == null) {
+                        return@withContext Result.failure(IllegalStateException("该文件没有可改写的类型信息"))
+                    }
+                    LibJniFSShell.SFSeek64(handle, FileHeader.TYPE_OFFSET.toLong(), 0)
+                    val one = byteArrayOf(FileTypes.toCode(type).toByte())
+                    if (LibJniFSShell.SFWrite(handle, one, 0, 1) < 0) {
+                        return@withContext Result.failure(IllegalStateException("写入文件类型失败"))
+                    }
+                    // 核对：类型变了、头还在、大小没动。
+                    LibJniFSShell.SFSeek64(handle, 0, 0)
+                    val check = ByteArray(FileHeader.BYTES)
+                    val parsed = if (readFullyFromCard(handle, check)) FileHeader.parse(check) else null
+                    val sizeAfter = LibJniFSShell.SFGetSize(handle)
+                    if (parsed?.fileType != type || sizeAfter != sizeBefore) {
+                        return@withContext Result.failure(
+                            IllegalStateException("文件类型改写后校验不通过（大小 $sizeBefore→$sizeAfter）")
+                        )
+                    }
+                    Result.success(Unit)
+                } finally {
+                    LibJniFSShell.SFClose(handle)
+                }
+            }
+        }
+
     /** 整卡清理（M11.5/6 用）：删所有文件夹及其内文件 + 抹侧车。 */
     suspend fun clear(): Result<Unit> = withContext(Dispatchers.IO) {
         synchronized(fsShell) {

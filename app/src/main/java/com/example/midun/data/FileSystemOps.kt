@@ -2,6 +2,7 @@ package com.example.midun.data
 
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
+import com.example.midun.data.model.FileType
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -79,4 +80,13 @@ interface FileSystemOps {
     suspend fun deleteFolder(folderId: String): Result<Unit>
     suspend fun renameFolder(folderId: String, newName: String): Result<Unit>
     suspend fun renameFile(fileId: String, newName: String): Result<Unit>
+
+    /**
+     * 就地改写文件头里的类型码（`[files]` 2026-08-14 客户要求：改了后缀，图标要跟着走）。
+     *
+     * 类型本来是导入时按**内容特征码**定的，比后缀准；但用户改完后缀后期望看到对应的图标，且这事得留得住
+     * （列表每次都从文件头重读）。故确认过一次「后缀与实际类型不匹配」之后，把新类型写回头里。
+     * 不改任何密文块，改回来也只是再改一次后缀。
+     */
+    suspend fun setFileType(fileId: String, type: FileType): Result<Unit>
 }

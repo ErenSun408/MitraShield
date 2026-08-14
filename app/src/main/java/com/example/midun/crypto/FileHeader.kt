@@ -27,7 +27,12 @@ object FileHeader {
 
     private const val SIZE_OFFSET = 5 // MAGIC(4) + VERSION(1)
     private const val NONCE_OFFSET = 13 // SIZE_OFFSET + 8
-    private const val TYPE_OFFSET = NONCE_OFFSET + FileCrypto.FILE_NONCE_BYTES // 21
+
+    /**
+     * typeCode 在头里的偏移（21）。**公开**是因为「按后缀纠正文件类型」要就地改这一个字节，
+     * 得按它 seek（见 `RealFileSystem.setFileType`）——头是明文，改它不碰任何密文块。
+     */
+    const val TYPE_OFFSET = NONCE_OFFSET + FileCrypto.FILE_NONCE_BYTES // 21
     /** 文件头总长度（22 字节）。 */
     const val BYTES = TYPE_OFFSET + 1
 
