@@ -20,21 +20,25 @@ data class FileSort(val field: SortField, val descending: Boolean) {
 
     companion object {
         /**
-         * 文件可按时间也可按名称：文件的 `createdAt` 是真的——`RealFileSystem.getFilesInFolder` 逐个
-         * `fileMeta` 从卡上读出来的。默认「时间 · 递减」＝刚导入/刚收到的排最上面，最常见的诉求。
+         * 文件的 `createdAt` 来自 `RealFileSystem.getFilesInFolder` 逐个 `fileMeta` 从卡上读出来的时间。
+         * 默认「时间 · 递减」＝刚导入/刚收到的排最上面，最常见的诉求。
          */
         val FILE_FIELDS = listOf(SortField.TIME, SortField.NAME)
         val FILE_DEFAULT = FileSort(SortField.TIME, descending = true)
 
         /**
-         * **文件夹只能按名称排**：`RealFileSystem.getFolders` 读不到卡上的目录创建时间（要 `SFOpenAsDir`
-         * 拿句柄，那个调用 2026-07-30 被撤下，见该处说明），`createdAt` 用的是 `FileItem` 的默认值＝
-         * **每次刷新列表的此刻**。给「按时间」等于骗人：排出来实为名称兜底排，用户却以为按了时间。
-         * 哪天真读到目录时间了，把 [SortField.TIME] 加回本表即可，其余代码不必动。
+         * 文件夹同样两种可选。**时间这一项是 2026-08-14 才成立的**：在那之前 `RealFileSystem.getFolders`
+         * 根本没读卡、`createdAt` 用的是 `FileItem` 的默认值＝每次刷新列表的此刻，给「按时间」等于骗人
+         * （排出来实为名称兜底排）。现由 `RealFileSystem.dirCreateTime` 经 `SFOpenAsDir` + `SFGetTime` 真读，
+         * 读不到则为 0、UI 显示 `--`。
          *
-         * 默认名称递增：文件夹是导航结构，名字不变顺序就不变，用户「我那个夹子在第二个」的位置记忆才成立。
+         * ⚠️ **待真机验证**：SDK 里没有任何示例在目录句柄上调过 `SFGetTime`（见 dirCreateTime 的说明）。
+         * 若真卡上全读不出来（文件夹日期一律 `--`、按时间排等于按名称排），把 [SortField.TIME] 从本表删掉
+         * 即可退回「文件夹只能按名称排」，其余代码不必动。
+         *
+         * 默认仍是名称递增：文件夹是导航结构，名字不变顺序就不变，用户「我那个夹子在第二个」的位置记忆才成立。
          */
-        val FOLDER_FIELDS = listOf(SortField.NAME)
+        val FOLDER_FIELDS = listOf(SortField.TIME, SortField.NAME)
         val FOLDER_DEFAULT = FileSort(SortField.NAME, descending = false)
 
         /**

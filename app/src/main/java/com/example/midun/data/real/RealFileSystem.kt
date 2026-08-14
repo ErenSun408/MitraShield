@@ -61,11 +61,7 @@ class RealFileSystem @Inject constructor(
                 id = path,
                 name = name,
                 type = FileType.FOLDER,
-                // 文件夹暂不读卡上创建时间（沿用 FileItem 默认值 = 此刻，即显示「今天」）。读它必须先用
-                // `SFOpenAsDir` 拿目录句柄——`SFGetTime` 只认句柄，而列目录走的是按路径的 GetFileList、
-                // 不产生句柄。`SFOpenAsDir` 是本 App 从未调用过、SDK 示例里也零覆盖的函数，恰好又是 2026-07-29
-                // 唯一新增的 native 调用面，与客户「发图片时会话断开」的起始版本重合，故先撤出、留作断连排查的
-                // 干净实验条件（`[files]` 2026-07-30）。断连定案后若仍要文件夹日期，再单独试它并真机验证。
+                createdAt = dirCreateTime(path),
                 copyPolicy = policies[path] ?: CopyPolicy.NO_COPY
             )
         }
@@ -760,6 +756,42 @@ class RealFileSystem @Inject constructor(
 
     /** [fileMeta] 的返回：明文大小 + 类型 + 卡上创建时间（0 = 未知）。 */
     private data class Meta(val size: Long, val type: FileType, val createdAt: Long)
+
+    /**
+     * 目录路径 → 卡上创建时间（毫秒，0 = 读不到）。`[files]` 2026-08-14。
+     *
+     * **为什么需要单开一个函数**：`SFGetTime` 只认句柄，而列目录走的是按路径的 `GetFileList`、不产生句柄；
+     * 目录句柄只能由 `SFOpenAsDir` 给。文件那条路顺手就有句柄（见 [fileMeta] 的 `SFOpen`），所以文件的日期
+     * 一直是真的，文件夹的却一直是**列表刷新的那一刻**——`FileItem.createdAt` 的默认值，看着像日期、其实是
+     * 「现在」，每天看每天变。
+     *
+     * **调用形式抄 SDK 自己的 `stat()`**（`Samples/.../fsshell_c.c` 的 `fsshell_stat`）：目录用 `SFOpenAsDir`、
+     * 文件用 `SFOpen`，两者都用 `SFClose` 关（没有单独的 CloseDir），路径不带尾斜杠——与本类的 `folderId`
+     * 形式一致。
+     *
+     * **这次敢调它，是因为符号真的在**：`SFOpenAsDir` 在 jar 里有声明，且两个 ABI 的 `libjniFSShell.so` /
+     * `libfsshellc.so` 里都有该符号。对照当年 `SFGetFileCreateTime` 那个坑——jar 里有声明、`.so` 里符号计数
+     * **0**，编译得过、每次抛 UnsatisfiedLinkError 被吞掉，于是功能上线即恒返回 0（见 [createTimeOf] 的说明）。
+     * 该函数 2026-07-30 曾被整体撤出，撤的理由是当时要给「发图片断连」留一个干净的 native 调用面；那件事
+     * 2026-08-03 已定案在华为的「允许后台活动」上，理由不再成立。
+     *
+     * **仍有一处没有先例**：SDK 示例的 `fsshell_fstat` 对时间是 `// TODO -- 使用SFGetTime()`、直接拿当前时钟
+     * 顶上，**没有任何示例在目录句柄上调过 `SFGetTime`**。所以「目录句柄能否读出创建时间」只能靠真机验证：
+     * 读不到就返回 0，UI 按既有规矩显示 `--`（见 `FilesScreen.formatFolderDate`），不会崩、也不会再拿今天冒充。
+     *
+     * 句柄有效性只认 `> 0`，比 SDK 的 `IsValidfd`（`fd > 0 || fd < -1000`）严：本类其余取句柄处一律是这个
+     * 判据且真卡上一直工作正常，而把一个其实是错误码的负数喂给 `SFClose` 是会踩出原生崩溃的那类事。
+     * 真遇上返回负句柄的卡，表现是日期显示 `--`，那时再按这条线索放宽。
+     */
+    private fun dirCreateTime(path: String): Long = synchronized(fsShell) {
+        val handle = runCatching { LibJniFSShell.SFOpenAsDir(path) }.getOrDefault(0)
+        if (handle <= 0) return 0L
+        try {
+            createTimeOf(handle)
+        } finally {
+            runCatching { LibJniFSShell.SFClose(handle) }
+        }
+    }
 
     /**
      * 句柄 → 创建时间（毫秒，0 = 读不到）。须在 [fsShell] 锁内调用。
