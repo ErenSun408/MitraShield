@@ -29,7 +29,10 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.example.midun.crypto.FileContainer
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
+import com.example.midun.data.model.FileSort
 import com.example.midun.data.model.FileType
+import com.example.midun.data.model.SortField
+import com.example.midun.data.model.applySort
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.midun.ui.theme.*
 import com.example.midun.viewmodel.ExportProgress
@@ -49,6 +52,9 @@ fun FilesScreen(
 ) {
     val uiState by fileViewModel.uiState.collectAsState()
     val exportProgress by fileViewModel.exportProgress.collectAsState()
+    // 排序只作用在展示上，uiState 里那份保持卡上原始顺序（切回别的排序才有得排）。
+    val folderSort by fileViewModel.folderSort.collectAsState()
+    val folders = remember(uiState.folders, folderSort) { uiState.folders.applySort(folderSort) }
     var folderToDelete by remember { mutableStateOf<FileItem?>(null) }
     // 文件夹导出：选目标目录（OpenDocumentTree）→ 在其下建同名子目录写入全部文件（M11.5.6 / M12.5 加密）。
     var pendingExportFolder by remember { mutableStateOf<FileItem?>(null) }
@@ -110,16 +116,30 @@ fun FilesScreen(
                     Text("私藏清隅", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(4.dp))
-                Text("所有文件存储于设备中", fontSize = 12.sp, color = TextSecondary)
-                Spacer(Modifier.height(16.dp))
+                // 副标题与排序选择器同行：左说明、右操作，省一行高度。空列表时不显示排序（没东西可排）。
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("所有文件存储于设备中", fontSize = 12.sp, color = TextSecondary)
+                    if (folders.isNotEmpty()) {
+                        Spacer(Modifier.weight(1f))
+                        SortSelector(
+                            sort = folderSort,
+                            fields = FileSort.FOLDER_FIELDS,
+                            onChange = fileViewModel::setFolderSort
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
             }
 
-            if (uiState.folders.isEmpty()) {
+            if (folders.isEmpty()) {
                 item {
                     EmptyFoldersState(onCreateFolder = onCreateFolder)
                 }
             } else {
-                items(uiState.folders, key = { it.id }) { folder ->
+                items(folders, key = { it.id }) { folder ->
                     FolderCard(
                         folder = folder,
                         onClick = { onFolderClick(folder.id) },
@@ -248,6 +268,92 @@ private fun ByteProgressDialog(title: String, icon: ImageVector, p: FileByteProg
         confirmButton = {
             TextButton(onClick = onCancel) { Text("取消", color = TextSecondary) }
         }
+    )
+}
+
+/**
+ * 排序选择器（客户 2026-08-14）：文件夹列表与文件列表共用这个控件，但各自的**可选依据与偏好是分开的**
+ * ——[fields] 由调用方给（文件时间/名称两种，文件夹只有名称，原因见 [FileSort] 里那两组常量）。
+ *
+ * **照 Windows 资源管理器分成两栏**：上「排序方式」选依据、下「顺序」选递增/递减，中间一条分隔线。
+ * 两栏各自单选、互不影响——改方向不用重新想按什么排，改依据也不会把方向重置掉。依据只有一种时（文件夹）
+ * 上面那栏整个不画：一个选项的单选组没有意义，按钮上已经写着「名称」了。
+ *
+ * 按钮做成**一条小字**而不是分段按钮/一排 Chip：这两屏的主角是列表本身，排序是偶尔用一次的东西，不该占
+ * 掉一整行的视觉重量。依据与方向都直接写在按钮上（「时间 ↓」），不点开也知道现在是怎么排的。
+ */
+@Composable
+private fun SortSelector(sort: FileSort, fields: List<SortField>, onChange: (FileSort) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .clickable { expanded = true }
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.SwapVert, null, tint = Primary, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(sort.field.label, fontSize = 12.sp, color = Primary)
+            Icon(
+                if (sort.descending) Icons.Default.ArrowDownward else Icons.Default.ArrowUpward,
+                null,
+                tint = Primary,
+                modifier = Modifier.size(13.dp)
+            )
+            Icon(Icons.Default.ArrowDropDown, null, tint = Primary, modifier = Modifier.size(16.dp))
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (fields.size > 1) {
+                SortMenuHeader("排序方式")
+                fields.forEach { field ->
+                    SortMenuItem(
+                        label = field.label,
+                        selected = field == sort.field,
+                        // 只换依据，方向原样带过去——这正是分两栏的意义。
+                        onClick = { onChange(sort.copy(field = field)) }
+                    )
+                }
+                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+            }
+            SortMenuHeader("顺序")
+            SortMenuItem("递增", selected = !sort.descending) { onChange(sort.copy(descending = false)) }
+            SortMenuItem("递减", selected = sort.descending) { onChange(sort.copy(descending = true)) }
+        }
+    }
+}
+
+/** 排序菜单里的栏目名（「排序方式」「顺序」）。纯标题，不可点。 */
+@Composable
+private fun SortMenuHeader(text: String) {
+    Text(
+        text,
+        fontSize = 11.sp,
+        color = TextSecondary,
+        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 2.dp)
+    )
+}
+
+/** 排序菜单里的单选项：选中的打勾；未选中留同宽空位，免得文字左右跳。**点了不关菜单**——见下方说明。 */
+@Composable
+private fun SortMenuItem(label: String, selected: Boolean, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = {
+            Text(
+                label,
+                color = if (selected) Primary else TextPrimary,
+                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal
+            )
+        },
+        leadingIcon = {
+            if (selected) {
+                Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(18.dp))
+            } else {
+                Spacer(Modifier.size(18.dp))
+            }
+        },
+        onClick = onClick
     )
 }
 
@@ -431,7 +537,11 @@ fun FileDetailScreen(
     val importProgress by fileViewModel.importProgress.collectAsState()
     val pendingContainer by fileViewModel.pendingContainer.collectAsState() // 选中 .midun → 弹口令解密框
     val folder = uiState.folders.find { it.id == folderId }
-    val files = if (uiState.currentFolderId == folderId) uiState.currentFiles else emptyList()
+    val fileSort by fileViewModel.fileSort.collectAsState()
+    // 排序只作用在展示上；`files` 从此处起就是排好序的那份，下游的计数/空判断不受影响。
+    val files = remember(uiState.currentFolderId, uiState.currentFiles, folderId, fileSort) {
+        if (uiState.currentFolderId == folderId) uiState.currentFiles.applySort(fileSort) else emptyList()
+    }
     val effectiveCopyPolicy = folder?.copyPolicy ?: CopyPolicy.NO_COPY
     var showMenu by remember { mutableStateOf(false) }
     // 系统文件选取器（GetContent）：选中即真实流式导入到本文件夹（M11.5.1）。
@@ -610,7 +720,14 @@ fun FileDetailScreen(
                             }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
+                    // 排序选择器贴在统计卡与文件列表之间，右对齐——它管的是下面这串列表。
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        SortSelector(
+                            sort = fileSort,
+                            fields = FileSort.FILE_FIELDS,
+                            onChange = fileViewModel::setFileSort
+                        )
+                    }
                 }
 
                 items(files, key = { it.id }) { file ->

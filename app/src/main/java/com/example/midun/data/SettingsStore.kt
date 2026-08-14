@@ -6,7 +6,9 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.midun.data.model.FileSort
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -78,6 +80,45 @@ class SettingsStore @Inject constructor(
         store.edit { it[KEY_BACKGROUND_GUIDE_SUPPRESSED] = suppressed }
     }
 
+    /**
+     * 列表排序方式（客户 2026-08-14）。**文件夹与文件各存一份**，不共用。
+     *
+     * 分开的理由：排序的收益几乎全在文件列表（多、常新增，默认要「最新在前」），而文件夹是导航结构
+     * （少、稳定，靠位置记忆）。共用一份的话，用户为了找某个文件把排序改成名称，退出来连文件夹列表都跟着
+     * 重排一遍——代价落在了收益之外的那个列表上。两份的默认值也本就不同，见 [FileSort] 的两组常量。
+     *
+     * **落 DataStore 而不是 ViewModel**：私藏清隅与文件夹详情是两个 NavBackStackEntry，各自拿到不同的
+     * `FileViewModel` 实例，靠 VM 存则每次进出都归零。同自动锁定那几项：属 UI 偏好、不进卡。
+     */
+    val folderSort: Flow<FileSort> = store.data.map {
+        FileSort(
+            field = FileSort.fieldOf(it[KEY_FOLDER_SORT_FIELD], FileSort.FOLDER_DEFAULT.field),
+            descending = it[KEY_FOLDER_SORT_DESC] ?: FileSort.FOLDER_DEFAULT.descending
+        )
+    }
+
+    suspend fun setFolderSort(sort: FileSort) {
+        store.edit {
+            it[KEY_FOLDER_SORT_FIELD] = sort.field.name
+            it[KEY_FOLDER_SORT_DESC] = sort.descending
+        }
+    }
+
+    /** 文件列表排序，与 [folderSort] 各自独立。 */
+    val fileSort: Flow<FileSort> = store.data.map {
+        FileSort(
+            field = FileSort.fieldOf(it[KEY_FILE_SORT_FIELD], FileSort.FILE_DEFAULT.field),
+            descending = it[KEY_FILE_SORT_DESC] ?: FileSort.FILE_DEFAULT.descending
+        )
+    }
+
+    suspend fun setFileSort(sort: FileSort) {
+        store.edit {
+            it[KEY_FILE_SORT_FIELD] = sort.field.name
+            it[KEY_FILE_SORT_DESC] = sort.descending
+        }
+    }
+
     companion object {
         private val KEY_BACKGROUND_GUIDE_SUPPRESSED = booleanPreferencesKey("background_guide_suppressed")
 
@@ -91,5 +132,13 @@ class SettingsStore @Inject constructor(
         const val SCREEN_OFF_EXIT_IMMEDIATE = 0
         private val KEY_SCREEN_OFF_EXIT_SEC = intPreferencesKey("screen_off_exit_sec")
 
+        /**
+         * 排序偏好：**依据与方向各存各的**（同 UI 上那两栏，见 [FileSort]），文件夹与文件再各一套，共四把键。
+         * 依据存枚举名而非序号，理由见 [FileSort.fieldOf]。
+         */
+        private val KEY_FOLDER_SORT_FIELD = stringPreferencesKey("folder_sort_field")
+        private val KEY_FOLDER_SORT_DESC = booleanPreferencesKey("folder_sort_desc")
+        private val KEY_FILE_SORT_FIELD = stringPreferencesKey("file_sort_field")
+        private val KEY_FILE_SORT_DESC = booleanPreferencesKey("file_sort_desc")
     }
 }

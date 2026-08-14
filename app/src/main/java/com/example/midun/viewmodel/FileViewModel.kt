@@ -14,8 +14,10 @@ import com.example.midun.crypto.FileContainer
 import com.example.midun.data.FileRepository
 import com.example.midun.data.TransferCancelledException
 import com.example.midun.data.OperationLogRepository
+import com.example.midun.data.SettingsStore
 import com.example.midun.data.model.CopyPolicy
 import com.example.midun.data.model.FileItem
+import com.example.midun.data.model.FileSort
 import com.example.midun.data.model.FileType
 import com.example.midun.data.model.OperationType
 import com.example.midun.data.real.RealFileSystem
@@ -34,9 +36,11 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -79,8 +83,29 @@ class FileViewModel @Inject constructor(
     // 视频首帧提取需卡内随机读解密（经 CardMediaDataSource），故直接依赖 RealFileSystem（同 PreviewViewModel）。
     private val realFileSystem: RealFileSystem,
     private val operationLog: OperationLogRepository,
+    private val settingsStore: SettingsStore,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
+
+    /**
+     * 列表排序方式，**文件夹与文件各一份**（分开的理由见 [SettingsStore.folderSort]）。转发 DataStore 那两条流，
+     * 故本 VM 有几个实例都不影响，且跨重启记住。
+     *
+     * Eagerly：进屏时列表往往已经在了，晚一拍再排会看见一次明显的重排跳动。
+     */
+    val folderSort: StateFlow<FileSort> = settingsStore.folderSort
+        .stateIn(viewModelScope, SharingStarted.Eagerly, FileSort.FOLDER_DEFAULT)
+
+    val fileSort: StateFlow<FileSort> = settingsStore.fileSort
+        .stateIn(viewModelScope, SharingStarted.Eagerly, FileSort.FILE_DEFAULT)
+
+    fun setFolderSort(sort: FileSort) {
+        viewModelScope.launch { settingsStore.setFolderSort(sort) }
+    }
+
+    fun setFileSort(sort: FileSort) {
+        viewModelScope.launch { settingsStore.setFileSort(sort) }
+    }
 
     sealed class OperationResult {
         data class Success(val message: String) : OperationResult()

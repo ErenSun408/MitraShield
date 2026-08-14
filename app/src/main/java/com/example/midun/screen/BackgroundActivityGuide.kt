@@ -204,6 +204,11 @@ fun BackgroundActivityGuideDialog(
  *
  * [actionText] 非空时在文末接一段带下划线的可点文字（同会话顶栏「前往建立连接」的写法），点它才触发
  * [onAction]；整条不做点击，避免用户想叉掉却误触发跳转。
+ *
+ * **高度压到最低**（客户 2026-08-14 嫌占地方）：本页底部同时挂两条，原来每条约 48dp、两条近百 dp，
+ * 把内容区挤得很紧。真正决定高度的是右侧那颗关闭按钮（36dp 比两行 12sp 文字还高），故按
+ * 「关闭按钮 → 上下内边距 → 行高」的顺序依次收：28 + 4×2 = 36dp 封底，文字排到两行也就 38dp。
+ * 字号 12sp 不动——再小就影响可读了，而这两条讲的恰恰是建联失败最常见的原因。
  */
 @Composable
 fun HintBar(
@@ -216,10 +221,10 @@ fun HintBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+                .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Default.Info, contentDescription = null, tint = Danger, modifier = Modifier.size(16.dp))
+            Icon(Icons.Default.Info, contentDescription = null, tint = Danger, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(8.dp))
             val body = buildAnnotatedString {
                 append(text)
@@ -244,11 +249,11 @@ fun HintBar(
                 body,
                 color = Danger,
                 fontSize = 12.sp,
-                lineHeight = 16.sp,
+                lineHeight = 15.sp,
                 modifier = Modifier.weight(1f)
             )
-            IconButton(onClick = onDismiss, modifier = Modifier.size(36.dp)) {
-                Icon(Icons.Default.Close, contentDescription = "关闭提示", tint = Danger, modifier = Modifier.size(16.dp))
+            IconButton(onClick = onDismiss, modifier = Modifier.size(28.dp)) {
+                Icon(Icons.Default.Close, contentDescription = "关闭提示", tint = Danger, modifier = Modifier.size(14.dp))
             }
         }
     }
