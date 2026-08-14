@@ -50,8 +50,8 @@ class RealFileSystem @Inject constructor(
     // 饿汉初始化会把 loadLibrary 压到主线程 onCreate → 拉长启动白屏。改 by lazy 推迟到首次卡操作(IO 线程)。
     private val fsShell: LibJniFSShell by lazy { FSShellInstance.getLibFSShellInstance() }
 
-    /** 文件夹路径 → 拷贝策略（侧车缓存，懒加载）。 */
-    private var folderPolicies: MutableMap<String, CopyPolicy>? = null
+    // 曾经这里挂着一份「文件夹路径 → 拷贝策略」的进程内缓存（懒加载、永不失效）。
+    // 换卡换机后它必然过时，而写入是全量覆盖 → 把另一台机加的策略抹掉。已删，改为每次读盘，见 [loadPolicies]。
 
     override suspend fun getFolders(): List<FileItem> = withContext(Dispatchers.IO) {
         val policies = loadPolicies()
@@ -413,9 +413,9 @@ class RealFileSystem @Inject constructor(
                 }
                 LibJniFSShell.SFRemoveDir(folderPath)
             }
-            LibJniFSShell.SFDelete(META_PATH)
         }
-        folderPolicies = mutableMapOf()
+        // 连 .tmp/.bak 一起删：只删主文件的话，下次 loadPolicies 会从残留的 .bak 把已清掉的策略表复活。
+        deleteSidecar(META_PATH)
         Result.success(Unit)
     }
 
@@ -868,48 +868,67 @@ class RealFileSystem @Inject constructor(
     }
 
     // —— 拷贝策略侧车（落卡）——
+    //
+    // `[files]` 2026-08-14 客户故障：一张卡在两台手机间来回插，先在 A 上建了三个文件夹（不可拷贝/明文/密文），
+    // 再到 B 上建三个，回头两边看，**除「不可拷贝」外的策略全变成了「不可拷贝」**——即整份策略表丢了，
+    // 而丢了之后 `policies[path] ?: NO_COPY` 一律回落到不可拷贝，于是本来就是不可拷贝的那个看着像没事。
+    //
+    // 三个成因叠在一起，这里一并修掉：
+    // ① **进程内缓存永不失效**（`folderPolicies` 读一次存一辈子）。换卡/换机之后它必然是过时的，而任何一次
+    //    建/删/改名都会拿这份过时的表**全量覆盖**卡上那份 —— 另一台机加的条目就此消失。
+    // ② **读失败被当成空表缓存**。读不到（卡忙/盘刚开）与「这是张新卡」在旧代码里没有区别，一次瞬时失败
+    //    就被写死成「什么策略都没有」。
+    // ③ **非原子写**：`writeFile` 是 SFCreate 截断再写，写到一半拔卡 → live 文件空/半截 → 下次解析失败 →
+    //    全表归零。这正是 `726e036` 当初为操作日志/聊天侧车修过的同一个坑，本侧车漏了。
+    //    而这次的测试场景恰恰是反复拔插换机。
+    //
+    // 修法：不留缓存（每次读盘，策略是卡上的事实，不该有进程内的影子）+ 原子写 + 主文件坏了回退 .bak。
+    // 代价是每次列文件夹多读一个几百字节的小文件，相比同一次调用里逐个目录取时间可以忽略。
 
+    /** 读卡上的策略表；主文件缺失**或内容坏了**都回退到原子写留下的 `.bak`，都不行才当空表。 */
     private fun loadPolicies(): Map<String, CopyPolicy> {
-        folderPolicies?.let { return it }
-        val map = mutableMapOf<String, CopyPolicy>()
-        runCatching {
-            val sb = java.io.ByteArrayOutputStream()
-            if (readFile(META_PATH, sb).isSuccess) {
-                val json = JSONObject(sb.toString(Charsets.UTF_8.name()))
-                val folders = json.optJSONObject("folders") ?: JSONObject()
-                for (key in folders.keys()) {
-                    map[key] = CopyPolicy.entries.getOrElse(folders.getInt(key)) { CopyPolicy.NO_COPY }
-                }
-            }
+        parsePolicies(readBytesOrNull(META_PATH))?.let { return it }
+        // 走到这儿 = 主文件没有或解析不通。.bak 是上一次原子写留下的**完整旧版**，比空表可信得多。
+        parsePolicies(readBytesOrNull("$META_PATH.bak"))?.let { healed ->
+            synchronized(fsShell) { LibJniFSShell.SFRename("$META_PATH.bak", META_PATH) }
+            return healed
         }
-        folderPolicies = map
-        return map
+        return emptyMap()
     }
 
+    /** 解析策略表；[bytes] 为空或 JSON 不成形返回 null（**不是**空表——两者的含义天差地别，见上）。 */
+    private fun parsePolicies(bytes: ByteArray?): Map<String, CopyPolicy>? {
+        if (bytes == null || bytes.isEmpty()) return null
+        return runCatching {
+            val folders = JSONObject(String(bytes, Charsets.UTF_8)).optJSONObject("folders") ?: JSONObject()
+            buildMap {
+                for (key in folders.keys()) {
+                    put(key, CopyPolicy.entries.getOrElse(folders.getInt(key)) { CopyPolicy.NO_COPY })
+                }
+            }
+        }.getOrNull()
+    }
+
+    /** 改一条策略：**当场读盘 → 改 → 原子写回**。绝不基于内存里的旧表全量覆盖（另一台机加的条目要留住）。 */
     private fun setPolicy(folderPath: String, policy: CopyPolicy) {
-        loadPolicies()
-        folderPolicies!![folderPath] = policy
-        savePolicies()
+        savePolicies(loadPolicies() + (folderPath to policy))
     }
 
     private fun removePolicy(folderPath: String) {
-        loadPolicies()
-        if (folderPolicies!!.remove(folderPath) != null) savePolicies()
+        val current = loadPolicies()
+        if (current.containsKey(folderPath)) savePolicies(current - folderPath)
     }
 
     private fun renamePolicyKey(oldPath: String, newPath: String) {
-        loadPolicies()
-        folderPolicies!!.remove(oldPath)?.let {
-            folderPolicies!![newPath] = it
-            savePolicies()
-        }
+        val current = loadPolicies()
+        current[oldPath]?.let { savePolicies(current - oldPath + (newPath to it)) }
     }
 
-    private fun savePolicies() {
+    private fun savePolicies(policies: Map<String, CopyPolicy>) {
         val folders = JSONObject()
-        folderPolicies?.forEach { (path, policy) -> folders.put(path, policy.ordinal) }
+        policies.forEach { (path, policy) -> folders.put(path, policy.ordinal) }
         val bytes = JSONObject().put("folders", folders).toString().toByteArray(Charsets.UTF_8)
-        runCatching { writeFile(META_PATH, bytes.inputStream()) }
+        atomicWriteSidecar(META_PATH, bytes)
     }
 
     private fun fsError(msg: String, code: Int) = IllegalStateException("$msg，错误码=$code")
