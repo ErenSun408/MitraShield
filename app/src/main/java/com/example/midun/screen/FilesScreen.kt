@@ -8,6 +8,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -1195,26 +1197,36 @@ private fun MoveToFolderDialog(
             Column {
                 Text("将「$fileName」移动到：", fontSize = 14.sp, color = TextSecondary)
                 Spacer(Modifier.height(12.dp))
-                targets.forEach { target ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .clickable { onSelect(target) }
-                            .padding(vertical = 10.dp, horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))
-                                .background(Primary.copy(0.1f)),
-                            contentAlignment = Alignment.Center
+                // **必须可滚**（客户 2026-08-14「移动到…未能显示全部文件夹」）：原来是一串 Row 直接堆在
+                // AlertDialog 的 text 槽里，而 M3 的弹框会把内容高度卡在一个上限内，超出的部分就地裁掉
+                // ——既滚不动也点不到，文件夹一多（每行约 56dp）后面的就凭空消失了。聊天那两个同类选取框
+                // （保存到文件夹 / 从文件夹选文件）当初就是这么写的，本处是漏网的一个。
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 240.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    targets.forEach { target ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onSelect(target) }
+                                .padding(vertical = 10.dp, horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.Folder, null, tint = Primary, modifier = Modifier.size(20.dp))
-                        }
-                        Spacer(Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(target.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                            Text(target.copyPolicy.label(), fontSize = 11.sp, color = TextSecondary)
+                            Box(
+                                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(8.dp))
+                                    .background(Primary.copy(0.1f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.Folder, null, tint = Primary, modifier = Modifier.size(20.dp))
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(target.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                Text(target.copyPolicy.label(), fontSize = 11.sp, color = TextSecondary)
+                            }
                         }
                     }
                 }
