@@ -355,8 +355,6 @@ fun QrCodeScreen(
     var qrError by remember { mutableStateOf<String?>(null) }
     // 邀请链接：与 qrBitmap 同生同灭（同一次 prepareConnection 的产物），见 [ConnectionInfo.toLink]。
     var inviteLink by remember { mutableStateOf<String?>(null) }
-    // 用户点过分享/复制之后，页面上留的那句「分享过后请回到本页面等待对方连接」。见其渲染处的说明。
-    var showReturnHint by remember { mutableStateOf(false) }
 
     // 扫码状态（patch §M6 改动4）
     var scanned by remember { mutableStateOf(false) }
@@ -426,7 +424,6 @@ fun QrCodeScreen(
         qrGenerated = false
         qrBitmap = null
         inviteLink = null
-        showReturnHint = false
         if (chatViewModel.connectionState.value != ConnectionState.CONNECTED) {
             chatViewModel.stopConnection()
         }
@@ -453,7 +450,6 @@ fun QrCodeScreen(
                 expiresAt = ConnectionInfo.parse(content)?.expiresAt
                     ?: (System.currentTimeMillis() + FALLBACK_TTL_MS)
                 countdown = remainingSeconds(expiresAt)
-                showReturnHint = false // 新码新一轮，上一轮那句提示已经过时
                 qrGenerated = true
             }.onFailure { e ->
                 qrError = e.message?.takeIf { it.isNotBlank() } ?: "邀请码生成失败，请重试"
@@ -658,7 +654,6 @@ fun QrCodeScreen(
                         OutlinedButton(
                             onClick = {
                                 qrBitmap?.let { shareQrImage(mainContext, it) }
-                                showReturnHint = true
                             },
                             enabled = qrBitmap != null,
                             modifier = Modifier.weight(1f)
@@ -669,21 +664,19 @@ fun QrCodeScreen(
                         }
                     }
 
-                    // 分享/复制之后才出现的那句话，**留在页面上不自动消失**（客户 2026-08-14）。
-                    // 用户转发完邀请码就停在微信里，而出码方一旦被系统判为后台就可能被整体断网，对方扫码只会
-                    // 撞上一句「对端未响应」。所以在他即将切走的那一刻把话说在前面，比事后在对方那台手机上
-                    // 解释有用得多。回本页重新生成或邀请码过期时一并消失（那时话已经过时了）。
-                    if (showReturnHint) {
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            "分享过后请回到本页面等待对方连接",
-                            modifier = Modifier.fillMaxWidth(),
-                            color = Accent,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            textAlign = TextAlign.Center
-                        )
-                    }
+                    // 出码后**常驻**的一句话（客户 2026-08-15 改为常态显示，此前只在点过分享/复制后才出现）。
+                    // 说在前面才有用：用户转发完邀请码往往就停在微信里，而出码方一旦被系统判为后台就可能被整体
+                    // 断网，对方扫码只会撞上一句「对端未响应」——事后在对方那台手机上解释，远不如出码那一刻
+                    // 就摆在眼前。邀请码过期回到 pre-gen 态时随之消失。
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "分享后请返回本页面等待对方连接",
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Accent,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        textAlign = TextAlign.Center
+                    )
 
                     qrError?.let {
                         Spacer(Modifier.height(8.dp))
@@ -731,12 +724,10 @@ fun QrCodeScreen(
                             Spacer(Modifier.width(8.dp))
                             LinkActionButton(Icons.Default.ContentCopy, "复制邀请链接") {
                                 copyInviteLink(mainContext, link)
-                                showReturnHint = true // 复制走的也是「切去微信粘贴」，与分享同一回事
                             }
                             Spacer(Modifier.width(8.dp))
                             LinkActionButton(Icons.Default.Share, "转发邀请链接") {
                                 shareInviteLink(mainContext, link)
-                                showReturnHint = true
                             }
                         }
                     }

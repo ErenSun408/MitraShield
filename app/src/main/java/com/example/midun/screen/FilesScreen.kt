@@ -296,6 +296,9 @@ private fun SortSelector(sort: FileSort, fields: List<SortField>, onChange: (Fil
         Row(
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
+                // 垫一层浅灰底（客户 2026-08-15）：没有底色时它只是行尾一小截彩字，混在标题与统计卡之间，
+                // 不像个能点的东西。底色取输入框那个 [FieldBg]，与页面里其它「可操作的小控件」同一套观感。
+                .background(FieldBg)
                 .clickable { expanded = true }
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -322,7 +325,7 @@ private fun SortSelector(sort: FileSort, fields: List<SortField>, onChange: (Fil
                         onClick = { onChange(sort.copy(field = field)) }
                     )
                 }
-                HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                HorizontalDivider(Modifier.padding(vertical = 2.dp))
             }
             SortMenuHeader("顺序")
             SortMenuItem("递增", selected = !sort.descending) { onChange(sort.copy(descending = false)) }
@@ -338,29 +341,38 @@ private fun SortMenuHeader(text: String) {
         text,
         fontSize = 11.sp,
         color = TextSecondary,
-        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 6.dp, bottom = 2.dp)
+        modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 0.dp)
     )
 }
 
-/** 排序菜单里的单选项：选中的打勾；未选中留同宽空位，免得文字左右跳。**点了不关菜单**——见下方说明。 */
+/**
+ * 排序菜单里的单选项：选中的打勾；未选中留同宽空位，免得文字左右跳。**点了不关菜单**——见 [SortSelector]。
+ *
+ * 高度压到 36dp（客户 2026-08-15 嫌行距松）：M3 的 `DropdownMenuItem` 默认 48dp 高、上下各 8dp 内边距，
+ * 那是给「一屏就几项、要好点」的操作菜单定的；这里两栏加起来四五行**只是在选一个状态**，密一点反而一眼看全。
+ * 文字与勾选图标尺寸不动——能压的是空白，不是可读性。
+ */
 @Composable
 private fun SortMenuItem(label: String, selected: Boolean, onClick: () -> Unit) {
     DropdownMenuItem(
         text = {
             Text(
                 label,
+                fontSize = 14.sp,
                 color = if (selected) Primary else TextPrimary,
                 fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal
             )
         },
         leadingIcon = {
             if (selected) {
-                Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.Check, null, tint = Primary, modifier = Modifier.size(16.dp))
             } else {
-                Spacer(Modifier.size(18.dp))
+                Spacer(Modifier.size(16.dp))
             }
         },
-        onClick = onClick
+        onClick = onClick,
+        modifier = Modifier.height(36.dp),
+        contentPadding = PaddingValues(horizontal = 12.dp)
     )
 }
 
