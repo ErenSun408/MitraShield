@@ -393,7 +393,7 @@ class P2PSessionManager @Inject constructor(
     )
 
     /**
-     * 生成本机连接信息（写入二维码）。地址/sessionId 真实，`tempPublicKey` 为真实 ECDH
+     * 生成本机连接信息（写入二维码）。地址真实，`tempPublicKey` 为真实 ECDH
      * 临时公钥的 Base64；私钥暂存供 startListening 握手。
      *
      * **一个可用地址都扫不到就直接抛** [NoLocalAddressException]（`[network]` 2026-08-11）。原先会塞一个
@@ -411,10 +411,8 @@ class P2PSessionManager @Inject constructor(
         listenerKeyPair = keyPair
         listenerExpiresAt = System.currentTimeMillis() + INVITE_TTL_MS
         ConnectionInfo(
-            version = PROTO_V2,
             deviceSn = currentDeviceSn(),
             addresses = candidates,
-            sessionId = generateRandomHex(8),
             // 压缩公钥（33 字节，需求规格）→ Base64，替换原 X.509(SPKI ~91 字节)，二维码更小。
             tempPublicKey = Base64.encodeToString(P2PCrypto.compressPublicKey(keyPair.public), Base64.NO_WRAP),
             expiresAt = listenerExpiresAt
@@ -1887,9 +1885,7 @@ class P2PSessionManager @Inject constructor(
  * 编解码用 org.json（与 MessageFrame 一致）。
  */
 data class ConnectionInfo(
-    val version: Int,
     val deviceSn: String,
-    val sessionId: String,
     val tempPublicKey: String,
     val expiresAt: Long,
     /**
@@ -1909,14 +1905,17 @@ data class ConnectionInfo(
      */
     val addresses: List<String>
 ) {
+    /** 二维码内容 = [payloadOf] 的产物（密文 base64url），扫码器扫出来是一串乱码，见其说明。 */
+    fun toPayload(): String = payloadOf(this)
+
     /**
-     * 邀请链接（客户需求 2026-08-07）：**二维码的副产品**，装的就是 [toJson] 那同一份内容，
-     * 只是 base64url 编码后挂在 [INVITE_SCHEME] 后面，给「对方相机故障 / 不便扫码」的场合用。
+     * 邀请链接（客户需求 2026-08-07）：**二维码的副产品**，装的就是二维码里那**同一串**载荷，
+     * 只是前面挂了个 [INVITE_SCHEME]，给「对方相机故障 / 不便扫码」的场合用。
      *
      * 没有任何独立生命周期——有效期、监听端口、临时密钥全部与二维码共用同一次
      * [P2PSessionManager.generateConnectionInfo] 的产物，链接同样 120 秒后作废。
      */
-    fun toLink(): String = linkOf(toJson())
+    fun toLink(): String = linkOf(toPayload())
 
     /**
      * 这张码是否**已明显过期**——扫码端在连接前自查用（`ChatViewModel.connectToContact`）。
@@ -1932,10 +1931,14 @@ data class ConnectionInfo(
      */
     fun hasExpired(now: Long = System.currentTimeMillis()): Boolean = now > expiresAt + CLOCK_SKEW_GRACE_MS
 
+    /**
+     * 内层明文。**不再单独带版本号**——版本是载荷格式的属性，已挪到加密后的首字符（见 [payloadOf]）；
+     * 也不再带 `sid`：那是个从生成到解析之后再没人读过的死字段，设计上原想拿它给 HKDF 当 salt
+     * （见 `docs/design-deviations.md`「HKDF salt 取全零」），但每次出码都新生成一对临时 ECDH 密钥，
+     * 会话密钥本就不会复用，掺个随机数不增加任何东西；而它要在每张码里占约 20 字节——加密之后这正是最紧张的资源。
+     */
     fun toJson(): String = JSONObject().apply {
-        put("ver", version)
         put("sn", deviceSn)
-        put("sid", sessionId)
         put("tpk", tempPublicKey)
         put("exp", expiresAt)
         put("addrs", JSONArray(addresses))
@@ -1959,27 +1962,61 @@ data class ConnectionInfo(
         /** 链接里 base64url 载荷的取值范围，用于从「带前后文的粘贴内容」里把链接抠出来。 */
         private val LINK_REGEX = Regex("""midun://invite\?d=([A-Za-z0-9_-]+)""")
 
-        /** 把二维码内容（JSON）包成邀请链接。 */
-        fun linkOf(json: String): String = INVITE_SCHEME + Base64.encodeToString(
-            json.toByteArray(Charsets.UTF_8),
+        /**
+         * 邀请码载荷的混淆密钥（`[qr]` 2026-08-14 客户要求：别让微信等通用扫码器扫出明文）。
+         *
+         * **这是混淆，不是加密，也不是任何安全边界。** 两台手机之间没有预共享秘密——B 要能扫开 A 的码，
+         * 密钥就只能是内置常量，而内置常量随 APK 一起分发，拿到包的人必然能还原。故：
+         * - 它挡的是「路人拿微信随手一扫，就看见对方的安全卡 SN 与 IPv6 地址」——身份与位置，转发到群里全暴露；
+         * - 它挡不住有心人，**UI 文案一个字都不许提「邀请码已加密」**。
+         *
+         * 邀请码本身泄露倒不要紧：一次性、120 秒过期、握手要求对端确实持有码里那把临时公钥、SYN 还得在出码方
+         * 停在监听页时到达。真正见不得人的是里面的 SN 和地址。
+         */
+        private val PAYLOAD_KEY: ByteArray by lazy {
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest("MiDun-Invite-Payload-v1".toByteArray(Charsets.UTF_8))
+        }
+
+        /**
+         * 载荷格式版本，明文首字符。**不做旧版本兼容**（两端一律装同一个包）：对不上直接判无效，
+         * 用户拿到的是「请对方重新生成邀请码」这句可行动的提示。
+         */
+        private const val PAYLOAD_VERSION = '3'
+
+        /**
+         * 二维码 / 邀请链接共用的载荷：`base64url( IV ‖ AES-GCM(版本字符 ‖ JSON) )`。
+         *
+         * 选 base64url 而不是原始字节塞进二维码的字节模式：后者能省掉 33% 膨胀、码不变大，但要赌 ML Kit 与
+         * ZXing 对非 UTF-8 字节串的编码处理完全一致——这条链路 8 月刚为「识别不出」折腾了两轮，不值得拿它
+         * 去换体积。代价是码大一档（约 57×57 → 65×65 模块），纠错仍为 M。
+         */
+        fun payloadOf(info: ConnectionInfo): String = Base64.encodeToString(
+            P2PCrypto.encrypt(PAYLOAD_KEY, PAYLOAD_VERSION + info.toJson()),
             Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING
         )
 
+        /** 把载荷（[payloadOf] 的产物）包成邀请链接。链接与二维码装的是**同一串**，不再各编各的。 */
+        fun linkOf(payload: String): String = INVITE_SCHEME + payload
+
         /**
-         * 解析邀请码：**二维码原文（JSON）与邀请链接走同一个入口**，解出来的 [ConnectionInfo] 一模一样，
+         * 解析邀请码：**二维码原文与邀请链接走同一个入口**，解出来的 [ConnectionInfo] 一模一样，
          * 后续连接流程（[P2PSessionManager.connectTo]）因此完全不区分对端是扫来的还是粘来的。
          *
          * 链接用正则抠而不是 `startsWith`：从微信复制往往会带上前后文（「我的邀请链接：… 快连」），
          * 让用户先手工修剪一遍纯属添堵。解不出返回 null，由调用方报「邀请码格式无效」。
+         *
+         * 解不开的情形一律走同一条出口（返回 null）：不是我们的码、被截断、版本对不上、tag 校验失败——
+         * 对用户而言下一步都一样，就是让对方重新生成。
          */
         fun parse(text: String): ConnectionInfo? {
             val raw = text.trim()
-            val json = LINK_REGEX.find(raw)?.let { match ->
-                runCatching {
-                    String(Base64.decode(match.groupValues[1], Base64.URL_SAFE), Charsets.UTF_8)
-                }.getOrNull() ?: return null
-            } ?: raw
-            return runCatching { fromJson(json) }.getOrNull()
+            val payload = LINK_REGEX.find(raw)?.groupValues?.get(1) ?: raw
+            val plain = runCatching {
+                P2PCrypto.decrypt(PAYLOAD_KEY, Base64.decode(payload, Base64.URL_SAFE))
+            }.getOrNull() ?: return null
+            if (plain.firstOrNull() != PAYLOAD_VERSION) return null
+            return runCatching { fromJson(plain.substring(1)) }.getOrNull()
         }
 
         /**
@@ -1996,9 +2033,7 @@ data class ConnectionInfo(
             }.orEmpty()
             require(addrs.isNotEmpty()) { "邀请码缺少地址（addrs）" }
             ConnectionInfo(
-                version = getInt("ver"),
                 deviceSn = getString("sn"),
-                sessionId = getString("sid"),
                 tempPublicKey = getString("tpk"),
                 expiresAt = getLong("exp"),
                 addresses = addrs
