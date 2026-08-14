@@ -94,6 +94,15 @@ class RealFileSystem @Inject constructor(
             val path = ROOT + name
             val ret = synchronized(fsShell) { LibJniFSShell.SFNewDir(path) }
             if (ret != 0) return@withContext Result.failure(fsError("创建文件夹失败", ret))
+            // 目录的时间同样得自己写（见 [stampCreateTime]），只是句柄要经 SFOpenAsDir 拿。
+            // 拿不到就算了——文件夹日期显示 `--`，不影响文件夹本身已经建好这件事。
+            synchronized(fsShell) {
+                val dirHandle = runCatching { LibJniFSShell.SFOpenAsDir(path) }.getOrDefault(0)
+                if (dirHandle > 0) {
+                    stampCreateTime(dirHandle)
+                    runCatching { LibJniFSShell.SFClose(dirHandle) }
+                }
+            }
             setPolicy(path, policy)
             Result.success(FileItem(id = path, name = name, type = FileType.FOLDER, copyPolicy = policy))
         }
@@ -166,7 +175,9 @@ class RealFileSystem @Inject constructor(
     fun streamClose(handle: Int) { synchronized(fsShell) { LibJniFSShell.SFClose(handle) } }
 
     // —— 增量写原语（M11.5.3 文件接收：网络块到达即解密落卡，不攒整文件）。句柄 SFCreate 返回（>0 有效）。 ——
-    fun streamCreate(path: String): Int = synchronized(fsShell) { LibJniFSShell.SFCreate(path) }
+    fun streamCreate(path: String): Int = synchronized(fsShell) {
+        LibJniFSShell.SFCreate(path).also { if (it > 0) stampCreateTime(it) }
+    }
     fun streamWrite(handle: Int, buf: ByteArray, off: Int, len: Int): Int =
         synchronized(fsShell) { LibJniFSShell.SFWrite(handle, buf, off, len) }
     /** 同步删单文件（接收失败/取消删半成品；路径直传隐藏区完整路径）。 */
@@ -268,6 +279,7 @@ class RealFileSystem @Inject constructor(
         if (rh <= 0) return false
         val wh = LibJniFSShell.SFCreate(toPath)
         if (wh <= 0) { LibJniFSShell.SFClose(rh); return false }
+        stampCreateTime(wh)
         try {
             val buf = ByteArray(CHUNK)
             while (true) {
@@ -455,6 +467,7 @@ class RealFileSystem @Inject constructor(
     ): Result<Long> = synchronized(fsShell) {
         val handle = LibJniFSShell.SFCreate(path)
         if (handle <= 0) return Result.failure(fsError("创建文件失败", handle))
+        stampCreateTime(handle)
         var total = 0L
         try {
             val buf = ByteArray(CHUNK)
@@ -488,6 +501,7 @@ class RealFileSystem @Inject constructor(
     ): Result<Long> = synchronized(fsShell) {
         val handle = LibJniFSShell.SFCreate(path)
         if (handle <= 0) return Result.failure(fsError("创建文件失败", handle))
+        stampCreateTime(handle)
         try {
             val fileNonce = FileCrypto.newFileNonce()
             val totalChunks = ((size + CHUNK - 1) / CHUNK).toInt().coerceAtLeast(1)
@@ -781,8 +795,12 @@ class RealFileSystem @Inject constructor(
         val handle = LibJniFSShell.SFOpen(path)
         if (handle <= 0) return Meta(0L, FileType.OTHER, 0L)
         try {
-            val created = createTimeOf(handle)
+            // **先取大小再取时间**，与 SDK 自带示例 `FSDemoConsole` 的顺序一致（它是 SFGetAttr → SFGetSize →
+            // SFGetTime）。原来是反的，而卡的日期一直读不出来（2026-08-15 客户实测：文件日期恒为 `--`，且已
+            // 排除是文件夹那次 SFOpenAsDir 连累的）——顺序是免费的怀疑对象：若原生层要先有一次元数据查询
+            // 才填得上时间，反着调就恒取不到。换过来不影响任何其它行为。
             val raw = LibJniFSShell.SFGetSize(handle)
+            val created = createTimeOf(handle)
             if (raw >= FileHeader.BYTES) {
                 val head = ByteArray(FileHeader.BYTES)
                 if (readFullyFromCard(handle, head)) {
@@ -854,6 +872,28 @@ class RealFileSystem @Inject constructor(
         val times = LongArray(3)
         val ret = runCatching { LibJniFSShell.SFGetTime(handle, times) }.getOrDefault(-1)
         return if (ret == 0 && times[0] > 0) times[0] * 1000L else 0L
+    }
+
+    /**
+     * 给刚建出来的卡内文件/目录打上创建时间（`[files]` 2026-08-15）。
+     *
+     * **为什么要我们自己写**：现场实测（客户回传日志）`SFGetTime` 是好的——`ret=0`，但三个时间全是
+     * `-2209161600`。那个数正好是 **-25569 天**，而 25569 是 1899-12-30 到 1970-01-01 的天数，即
+     * Delphi/OLE `TDateTime` 的零点：**卡上那三个字段从来没被写过**，SDK 只是把它内部的「零日期」原样换算成了
+     * Unix 秒。所以不是卡不支持，是没人写——`SFSetTime` 与 `SFGetTime` 对称，两个 ABI 的 `.so` 里都在。
+     * （[createTimeOf] 的 `times[0] > 0` 判据把这个哨兵值挡在外面，正好，不用另加特判。）
+     *
+     * **打在创建那一刻而不是关句柄前**：一来那正是「创建时间」的定义，二来四条建文件的路（两条 writeFile、
+     * 卡内复制、增量写 [streamCreate]）都收口在 `SFCreate` 上，在这里打一次就全覆盖，增量写那条不必改调用方。
+     * 后续写入若更新的是修改时间，不影响我们读的 `times[0]`；万一某些卡连创建时间也一起刷新，那就得挪到关句柄
+     * 之前——这一条只能真机验。
+     *
+     * 失败静默：拿不到时间只是日期显示 `--`，不值得为它让导入失败。
+     */
+    private fun stampCreateTime(handle: Int) {
+        val now = System.currentTimeMillis() / 1000L // SDK 的时间单位是秒，见 createTimeOf
+        // 签名与 [createTimeOf] 那边不对称：读要出参故收 `LongArray`，写直接收三个值（创建/修改/访问）。
+        runCatching { LibJniFSShell.SFSetTime(handle, now, now, now) }
     }
 
     /** 从卡句柄精确读满 [buf]（SFRead 可能短读，0=EOF/<0=失败即停）。读满回 true。须在 fsShell 锁内调用。 */
@@ -949,7 +989,7 @@ class RealFileSystem @Inject constructor(
          * 关着的时候文件夹的 `createdAt` 取 0 → UI 按既有规矩显示 `--`，**不回到从前那个假「今天」**：
          * 那个日期看着正常却是每次刷新列表的此刻，比 `--` 更误导人。
          */
-        const val READ_FOLDER_TIME = false
+        const val READ_FOLDER_TIME = true
 
         const val ROOT = "0:/"
         const val META_PATH = "0:/.midun_meta.json"

@@ -27,20 +27,17 @@ data class FileSort(val field: SortField, val descending: Boolean) {
         val FILE_DEFAULT = FileSort(SortField.TIME, descending = true)
 
         /**
-         * 文件夹同样两种可选。**时间这一项是 2026-08-14 才成立的**：在那之前 `RealFileSystem.getFolders`
-         * 根本没读卡、`createdAt` 用的是 `FileItem` 的默认值＝每次刷新列表的此刻，给「按时间」等于骗人
-         * （排出来实为名称兜底排）。现由 `RealFileSystem.dirCreateTime` 经 `SFOpenAsDir` + `SFGetTime` 真读，
-         * 读不到则为 0、UI 显示 `--`。
+         * 文件夹同样两种可选。**时间这一项 2026-08-15 才真正成立**：此前 `getFolders` 根本没读卡
+         * （`createdAt` 是 `FileItem` 默认值＝刷新列表的此刻），后来读了却发现卡上那三个时间字段从来没被
+         * 写过（恒为 Delphi 零日期 `-2209161600`）。现在建文件夹时由 `RealFileSystem.stampCreateTime` 主动写入，
+         * 读回来才是真值。
          *
-         * ⚠️ **待真机验证**：SDK 里没有任何示例在目录句柄上调过 `SFGetTime`（见 dirCreateTime 的说明）。
-         * 若真卡上全读不出来（文件夹日期一律 `--`、按时间排等于按名称排），把 [SortField.TIME] 从本表删掉
-         * 即可退回「文件夹只能按名称排」，其余代码不必动。
+         * ⚠️ **老文件夹没有时间**：它们建的时候没人写，读出来是 0、显示 `--`，按时间排会被排到一端。
+         * 这没法补——我们不知道它们是什么时候建的，编一个出来是造假。
          *
          * 默认仍是名称递增：文件夹是导航结构，名字不变顺序就不变，用户「我那个夹子在第二个」的位置记忆才成立。
          */
-        // 2026-08-15 暂时收回 TIME：`RealFileSystem.READ_FOLDER_TIME` 关着时文件夹没有时间可排，
-        // 留着这个选项等于骗人（排出来实为名称兜底排）。那个开关一旦验证可用，把 TIME 加回来即可。
-        val FOLDER_FIELDS = listOf(SortField.NAME)
+        val FOLDER_FIELDS = listOf(SortField.TIME, SortField.NAME)
         val FOLDER_DEFAULT = FileSort(SortField.NAME, descending = false)
 
         /**
