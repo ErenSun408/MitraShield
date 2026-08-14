@@ -954,28 +954,8 @@ private fun ScanTab(
         Text("从手机相册选择邀请码图片")
     }
 
-    Spacer(Modifier.height(8.dp))
-
-    // 说明卡收在扫码这一半的末尾（客户 2026-08-07）：它讲的是「识别之后会发生什么」，
-    // 归属上属于上面的扫码/相册，不该夹在下面的链接区里。
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(containerColor = Surface)
-    ) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Default.Info, null, tint = Primary, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(
-                // 诚实文案（M10.9）：不承诺「签名校验」——设备身份签名校验需安全卡身份密钥作信任根，
-                // 尚未启用；客户 2026-07-27 要求连这句括号说明也去掉，只留最朴素的一句。
-                "识别后将建立端到端连接",
-                fontSize = 12.sp,
-                color = TextSecondary
-            )
-        }
-    }
-
+    // 这里原有一张说明卡「识别后将建立端到端连接」（M10.9 起，2026-08-07 挪到此处）。客户 2026-08-14
+    // 要求去掉：识别之后会发生什么，页面自己会用连接进度与结果说清楚，这句话属于多余的旁白。
     Spacer(Modifier.height(12.dp))
 
     // 链接入口（客户需求 2026-08-07）：粘贴对方转发来的邀请链接，走与扫码**同一条** onQrDetected 路径
