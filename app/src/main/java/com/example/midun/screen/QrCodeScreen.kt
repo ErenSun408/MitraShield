@@ -72,6 +72,7 @@ import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeReader
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import com.google.zxing.qrcode.encoder.Encoder
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -1005,6 +1006,20 @@ private fun CameraPreview(
     val scannedState = rememberUpdatedState(scanned)
     val onQrDetectedState = rememberUpdatedState(onQrDetected)
 
+    /**
+     * 同步闸门：**认出一张码的当场**就置位，不等重组。
+     *
+     * 光靠 [scannedState] 挡不住同一张码被连扫两次：`rememberUpdatedState` 要等下一次重组才拿到新值，
+     * 而 CameraX 在 `imageProxy.close()` 后会立刻把缓存的下一帧投递到主线程队列——那条消息通常排在
+     * Choreographer 的重组帧**前面**，于是第二帧读到的仍是 `scanned=false`，又发起一次连接。第二次连接
+     * 必然失败（出码方握手成功即 `closeInviteListener` 关掉 8888），表现为进会话前闪一下「连接失败」。
+     *
+     * [AtomicBoolean.compareAndSet] 让「判定 + 置位」成为一个不可分割的动作，一张码只可能放行一次。
+     * 上层解禁重扫（关掉失败弹窗把 scanned 置回 false）时由下面的 LaunchedEffect 同步放行。
+     */
+    val gate = remember { AtomicBoolean(false) }
+    LaunchedEffect(scanned) { gate.set(scanned) }
+
     // 离开识别 Tab / 屏幕销毁时显式 unbind 相机。
     // CameraX 虽绑定到 Activity lifecycle，但 Tab 切回生成后 AndroidView 离场，
     // 相机会继续占用传感器、analyzer 持续解码——主动释放避免泄漏。
@@ -1031,7 +1046,7 @@ private fun CameraPreview(
                     .build()
                     .also { analysis ->
                         analysis.setAnalyzer(ContextCompat.getMainExecutor(ctx)) { imageProxy ->
-                            if (scannedState.value) {
+                            if (gate.get() || scannedState.value) {
                                 imageProxy.close()
                                 return@setAnalyzer
                             }
@@ -1044,7 +1059,8 @@ private fun CameraPreview(
                                 qrScanner.process(image)
                                     .addOnSuccessListener { barcodes ->
                                         barcodes.firstOrNull()?.rawValue?.let { raw ->
-                                            if (!scannedState.value) {
+                                            // 抢到闸门的那一帧才放行，其余帧就此作废（见 [gate]）。
+                                            if (gate.compareAndSet(false, true)) {
                                                 onQrDetectedState.value(raw)
                                             }
                                         }
