@@ -32,9 +32,19 @@ import kotlin.system.exitProcess
  * [android.app.ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE]，Doze、待机分组、
  * 数据保护的后台限制以及缓存进程冻结全部不再适用。
  *
- * **起止时机**：会话进入 CONNECTED 就起、离开就停（接线在 `P2PSessionManager.init`）。不能只在「有在途传输」
- * 时起——用户是在**还没有任何传输**的时候打开选取器的，等文件选回来会话早断了。拔卡/登出/自动锁定同样会把
- * 状态打回 DISCONNECTED，故那几条路径无需另行接线。
+ * **起止时机**：连接状态进入 LISTENING / CONNECTING / CONNECTED 就起、回到 DISCONNECTED / FAILED 就停
+ * （接线在 `P2PSessionManager.init`）。不能只在「有在途传输」时起——用户是在**还没有任何传输**的时候打开
+ * 选取器的，等文件选回来会话早断了。拔卡/登出/自动锁定同样会把状态打回 DISCONNECTED，故那几条路径无需
+ * 另行接线。
+ *
+ * **为什么从 LISTENING 而不是 CONNECTED 起**（`[network]` 2026-08-14）：出码方生成邀请码后多半立刻切去微信
+ * 转发，等对端连上时本进程早已在后台，而 Android 12+ 禁止后台启动前台服务（[start] 那句「失败静默」正是
+ * 为此写的）——也就是说在最需要它的那条路径上，这个服务此前很可能根本没起来过。改到出码/扫码当场起，
+ * 启动发生在用户还站在页面上的时候，限制不适用。
+ *
+ * **它保不了什么**：华为/荣耀系「允许后台活动」关掉时是按 UID 整体断网，与前台服务无关（2026-08-02 现场
+ * 日志：会话进行中进程仍被判「已缓存(后台)」并被断网）。那道开关只能由用户在系统设置里开，见
+ * [com.example.midun.screen.BackgroundActivityGuide]。
  *
  * **隐私**：通知**不写任何文字**——标题与正文都不设，只剩系统强制显示的应用名（那一行框架自己画，App 关不掉）；
  * 并设 `VISIBILITY_SECRET`，锁屏上连应用名都不出现。绝不可把对端备注或消息内容放进去，那等于在锁屏上广播

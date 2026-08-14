@@ -186,14 +186,28 @@ class P2PSessionManager @Inject constructor(
         // 漏掉任何一条都会留下一个吊着进程的空壳通知；状态流是它们唯一的汇合处。
         scope.launch {
             _connectionState.collect { state ->
-                val connected = state == ConnectionState.CONNECTED
-                if (connected) SessionForegroundService.start(context) else SessionForegroundService.stop(context)
+                // **从 LISTENING 就起，不是从 CONNECTED**（`[network]` 2026-08-14）。原先等到 CONNECTED 才起，
+                // 而那一刻 A 侧用户通常已经切去微信发邀请码了 —— Android 12+ 禁止后台进程启动前台服务，
+                // `start()` 会抛 ForegroundServiceStartNotAllowedException 并被静默吞掉（见该类说明），
+                // 于是**恰恰在最需要保活的那条路径上，这个服务很可能从来没起来过**。改到出码/扫码当场起，
+                // 那时用户明明白白站在页面上，前台启动限制不适用，服务能一直持有到会话结束。
+                //
+                // CONNECTING 必须一并算「在跑」：漏了它会在 LISTENING→CONNECTING→CONNECTED 之间停一次再起
+                // 一次，而中间那次重启很可能已经落到后台、起不来了。
+                //
+                // ⚠️ 这**不代表**用户可以离开邀请码页等着被连：华为/荣耀系「允许后台活动」关掉时是按 UID
+                // 整体断网，前台服务对它无效（2026-08-02 现场日志：会话进行中进程仍被判「已缓存(后台)」）。
+                // 它保的是 AOSP 那套（Doze/缓存进程冻结/断网）与「进程别被顺手回收」，不是厂商那道开关。
+                val active = state == ConnectionState.LISTENING ||
+                    state == ConnectionState.CONNECTING ||
+                    state == ConnectionState.CONNECTED
+                if (active) SessionForegroundService.start(context) else SessionForegroundService.stop(context)
                 // 同一处一并管 CPU/WiFi 锁（`[network]` 2026-08-01）：前台服务保「网络不被系统拦」，保不了
                 // CPU 不睡；息屏深睡会让心跳停发，对端数满 60s 静默就判死。两者必须同起同落，故用一个布尔
                 // 守住配对，绝不能重复 acquire（引用计数会永远归不了零，把用户的电一直按着）。
-                if (connected != sessionHeld) {
-                    sessionHeld = connected
-                    if (connected) keepAlive.acquire() else keepAlive.release()
+                if (active != sessionHeld) {
+                    sessionHeld = active
+                    if (active) keepAlive.acquire() else keepAlive.release()
                 }
             }
         }
