@@ -623,8 +623,12 @@ fun QrCodeScreen(
 
                     Spacer(Modifier.height(20.dp))
 
-                    // 邀请码本身的两个动作同行：左「重新生成」、右「分享邀请码」，宽度 1:2。
+                    // 邀请码本身的两个动作同行：左「重新生成」、右「分享邀请码」，**等宽**。
                     // 摆在链接区上面——它俩管的是上面那张码，链接区是另一件事，别混在一起。
+                    //
+                    // 原来是 1:2，而两个标题只差一个字（4 字 vs 5 字），左边那份自然不够用：窄屏或系统字号
+                    // 调大时「重新生成」被截成「重新生…」（客户 2026-08-14 反馈）。等宽后左边约 150dp，
+                    // 装 18dp 图标 + 4 个 13sp 汉字绰绰有余；contentPadding 收窄仍留着，作大字号下的余量。
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -656,7 +660,7 @@ fun QrCodeScreen(
                                 showReturnHint = true
                             },
                             enabled = qrBitmap != null,
-                            modifier = Modifier.weight(2f)
+                            modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.Share, null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
