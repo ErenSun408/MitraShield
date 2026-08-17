@@ -384,7 +384,7 @@ v4 doc 统一把 `NavController` 传进每个屏幕、由屏幕自己 `navigate(
   - "从手机相册选择二维码图片"按钮维持 M0 no-op 占位（patch 未规定）；如后续要做需引入 `ActivityResultContracts.PickVisualMedia` + `BarcodeScanner.process(InputImage.fromBitmap(...))`。
   - `addContact` 解析 `substringAfter("sn=").substringBefore(",")` 对非法 QR 不防御（M6.1 已记），M6.8 维持。若扫到非密盾 QR，会用整串后段当 deviceId 创建联系人，靠"取消"按钮逃生。
   - 被永久拒绝相机权限（"不再询问"）的兜底（跳系统设置）未做；当前表现为"授权相机"按钮无效，可后续加 `Settings.ACTION_APPLICATION_DETAILS_SETTINGS` intent。
-  - 阅后即焚、连接验证（v4 patch 卡片提到的"验证来源、IPv6 地址及签名"）仍是 mock 期文案，未实接 SDK，留待 M11+。
+  - 阅后即焚、连接验证（v4 patch 卡片提到的"验证来源、IPv6 地址及签名"）仍是 mock 期文案，未实接 SDK，留待 M11+。<br>**［已被后续条目取代］** 文案于 M10.9 诚实化（见《扫码文案诚实化》节），签名校验于 M11.6 定为「用 `SFDiskGetSN` 真 SN 作弱来源标识」——SDK 不提供密码学签名能力，真签名校验无落地路径。
 - **Commit** `2244876`
 
 ### M6.7 跟进 — "重新生成" 改为原地刷新（不退回 pre-gen 卡片）
@@ -1181,7 +1181,7 @@ v4 §9 的握手是**单向**的：A 的临时公钥经二维码带外送达 B�
 - **首次插卡弹一次引导**——判据是**每进程**（`BackgroundActivityGuide.consumeAutoPrompt()`，进程级内存标志，重开 App 即复位）+ 用户没勾「不再询问」（`SettingsStore.backgroundGuideSuppressed`，落盘永久）。这个设置一关就断连，值得每次开 App 提醒一次，勾选给不想被打扰的用户一个明确出口。
 - **建联页常驻一条提示条**，措辞是「请确保系统允许应用后台活动」而非「检测到…受限」——查不到就别把猜的说成测的。
 
-**认下的限制**：这只是引导，改不了厂商行为；用户不开就是不开。真正的自愈要靠会话级重连（见 [[project_midun_session_reconnect]] 的设计，尚未实现）。
+**认下的限制**：这只是引导，改不了厂商行为；用户不开就是不开。真正的自愈要靠**会话级重连**（用会话密钥重连聊天 socket + BYE 告别帧 + 前台服务判据改「会话未结束」）——**设计已定，尚未实现**，本仓库无对应代码。
 
 ## 上划清理不退出登录（前台服务引入的回归，客户 2026-08-03）
 
